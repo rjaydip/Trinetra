@@ -1,0 +1,7 @@
+# The API layer must contain no SQL. Every query lives in Trinetra.Federation.Storage, where the
+# scope predicate that guards it lives too. A query written next to its handler is a query whose
+# WHERE clause the next person edits without realising it is the authorization boundary.
+# NpgsqlDataSource is still injectable -- UnitOfWork.BeginAsync needs it -- but nothing here can
+# execute a statement with it.
+T:Dapper.SqlMapper
+T:Dapper.CommandDefinition

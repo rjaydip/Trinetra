@@ -1,0 +1,97 @@
+[Unit]
+Description=Trinetra connector worker %i
+Documentation=file:///opt/trinetra/docs/OPERATIONS.md
+After=network-online.target
+Wants=network-online.target
+
+# A TEMPLATE unit: enable one instance per worker process on this host.
+#
+#     systemctl enable --now trinetra-worker@1 trinetra-worker@2
+#
+# Scaling out is starting more instances, here or on another host. There is no coordinator to
+# tell: each instance claims a bounded share of connector targets through the PostgreSQL lease,
+# and the fleet rebalances itself when one is added or dies. See ARCHITECTURE-MODEL-3.md §4.
+#
+# PartOf deliberately omitted. Workers are independent; restarting one must not disturb the
+# others, and a lease held by a healthy worker should not be released because a sibling failed.
+
+[Service]
+Type=notify
+NotifyAccess=main
+
+User=trinetra
+Group=trinetra
+WorkingDirectory=/opt/trinetra/worker
+ExecStart=/opt/trinetra/worker/Trinetra.Federation.Worker
+
+EnvironmentFile=/etc/trinetra/worker.env
+
+Environment=DOTNET_ENVIRONMENT=Production
+
+# Stable per instance, and unique across the fleet. %H is the hostname, %i the instance number.
+#
+# This matters for more than logging: `leased_by` in connector_target records it, so when a
+# target is not being polled you can tell which unit on which host is meant to own it. The code
+# default is MachineName-ProcessId, which changes on every restart and makes that correlation
+# impossible.
+Environment=Worker__WorkerId=%H-%i
+
+Restart=on-failure
+RestartSec=10
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+TimeoutStartSec=60
+
+# Shutdown must be long enough to RELEASE held leases rather than let them expire. A clean
+# release turns a rolling restart from "every target dark for a full lease TTL" into "dark for
+# the restart itself".
+TimeoutStopSec=45
+KillSignal=SIGTERM
+
+# --- Hardening --------------------------------------------------------------
+# A worker resolves camera credentials at connect time and holds them in memory. It also reaches
+# out to vendor devices on the camera network, which is the least trustworthy thing it touches.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+RemoveIPC=true
+
+# Nothing is written to disk: logs go to the journal, and state lives in PostgreSQL. So no
+# ReadWritePaths at all -- ProtectSystem=strict leaves the whole filesystem read-only, which is
+# the tightest correct setting. If file logging is ever added, it needs a matching
+# LogsDirectory= or ReadWritePaths= entry or the process will fail on first write.
+
+# The .NET JIT maps pages writable and then executable, so W^X cannot be enforced. Stated
+# explicitly rather than omitted, so nobody "hardens" it to true and spends an afternoon on the
+# resulting crash.
+MemoryDenyWriteExecute=false
+
+# RTSP and ONVIF are TCP/UDP over IP. Nothing here needs raw sockets or netlink.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=trinetra-worker-%i
+
+# --- Limits -----------------------------------------------------------------
+# One worker holds up to Worker:MaxTargets connector targets, each with its own connection to a
+# vendor device plus the database pool. 100 targets with several sockets each clears 1024 fast,
+# and the failure mode is "too many open files" mid-poll rather than at startup.
+LimitNOFILE=16384
+
+[Install]
+WantedBy=multi-user.target

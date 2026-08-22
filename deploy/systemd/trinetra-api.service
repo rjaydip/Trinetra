@@ -1,0 +1,88 @@
+[Unit]
+Description=Trinetra Federation API
+Documentation=file:///opt/trinetra/docs/OPERATIONS.md
+After=network-online.target
+Wants=network-online.target
+
+# Not a hard dependency on PostgreSQL: the database is usually on another host, and even when it
+# is local, Requires= would take this unit down with it on a database restart. The API refuses to
+# start without a schema and Restart=on-failure brings it back once the database returns.
+
+[Service]
+Type=notify
+NotifyAccess=main
+
+User=trinetra
+Group=trinetra
+WorkingDirectory=/opt/trinetra/api
+ExecStart=/opt/trinetra/api/Trinetra.Federation.Api
+
+# The three secrets, root-owned and 0600. Kept out of the unit file because units are
+# world-readable and land in `systemctl cat` output and in configuration management.
+EnvironmentFile=/etc/trinetra/api.env
+
+Environment=DOTNET_ENVIRONMENT=Production
+Environment=ASPNETCORE_ENVIRONMENT=Production
+
+# Bounded restart. Without the burst limit a service that cannot reach its database restarts in a
+# tight loop and buries the actual failure under thousands of identical journal entries.
+Restart=on-failure
+RestartSec=5
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+# Startup includes the schema check and the admin seed. Generous, because failing a deployment
+# because a cold database took 40 seconds to answer is worse than waiting.
+TimeoutStartSec=90
+
+# Shutdown drains in-flight requests. Longer than the default 90s is pointless here: the event
+# queries are capped and nothing else is long-running.
+TimeoutStopSec=30
+KillSignal=SIGTERM
+
+# --- Hardening --------------------------------------------------------------
+# This process holds the credential encryption key and can read every camera password in the
+# estate. Treat a compromise of it as equivalent to a compromise of the estate.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+RemoveIPC=true
+
+# Nothing is written to disk: logs go to the journal, and state lives in PostgreSQL. So no
+# ReadWritePaths at all -- ProtectSystem=strict leaves the whole filesystem read-only, which is
+# the tightest correct setting. If file logging is ever added, it needs a matching
+# LogsDirectory= or ReadWritePaths= entry or the process will fail on first write.
+
+# The .NET JIT maps pages writable and then executable, so W^X cannot be enforced. Stated
+# explicitly rather than omitted, so nobody "hardens" it to true and spends an afternoon on the
+# resulting crash.
+MemoryDenyWriteExecute=false
+
+# IPv4 and IPv6 only. The API speaks to PostgreSQL and to nothing else over the network.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# Journald. Structured output is already produced by AddSystemd().
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=trinetra-api
+
+# --- Limits -----------------------------------------------------------------
+# Connection pool (40) plus sockets. The default 1024 is enough, but stating it means a pool
+# increase does not silently hit a limit nobody remembered was there.
+LimitNOFILE=8192
+
+[Install]
+WantedBy=multi-user.target

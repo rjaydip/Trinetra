@@ -1,0 +1,32 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Trinetra.Federation.Core\Trinetra.Federation.Core.csproj" />
+    <ProjectReference Include="..\..\src\Trinetra.Federation.Storage\Trinetra.Federation.Storage.csproj" />
+    <ProjectReference Include="..\..\src\Trinetra.Federation.Adapters\Trinetra.Federation.Adapters.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Configuration" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.EnvironmentVariables" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Json" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" />
+  </ItemGroup>
+
+  <!-- One shared settings file, linked rather than duplicated. Three copies of the credential
+       encryption key would eventually diverge, and the resulting failure looks like data
+       corruption rather than like configuration drift. -->
+  <ItemGroup>
+    <Content Include="../../config/trinetra.settings.json" Link="trinetra.settings.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+</Project>

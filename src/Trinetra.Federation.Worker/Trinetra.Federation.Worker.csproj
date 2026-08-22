@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk.Worker">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UserSecretsId>dotnet-Trinetra.Federation.Worker-b35f047e-697b-4377-b5f1-cefc75ab951e</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+    <PackageReference Include="Microsoft.Extensions.Options.DataAnnotations" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Trinetra.Federation.Runtime\Trinetra.Federation.Runtime.csproj" />
+  </ItemGroup>
+
+  <!-- One shared settings file, linked rather than duplicated. Three copies of the credential
+       encryption key would eventually diverge, and the resulting failure looks like data
+       corruption rather than like configuration drift. -->
+  <ItemGroup>
+    <Content Include="../../config/trinetra.settings.json" Link="trinetra.settings.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- sd_notify support. Without it a Type=notify unit waits for a readiness signal that never
+         arrives and systemd kills the service at TimeoutStartSec. -->
+    <PackageReference Include="Microsoft.Extensions.Hosting.Systemd" />
+  </ItemGroup>
+
+</Project>

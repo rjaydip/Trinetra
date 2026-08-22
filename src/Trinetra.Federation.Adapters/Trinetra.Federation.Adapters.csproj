@@ -1,0 +1,21 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+    <ProjectReference Include="..\Trinetra.Federation.Core\Trinetra.Federation.Core.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <!-- Vendor-specific types stay internal so they cannot leak past the adapter boundary,
+       which is the load-bearing constraint of Model 3. Tests reach them this way rather than
+       by widening the public surface. -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="Trinetra.UnitTests" />
+    <InternalsVisibleTo Include="Trinetra.IntegrationTests" />
+  </ItemGroup>
+</Project>

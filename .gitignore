@@ -1,0 +1,53 @@
+bin/
+obj/
+[Dd]ebug/
+[Rr]elease/
+artifacts/
+*.user
+*.suo
+.vs/
+.idea/
+.vscode/*
+!.vscode/tasks.json
+!.vscode/launch.json
+*.nupkg
+TestResults/
+coverage*.xml
+*.received.*
+spool/
+appsettings.Local.json
+appsettings.*.Local.json
+.DS_Store
+
+# ---------------------------------------------------------------------------
+# Secrets — never commit
+# ---------------------------------------------------------------------------
+# The live settings file holds the credential encryption key and the JWT signing key. Anyone who
+# can read them can decrypt every stored camera password and forge a session as any user, so the
+# file stays local. config/trinetra.settings.example.json is the committed template — copy it and
+# fill in your own values:
+#
+#     cp config/trinetra.settings.example.json config/trinetra.settings.json
+#
+config/trinetra.settings.json
+
+# Environment files for systemd hosts. deploy/systemd/*.env.example are the committed templates.
+*.env
+!*.env.example
+
+# Key material of any kind.
+*.pem
+*.key
+*.pfx
+*.p12
+*.jks
+*.keystore
+
+# Local database dumps: a dump of a real deployment contains sealed credentials and event data.
+*.dump
+*.sql.gz
+*.backup
+
+# Logs and process files from local runs.
+*.log
+*.pid

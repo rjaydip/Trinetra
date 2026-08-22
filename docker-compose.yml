@@ -1,0 +1,55 @@
+# Local development dependencies for Trinetra Model 3.
+#
+# Production runs on bare metal with systemd (see deploy/), not containers. This file exists so
+# a developer or CI job gets the same PostgreSQL + PostGIS the platform expects, with one command.
+#
+# Every variable below has a default, so no .env file is required. Application configuration
+# lives in config/trinetra.settings.json, which every host reads.
+
+services:
+  postgres:
+    # Stock PostgreSQL. No PostGIS: coordinates are plain DECIMAL columns and UUIDs come from
+    # gen_random_uuid(), which is core from PostgreSQL 13. Nothing here needs an extension.
+    image: postgres:17
+    container_name: trinetra-postgres
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-trinetra}
+      POSTGRES_USER: ${POSTGRES_USER:-trinetra}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-trinetra}
+      # Deterministic collation. Index ordering must not depend on the host's locale, or two
+      # departmental installs can disagree about sort order for the same data.
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+
+    ports:
+      - "${POSTGRES_PORT:-55432}:5432"
+
+    volumes:
+      - trinetra-pgdata:/var/lib/postgresql/data
+
+    healthcheck:
+      # Forced over TCP (-h 127.0.0.1) deliberately. During initdb the image runs a temporary
+      # server on a unix socket only, so a plain `pg_isready` reports healthy while the database
+      # is still being built — migrations run at that moment race the image's own setup and the
+      # container exits. Requiring TCP means "ready" only once the real server is listening.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+    command:
+      # Modest tuning for a developer machine. Production values belong in the bare-metal
+      # postgresql.conf, sized to the host, not copied from here.
+      - postgres
+      - -c
+      - max_connections=200          # a worker holds 50-200 targets; several workers per host
+      - -c
+      - shared_buffers=256MB
+      - -c
+      - log_min_duration_statement=1000   # surface slow queries during development
+
+volumes:
+  trinetra-pgdata:
+    name: trinetra-pgdata

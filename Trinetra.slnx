@@ -1,0 +1,20 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Trinetra.Federation.Adapters/Trinetra.Federation.Adapters.csproj" />
+    <Project Path="src/Trinetra.Federation.Api/Trinetra.Federation.Api.csproj" />
+    <Project Path="src/Trinetra.Federation.Bus/Trinetra.Federation.Bus.csproj" />
+    <Project Path="src/Trinetra.Federation.Core/Trinetra.Federation.Core.csproj" />
+    <Project Path="src/Trinetra.Federation.Runtime/Trinetra.Federation.Runtime.csproj" />
+    <Project Path="src/Trinetra.Federation.Storage/Trinetra.Federation.Storage.csproj" />
+    <Project Path="src/Trinetra.Federation.Worker/Trinetra.Federation.Worker.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Trinetra.IntegrationTests/Trinetra.IntegrationTests.csproj" />
+    <Project Path="tests/Trinetra.LoadTests/Trinetra.LoadTests.csproj" />
+    <Project Path="tests/Trinetra.UnitTests/Trinetra.UnitTests.csproj" />
+  </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/Trinetra.Admin/Trinetra.Admin.csproj" />
+    <Project Path="tools/Trinetra.VmsSimulator/Trinetra.VmsSimulator.csproj" />
+  </Folder>
+</Solution>
