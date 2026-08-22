@@ -9,7 +9,7 @@ Add the complete Model 1 backend contract for an authoritative CCTV registry and
 ## Constraints
 
 - Keep the existing .NET 10, Minimal API, Dapper, Npgsql, and PostgreSQL 17 stack.
-- Add a forward-only `db/versions/v1.1.sql` migration. No service applies it automatically.
+- Add a forward-only `db/versions/v2_model_1_registry.sql` migration. No service applies it automatically.
 - Do not require PostGIS or another PostgreSQL extension.
 - Do not store a coverage polygon for each camera.
 - All reads and mutations must enforce existing organization, geographic, and resource scope rules in SQL.
@@ -163,7 +163,7 @@ The reports aggregate only authorized active cameras. Ageing excludes cameras wi
 
 ### PostgreSQL integration tests
 
-- Apply `v1.sql` followed by `v1.1.sql` to the existing Testcontainers PostgreSQL fixture.
+- Apply `v1.sql` followed by `v2_model_1_registry.sql` to the existing Testcontainers PostgreSQL fixture.
 - Assert all new schema constraints, indexes, and the foreign key.
 - Assert organization/geography/resource scope isolation for list, detail, map, export, reports, and audit records.
 - Assert every mutation commits its matching `config_audit` record and rolls both back on failure.
@@ -175,7 +175,7 @@ The reports aggregate only authorized active cameras. Ageing excludes cameras wi
 
 ## Deployment
 
-1. Apply `db/versions/v1.1.sql` to each database after verifying a backup and a previous-build compatibility window.
+1. Apply `db/versions/v2_model_1_registry.sql` to each database after verifying a backup and a previous-build compatibility window.
 2. Deploy the API binary containing the Model 1 endpoints.
 3. Import camera data through the batch API or the documented template.
 4. Add area/site boundaries where actual gap analysis is required.
