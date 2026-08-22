@@ -41,7 +41,7 @@ internal sealed class SecurityRequirementTransformer : IOpenApiOperationTransfor
         [
             new OpenApiSecurityRequirement
             {
-                [new OpenApiSecuritySchemeReference("Bearer")] = [],
+                [new OpenApiSecuritySchemeReference("Bearer", context.Document)] = [],
             },
         ];
 

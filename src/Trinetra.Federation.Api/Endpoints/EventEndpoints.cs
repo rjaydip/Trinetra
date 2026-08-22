@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Text;
 using Trinetra.Federation.Api.Auth;
 using Trinetra.Federation.Api.Contracts;
+using Trinetra.Federation.Api.OpenApi;
 
 namespace Trinetra.Federation.Api.Endpoints;
 
@@ -34,7 +35,24 @@ public static class EventEndpoints
     {
         app.MapGet("/api/v1/events", QueryAsync)
            .RequireAuthorization()
-           .WithTags("Events").RequirePermission("event.read");
+           .WithTags(ApiTags.Events).RequirePermission("event.read")
+           .WithSummary("Query normalized events over the hot window")
+           .WithDescription(
+               "Events from every federated VMS in one shape, whatever vendor produced them, "
+               + "newest first and restricted to the caller's scope. `eventType` is the "
+               + "normalized type; `vendorEventType` is what the device actually called it, kept "
+               + "for tracing a normalization back to its source.\n\n"
+               + "**`from` and `to` are required and may span at most 7 days.** They are never "
+               + "defaulted: the table is partitioned by time and takes 100-400M rows a day at "
+               + "the design point, so a missing range silently becoming 'everything' is the one "
+               + "query that takes the database down — and with it every worker writing events. "
+               + "Narrow further with `cameraId`, `eventType` or `objectReference`.\n\n"
+               + "Paging is by the opaque `cursor` from the previous page, never by offset — a "
+               + "deep offset on a partitioned table scans every row it skips. A response without "
+               + "a cursor is the end of the results.\n\n"
+               + "`limit` defaults to 100 and is clamped to 1000.\n\n"
+               + "**Boundary:** this is the hot PostgreSQL window only. Free-text and wide "
+               + "historical search belong to OpenSearch and are not served here.");
     }
 
     private static async Task<Results<Ok<EventPage>, ProblemHttpResult>> QueryAsync(

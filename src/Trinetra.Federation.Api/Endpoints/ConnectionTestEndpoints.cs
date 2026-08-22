@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Http.HttpResults;
 using Npgsql;
 using Trinetra.Federation.Api.Auth;
 using Trinetra.Federation.Api.Contracts;
+using Trinetra.Federation.Api.OpenApi;
 using Trinetra.Federation.Runtime;
 using Trinetra.Federation.Storage;
 using Trinetra.Federation.Storage.Repositories;
@@ -21,7 +22,7 @@ public static class ConnectionTestEndpoints
     public static void MapConnectionTestEndpoints(this IEndpointRouteBuilder app)
     {
         var group = app.MapGroup("/api/v1/vms/{id:guid}/test")
-                       .WithTags("VMS")
+                       .WithTags(ApiTags.Vms)
                        .RequireAuthorization();
 
         group.MapPost("/", async Task<Results<Accepted<ConnectionTestAccepted>, NotFound, ProblemHttpResult>> (
@@ -105,7 +106,22 @@ public static class ConnectionTestEndpoints
             var statusUrl = $"/api/v1/vms/{id}/test/{testId}";
             return TypedResults.Accepted(
                 statusUrl, new ConnectionTestAccepted(testId, "pending", statusUrl));
-        }).RequirePermission("integration.manage");
+        }).RequirePermission("integration.manage")
+          .WithSummary("Start a connection test against the live device")
+          .WithDescription(
+              "**Step 3 of onboarding: proves the target answers before it is handed to the "
+              + "workers.** Resolves the stored credential, connects with the vendor adapter, and "
+              + "reports what it found — reachability, authentication, and the capabilities the "
+              + "device advertises.\n\n"
+              + "**Asynchronous by design.** A test can take up to a minute, which is longer than "
+              + "most reverse proxies will hold a connection, so this returns `202` with a "
+              + "`testId` and a `statusUrl` to poll. A black-holed device then produces a clear "
+              + "result rather than a dropped request.\n\n"
+              + "One test at a time per target: a second request while one is in flight is a `409` "
+              + "carrying the running `testId` to poll instead.\n\n"
+              + "Needs `integration.manage`, not `vms.read` — this authenticates to a live device "
+              + "and consumes one of its limited session slots, which is an integration action "
+              + "rather than a read of platform data.");
 
         group.MapGet("/{testId:guid}", async Task<Results<Ok<ConnectionTestResult>, NotFound>> (
             Guid id, Guid testId, ConnectorTargetRepository targets, ConnectionTestRepository tests, NpgsqlDataSource db,
@@ -134,7 +150,15 @@ public static class ConnectionTestEndpoints
                 row.ResultJson is null
                     ? null
                     : System.Text.Json.JsonSerializer.Deserialize<object>(row.ResultJson)));
-        }).RequirePermission("vms.read");
+        }).RequirePermission("vms.read")
+          .WithSummary("Poll one connection test for its result")
+          .WithDescription(
+              "The status URL returned by `POST /vms/{id}/test`. `status` is pending until the "
+              + "job finishes, then carries the outcome, the completion time, a failure reason if "
+              + "it failed, and the adapter's findings.\n\n"
+              + "Scope is re-checked on every read, so a result stops being readable by someone "
+              + "who has since lost access to the target. A test abandoned by a host that died "
+              + "is closed out by the sweeper rather than left pending forever.");
 
         group.MapGet("/", async Task<Results<Ok<IReadOnlyList<ConnectionTestSummary>>, NotFound>> (
             Guid id, ConnectorTargetRepository targets, ConnectionTestRepository tests, NpgsqlDataSource db,
@@ -155,7 +179,12 @@ public static class ConnectionTestEndpoints
                 .. rows.Select(r => new ConnectionTestSummary(
                     r.Id, r.Status, r.RequestedBy, r.RequestedAt, r.CompletedAt, r.FailureReason)),
             ]);
-        }).RequirePermission("vms.read");
+        }).RequirePermission("vms.read")
+          .WithSummary("List this target's connection tests")
+          .WithDescription(
+              "Test history for the target: who ran each one, when, and how it ended. Useful for "
+              + "telling a device that has always been unreachable from one that broke at a "
+              + "particular time, and for finding the in-flight test behind a 409.");
     }
 
     /// <summary>Log category for the detached job, so its failures are attributable.</summary>

@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using Npgsql;
 using Trinetra.Federation.Api.Auth;
 using Trinetra.Federation.Api.Contracts;
+using Trinetra.Federation.Api.OpenApi;
 using Trinetra.Federation.Storage;
 using Trinetra.Federation.Storage.Repositories;
 
@@ -29,7 +30,7 @@ public static class AccessGroupEndpoints
     public static void MapAccessGroupEndpoints(this IEndpointRouteBuilder app)
     {
         var group = app.MapGroup("/api/v1/access-groups")
-                       .WithTags("Access control")
+                       .WithTags(ApiTags.AccessControl)
                        .RequireAuthorization();
 
         group.MapGet("/", async Task<Ok<IReadOnlyList<AccessGroupResponse>>> (
@@ -38,7 +39,14 @@ public static class AccessGroupEndpoints
             CallerContextFactory.From(http).Require("group.read");
             var groups = await repo.ListAsync(ct);
             return TypedResults.Ok<IReadOnlyList<AccessGroupResponse>>([.. groups.Select(ToResponse)]);
-        }).RequirePermission("group.read");
+        }).RequirePermission("group.read")
+          .WithSummary("List access groups")
+          .WithDescription(
+              "Every group with its role, the permissions that role carries, its scopes and how "
+              + "many members it has. A group pairs one role with one or more scopes, which is "
+              + "what keeps a single `CAMERA_OPERATOR` role reusable instead of spawning "
+              + "AhmedabadPoliceCameraOperator, SuratPoliceCameraOperator and so on without "
+              + "end.");
 
         group.MapGet("/{id:guid}", async Task<Results<Ok<AccessGroupResponse>, NotFound>> (
             Guid id, AccessGroupRepository repo, HttpContext http, CancellationToken ct) =>
@@ -46,7 +54,14 @@ public static class AccessGroupEndpoints
             CallerContextFactory.From(http).Require("group.read");
             var found = await repo.GetAsync(id, ct);
             return found is null ? TypedResults.NotFound() : TypedResults.Ok(ToResponse(found));
-        }).RequirePermission("group.read");
+        }).RequirePermission("group.read")
+          .WithSummary("Read one access group with its scopes")
+          .WithDescription(
+              "The full grant: the role's permissions, and the scope rows saying where they "
+              + "apply. **A dimension with no scope row is unrestricted on that dimension** — a "
+              + "group with geography scopes but no organization scope grants its permissions "
+              + "across every department. Read the scope list, not just the permission list, "
+              + "before deciding what a group actually confers.");
 
         group.MapGet("/{id:guid}/members", async Task<Ok<IReadOnlyList<GroupMemberResponse>>> (
             Guid id, AccessGroupRepository repo, HttpContext http, CancellationToken ct) =>
@@ -55,7 +70,12 @@ public static class AccessGroupEndpoints
             var members = await repo.ListMembersAsync(id, ct);
             return TypedResults.Ok<IReadOnlyList<GroupMemberResponse>>(
                 [.. members.Select(m => new GroupMemberResponse(m.UserId, m.Username, m.ExpiresAt))]);
-        }).RequirePermission("group.read");
+        }).RequirePermission("group.read")
+          .WithSummary("List a group's members")
+          .WithDescription(
+              "Who currently holds this grant, with each membership's expiry. The reverse of "
+              + "`GET /users/{id}/groups`, and the route for answering 'who can do this' during "
+              + "a review. Membership is changed from the user side, not here.");
 
         group.MapPost("/", async Task<Results<Created<CreatedResponse>, ProblemHttpResult>> (
             [FromBody] CreateGroupRequest request, AccessGroupRepository repo,
@@ -99,7 +119,15 @@ public static class AccessGroupEndpoints
             await work.CommitAsync(ct);
 
             return TypedResults.Created($"/api/v1/access-groups/{id}", new CreatedResponse(id));
-        }).RequirePermission("group.manage");
+        }).RequirePermission("group.manage")
+          .WithSummary("Create an access group")
+          .WithDescription(
+              "Pairs a role with a scope set. **Created as `DRAFT`**, so a group is assembled and "
+              + "reviewed before it grants anything; add its scopes, then activate it.\n\n"
+              + "A scoped caller cannot choose a role granting permissions they do not hold "
+              + "themselves — 403 naming the excess. The check is here as well as at assignment "
+              + "time, or a caller could build the group first and hand it to themselves through "
+              + "a route that only inspects it on the way out.");
 
         // ---- Scopes --------------------------------------------------------
 
@@ -153,7 +181,19 @@ public static class AccessGroupEndpoints
             await work.CommitAsync(ct);
 
             return TypedResults.Created($"/api/v1/access-groups/{id}/scopes/{scopeId}", new CreatedResponse(scopeId));
-        }).RequirePermission("group.manage");
+        }).RequirePermission("group.manage")
+          .WithSummary("Add a scope to a group")
+          .WithDescription(
+              "Narrows where a group's permissions apply. Three types:\n"
+              + "- `ORGANIZATION` — an organization unit and everything beneath it;\n"
+              + "- `GEOGRAPHY` — a geographic area and its descendants;\n"
+              + "- `RESOURCE` — one named resource.\n\n"
+              + "Organization and geography are **independent dimensions and are ANDed**: a group "
+              + "scoped to a department and to a district grants access only where the two "
+              + "overlap. Adding a second scope on the same dimension widens within that "
+              + "dimension.\n\n"
+              + "A scoped caller cannot point a scope at an organization unit they do not "
+              + "administer themselves — that would be escalation by another route.");
 
         group.MapDelete("/{id:guid}/scopes/{scopeId:guid}", async Task<Results<NoContent, NotFound, ProblemHttpResult>> (
             Guid id, Guid scopeId, AccessGroupRepository repo, NpgsqlDataSource db,
@@ -198,7 +238,15 @@ public static class AccessGroupEndpoints
             await work.CommitAsync(ct);
 
             return TypedResults.NoContent();
-        }).RequirePermission("group.manage");
+        }).RequirePermission("group.manage")
+          .WithSummary("Remove a scope from a group")
+          .WithDescription(
+              "**Removing a scope widens the group**, which is the opposite of what 'remove' "
+              + "suggests: a dimension nobody constrains is unrestricted, so dropping the last "
+              + "`ORGANIZATION` scope turns a departmental group into an estate-wide one.\n\n"
+              + "For that reason only a caller who is already unscoped for `group.manage` may "
+              + "remove the last organization scope; anyone else gets 403. Removing one of "
+              + "several is ordinary narrowing and is allowed.");
 
         // ---- Reference data -------------------------------------------------
 
@@ -209,7 +257,12 @@ public static class AccessGroupEndpoints
             var roles = await repo.ListRolesAsync(ct);
             return TypedResults.Ok<IReadOnlyList<RoleResponse>>(
                 [.. roles.Select(r => new RoleResponse(r.Id, r.Code, r.Name, r.Description, r.IsSystem))]);
-        }).RequireAuthorization().WithTags("Access control").RequirePermission("group.read");
+        }).RequireAuthorization().WithTags(ApiTags.AccessControl).RequirePermission("group.read")
+          .WithSummary("List the roles a group can be built on")
+          .WithDescription(
+              "Reference data for the role picker. `isSystem` marks a role the platform depends "
+              + "on and that should not be treated as editable. Roles are bundles of permissions "
+              + "with no scope of their own — scope is attached to the group.");
 
         app.MapGet("/api/v1/permissions", async Task<Ok<IReadOnlyList<PermissionResponse>>> (
             AccessGroupRepository repo, HttpContext http, CancellationToken ct) =>
@@ -218,6 +271,11 @@ public static class AccessGroupEndpoints
             var permissions = await repo.ListPermissionsAsync(ct);
             return TypedResults.Ok<IReadOnlyList<PermissionResponse>>(
                 [.. permissions.Select(x => new PermissionResponse(x.Code, x.Name, x.Category, x.Description))]);
-        }).RequireAuthorization().WithTags("Access control").RequirePermission("group.read");
+        }).RequireAuthorization().WithTags(ApiTags.AccessControl).RequirePermission("group.read")
+          .WithSummary("List every permission the platform defines")
+          .WithDescription(
+              "The catalogue behind the **Requires permission** line on each operation in this "
+              + "document: every code, its category and what it allows. Read it to work out which "
+              + "role a user needs, or to interpret `GET /users/{id}/permissions`.");
     }
 }

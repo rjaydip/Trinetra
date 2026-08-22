@@ -4,26 +4,48 @@ using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Mvc;
 using Trinetra.Federation.Api.Auth;
 using Trinetra.Federation.Api.Contracts;
+using Trinetra.Federation.Api.OpenApi;
 using Trinetra.Federation.Storage.Repositories;
 using Trinetra.Federation.Storage.Security;
 
 namespace Trinetra.Federation.Api.Endpoints;
 
+/// <summary>Login and self-service password rotation — the caller's own credentials only.</summary>
 public static class AuthEndpoints
 {
     public static void MapAuthEndpoints(this IEndpointRouteBuilder app)
     {
-        var group = app.MapGroup("/api/v1/auth").WithTags("Authentication");
+        var group = app.MapGroup("/api/v1/auth").WithTags(ApiTags.Authentication);
 
         group.MapPost("/login", LoginAsync)
              .AllowAnonymous()
              // Rate limited: an unthrottled login endpoint on a reachable service is a
              // credential-stuffing target, and account lockout alone turns that into a
              // denial-of-service against every user an attacker can name.
-             .RequireRateLimiting("login");
+             .RequireRateLimiting("login")
+             .WithSummary("Exchange a username and password for a bearer token")
+             .WithDescription(
+                 "The only anonymous route on the API. Returns a token carrying the caller's "
+                 + "resolved permissions and scope, its expiry, and whether a password change is "
+                 + "due — a token issued with `mustChangePassword` is valid, so a client should "
+                 + "route the user to `POST /auth/password` before anything else.\n\n"
+                 + "Unknown user, wrong password, inactive account and lockout all return the "
+                 + "same 401: distinguishing them would confirm which usernames exist. Rate "
+                 + "limited to 10 attempts per minute per source address.\n\n"
+                 + "Machine callers authenticate with an API key header instead and never call "
+                 + "this route.");
 
         group.MapPost("/password", ChangePasswordAsync).RequireAuthorization()
-            .AllowAnyAuthenticated("a user must always be able to rotate their own password");
+            .AllowAnyAuthenticated("a user must always be able to rotate their own password")
+            .WithSummary("Change your own password")
+            .WithDescription(
+                "Rotates the calling user's own password — never anyone else's; an administrator "
+                + "resetting another account uses `POST /users/{id}/password`. Requires the "
+                + "current password, rejects a new value equal to the old one, and returns a "
+                + "fresh token because the existing one still carries the must-change flag.\n\n"
+                + "Deliberately reachable by any authenticated user: gating it on a permission "
+                + "would let an account be locked out of rotating its own credential. API-key "
+                + "callers get 400 — there is no password to change.");
     }
 
     private static async Task<Results<Ok<LoginResponse>, ProblemHttpResult>> LoginAsync(

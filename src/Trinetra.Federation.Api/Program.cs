@@ -8,6 +8,7 @@ using Npgsql;
 using Trinetra.Federation.Adapters;
 using Trinetra.Federation.Api.Auth;
 using Trinetra.Federation.Api.Endpoints;
+using Trinetra.Federation.Api.OpenApi;
 using Trinetra.Federation.Core.Abstractions;
 using Trinetra.Federation.Runtime;
 using Trinetra.Federation.Storage;
@@ -160,11 +161,18 @@ builder.Services.AddProblemDetails();
 builder.Services.AddExceptionHandler<BadRequestExceptionHandler>();
 builder.Services.AddExceptionHandler<ConstraintViolationExceptionHandler>();
 builder.Services.AddOpenApi(options =>
+{
     // Declares the bearer and API-key schemes, so Swagger UI shows an Authorize button.
     // Without it the page renders but every request comes back 401 with no way to fix it.
-{
     options.AddDocumentTransformer<SecuritySchemeTransformer>();
     options.AddOperationTransformer<SecurityRequirementTransformer>();
+
+    // What each group is for, and what each operation needs. The per-operation summaries are
+    // declared on the routes themselves; these two fill in the parts that cannot be — a
+    // description for the section headings, and the permission, which lives in routing metadata
+    // the document does not otherwise see.
+    options.AddDocumentTransformer<TagDescriptionTransformer>();
+    options.AddOperationTransformer<PermissionDocumentationTransformer>();
 });
 
 builder.Services.AddRateLimiter(options =>

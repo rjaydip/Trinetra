@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Mvc;
 using Npgsql;
 using Trinetra.Federation.Api.Auth;
 using Trinetra.Federation.Api.Contracts;
+using Trinetra.Federation.Api.OpenApi;
 using Trinetra.Federation.Core.Model;
 using Trinetra.Federation.Storage;
 using Trinetra.Federation.Storage.Repositories;
@@ -11,18 +12,37 @@ using Trinetra.Federation.Storage.Repositories;
 namespace Trinetra.Federation.Api.Endpoints;
 
 /// <summary>Connector targets, their health, capabilities and discovered cameras.</summary>
+/// <remarks>
+/// <para>
+/// The onboarding order is: <c>POST /vms</c> to register the target, <c>PUT
+/// /vms/{id}/credential</c> to give it a credential, <c>POST /vms/{id}/test</c> to confirm the
+/// device answers, then <c>POST /vms/{id}/state</c> with <c>Active</c> to hand it to the workers.
+/// Cameras appear under <c>GET /vms/{id}/cameras</c> on their own after the first inventory poll.
+/// </para>
+/// <para>
+/// <b>There is no route that onboards a single camera</b>, and that is structural rather than
+/// unfinished: a target is polled as a whole, because per-camera work against a vendor device is
+/// ~2,670 req/s at 80,000 cameras and no NVR survives it.
+/// </para>
+/// </remarks>
 public static class VmsEndpoints
 {
     public static void MapVmsEndpoints(this IEndpointRouteBuilder app)
     {
-        var group = app.MapGroup("/api/v1/vms").WithTags("VMS").RequireAuthorization();
+        var group = app.MapGroup("/api/v1/vms").WithTags(ApiTags.Vms).RequireAuthorization();
 
         group.MapGet("/", async Task<Ok<IReadOnlyList<VmsResponse>>> (
             ConnectorTargetRepository repo, HttpContext http, CancellationToken ct) =>
         {
             var targets = await repo.ListAsync(CallerContextFactory.From(http), ct);
             return TypedResults.Ok<IReadOnlyList<VmsResponse>>([.. targets.Select(ToResponse)]);
-        }).RequirePermission("vms.read");
+        }).RequirePermission("vms.read")
+          .WithSummary("List the VMS targets the caller can reach")
+          .WithDescription(
+              "Every connector target within the caller's organization and geography scope, with "
+              + "its vendor, endpoint, current state and expected camera count. Targets outside "
+              + "scope are absent rather than refused. Credential *references* appear here; "
+              + "credential values never do.");
 
         group.MapGet("/{id:guid}", async Task<Results<Ok<VmsResponse>, NotFound>> (
             Guid id, ConnectorTargetRepository repo, HttpContext http, CancellationToken ct) =>
@@ -34,7 +54,13 @@ public static class VmsEndpoints
             return target is null
                 ? TypedResults.NotFound()
                 : TypedResults.Ok(ToResponse(target));
-        }).RequirePermission("vms.read");
+        }).RequirePermission("vms.read")
+          .WithSummary("Read one VMS target's configuration")
+          .WithDescription(
+              "The full configuration row: vendor, runtime class, endpoint, TLS verification, "
+              + "state and credential reference.\n\n"
+              + "A target the caller is not scoped to returns **404, not 403** — telling an "
+              + "unauthorized caller that an id exists is itself a disclosure.");
 
         group.MapPost("/", async Task<Results<Created<CreatedResponse>, ProblemHttpResult>> (
             [FromBody] ConnectorTargetRequest request, ConnectorTargetRepository repo,
@@ -55,7 +81,20 @@ public static class VmsEndpoints
             await work.CommitAsync(ct);
 
             return TypedResults.Created($"/api/v1/vms/{id}", new CreatedResponse(id));
-        }).RequirePermission("vms.create");
+        }).RequirePermission("vms.create")
+          .WithSummary("Register a VMS, NVR or camera gateway")
+          .WithDescription(
+              "**Step 1 of onboarding, and the only way cameras enter the system.** Creates the "
+              + "connector target a worker will poll; its cameras are then discovered, not "
+              + "registered individually.\n\n"
+              + "`vendor` selects the adapter — CP Plus and other Dahua OEM units use "
+              + "`DahuaCgi`. `credentialReference` names where the secret will live; the secret "
+              + "itself is written separately through `PUT /vms/{id}/credential`. Polling "
+              + "intervals, rate limit and concurrency all have defaults tuned for a mid-size "
+              + "NVR and only need setting for a device that cannot keep up.\n\n"
+              + "The target is created in its default state and is not polled until `POST "
+              + "/vms/{id}/state` activates it. An unparseable endpoint or unknown vendor is "
+              + "rejected here rather than becoming an unexplained dead site later.");
 
         group.MapPut("/{id:guid}", async Task<Results<NoContent, NotFound, ProblemHttpResult>> (
             Guid id, [FromBody] ConnectorTargetRequest request, ConnectorTargetRepository repo,
@@ -82,7 +121,16 @@ public static class VmsEndpoints
             await work.CommitAsync(ct);
 
             return TypedResults.NoContent();
-        }).RequirePermission("vms.update");
+        }).RequirePermission("vms.update")
+          .WithSummary("Replace a VMS target's configuration")
+          .WithDescription(
+              "A full replacement, not a patch: every field is taken from the body, and one left "
+              + "out reverts to its default. Read the target first and send it back modified.\n\n"
+              + "Does not change the target's state, and does not write a credential — those are "
+              + "`POST /vms/{id}/state` and `PUT /vms/{id}/credential`. Changing `endpoint` or "
+              + "`vendor` takes effect at the worker's next poll cycle.\n\n"
+              + "The before and after values are recorded in the audit log, with the credential "
+              + "reference kept and its value never present to begin with.");
 
         group.MapPost("/{id:guid}/state", async Task<Results<NoContent, NotFound, ProblemHttpResult>> (
             Guid id, [FromBody] TargetStateRequest request, ConnectorTargetRepository repo,
@@ -110,7 +158,15 @@ public static class VmsEndpoints
             await work.CommitAsync(ct);
 
             return TypedResults.NoContent();
-        }).RequirePermission("vms.update");
+        }).RequirePermission("vms.update")
+          .WithSummary("Start, stop or quarantine polling for a target")
+          .WithDescription(
+              "**Step 4 of onboarding: this is what puts a target into service.** The workers act "
+              + "on state, so nothing is polled until it is `Active`, and setting it back stops "
+              + "the polling without losing the configuration or the discovered inventory.\n\n"
+              + "Quarantine is the state for a device that is answering badly enough to be worth "
+              + "taking out of the fleet without deleting it. Send the value as a string; the 400 "
+              + "response lists the states this build accepts.");
 
         group.MapDelete("/{id:guid}", async Task<Results<NoContent, NotFound>> (
             Guid id, ConnectorTargetRepository repo, NpgsqlDataSource db,
@@ -136,7 +192,15 @@ public static class VmsEndpoints
             await work.CommitAsync(ct);
 
             return TypedResults.NoContent();
-        }).RequirePermission("vms.update");
+        }).RequirePermission("vms.update")
+          .WithSummary("Remove a VMS target")
+          .WithDescription(
+              "A hard delete that cascades: the discovered camera inventory, capability matrix, "
+              + "health history, event cursor and connection-test records for this target all go "
+              + "with it. Events already published to the bus and stored are keyed by source and "
+              + "remain.\n\n"
+              + "To stop polling a device without losing any of that, set its state instead. The "
+              + "deleted configuration is captured in the audit row.");
 
         // ---- Monitoring ----------------------------------------------------
 
@@ -161,7 +225,17 @@ public static class VmsEndpoints
                     r.CheckedAt, r.Status, r.LatencyMs, r.CameraCount, r.ConsecutiveFailures,
                     r.CircuitOpen, r.LastError, r.EventsSinceCheck, r.CursorLagSeconds)),
             ]);
-        }).RequirePermission("vms.read");
+        }).RequirePermission("vms.read")
+          .WithSummary("Read a target's connector health history")
+          .WithDescription(
+              "What the workers have observed about this target, newest first: poll latency, "
+              + "camera count seen, consecutive failures, whether the circuit breaker is open, "
+              + "the last error, events collected since the previous check, and how far the event "
+              + "cursor is behind.\n\n"
+              + "`cursorLagSeconds` is the number to watch — a healthy target with a growing lag "
+              + "is collecting events slower than the device produces them.\n\n"
+              + "Defaults to the last 50 checks within 7 days; `limit` and `days` narrow or widen "
+              + "that.");
 
         group.MapGet("/{id:guid}/capabilities",
             async Task<Results<Ok<CapabilityResponse>, ProblemHttpResult>> (
@@ -194,7 +268,18 @@ public static class VmsEndpoints
                 row.Supported, row.AdapterVersion, row.ProbedAt,
                 JsonSerializer.Deserialize<Dictionary<string, string>>(row.NotesJson ?? "{}")
                     ?? []));
-        }).RequirePermission("vms.read");
+        }).RequirePermission("vms.read")
+          .WithSummary("Read what this target's adapter can actually do")
+          .WithDescription(
+              "The capability matrix probed when a worker last connected, plus the adapter "
+              + "version that probed it. No VMS supports every capability, so a client should ask "
+              + "here rather than assume — an unsupported call is a wasted round trip against a "
+              + "device that is already rate limited.\n\n"
+              + "Served from the stored matrix and **never by probing the device**: letting a "
+              + "dashboard render trigger probes would turn one page load into thousands of "
+              + "vendor round trips.\n\n"
+              + "404 with 'Not probed yet' means the target exists but no worker has reached it "
+              + "— check its state and its connection test before reading anything into it.");
 
         group.MapGet("/{id:guid}/cameras",
             async Task<Results<Ok<IReadOnlyList<FederatedCameraResponse>>, NotFound>> (
@@ -217,7 +302,18 @@ public static class VmsEndpoints
                     r.IsEnabled, r.IsRecording, r.Health, r.LastSeen,
                     r.StreamReferences ?? [])),
             ]);
-        }).RequirePermission("vms.read");
+        }).RequirePermission("vms.read")
+          .WithSummary("List the cameras discovered behind this target")
+          .WithDescription(
+              "**The camera inventory, and it is read-only.** Cameras are not onboarded through "
+              + "this API — a worker calls the adapter's inventory poll for the target's whole "
+              + "estate and upserts what comes back, so rows appear here on their own once the "
+              + "target is active and has been reached. An empty list on a healthy target means "
+              + "the first inventory poll has not run yet.\n\n"
+              + "Each row carries the vendor's native id, the platform camera id it maps to, "
+              + "model and firmware, whether it is enabled and recording, its last-seen time, and "
+              + "its stream **references**. Model 3 never touches video: a reference is an address "
+              + "to hand to a player or to Model 2, not a stream.");
 
         // ---- Fleet overview -------------------------------------------------
 
@@ -232,7 +328,13 @@ public static class VmsEndpoints
             return TypedResults.Ok(new OverviewResponse(
                 row.Targets, row.ActiveTargets, row.QuarantinedTargets,
                 row.Cameras, row.UnreachableCameras));
-        }).RequireAuthorization().WithTags("VMS").RequirePermission("vms.read");
+        }).RequireAuthorization().WithTags(ApiTags.Vms).RequirePermission("vms.read")
+          .WithSummary("Fleet totals for the caller's scope")
+          .WithDescription(
+              "One row of counters for a landing page: targets, how many are active, how many are "
+              + "quarantined, total cameras and how many are unreachable. Aggregated in the "
+              + "database over the caller's scope, so two operators with different grants "
+              + "legitimately see different totals.");
     }
 
     /// <summary>

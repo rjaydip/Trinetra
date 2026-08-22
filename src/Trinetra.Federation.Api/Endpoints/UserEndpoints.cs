@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Mvc;
 using Trinetra.Federation.Api.Auth;
 using Trinetra.Federation.Api.Contracts;
+using Trinetra.Federation.Api.OpenApi;
 using Trinetra.Federation.Storage;
 using Trinetra.Federation.Storage.Repositories;
 using Trinetra.Federation.Storage.Security;
@@ -63,7 +64,7 @@ public static class UserEndpoints
 
     public static void MapUserEndpoints(this IEndpointRouteBuilder app)
     {
-        var group = app.MapGroup("/api/v1/users").WithTags("Users").RequireAuthorization();
+        var group = app.MapGroup("/api/v1/users").WithTags(ApiTags.Users).RequireAuthorization();
 
         group.MapGet("/", async Task<Ok<IReadOnlyList<UserResponse>>> (
             UserRepository users, HttpContext http, CancellationToken ct) =>
@@ -71,7 +72,12 @@ public static class UserEndpoints
             CallerContextFactory.From(http).Require("user.read");
             var all = await users.ListAsync(ct);
             return TypedResults.Ok<IReadOnlyList<UserResponse>>([.. all.Select(ToResponse)]);
-        }).RequirePermission("user.read");
+        }).RequirePermission("user.read")
+          .WithSummary("List user accounts")
+          .WithDescription(
+              "Every account with its username, display name, email and status. The directory a "
+              + "client draws an administration screen from. Password material is not part of "
+              + "the response type at all.");
 
         group.MapGet("/{id:guid}", async Task<Results<Ok<UserResponse>, NotFound>> (
             Guid id, UserRepository users, HttpContext http, CancellationToken ct) =>
@@ -79,7 +85,12 @@ public static class UserEndpoints
             CallerContextFactory.From(http).Require("user.read");
             var user = await users.GetAsync(id, ct);
             return user is null ? TypedResults.NotFound() : TypedResults.Ok(ToResponse(user));
-        }).RequirePermission("user.read");
+        }).RequirePermission("user.read")
+          .WithSummary("Read one user account")
+          .WithDescription(
+              "Profile and status for a single account. What the account can *do* is not here — "
+              + "that comes from group membership, under `/users/{id}/groups` and "
+              + "`/users/{id}/permissions`.");
 
         group.MapGet("/{id:guid}/groups", async Task<Ok<IReadOnlyList<UserGroupResponse>>> (
             Guid id, UserRepository users, HttpContext http, CancellationToken ct) =>
@@ -88,7 +99,14 @@ public static class UserEndpoints
             var groups = await users.ListGroupsAsync(id, ct);
             return TypedResults.Ok<IReadOnlyList<UserGroupResponse>>(
                 [.. groups.Select(g => new UserGroupResponse(g.GroupId, g.Code, g.Name, g.ExpiresAt))]);
-        }).RequirePermission("user.read");
+        }).RequirePermission("user.read")
+          .WithSummary("List a user's group memberships")
+          .WithDescription(
+              "The access groups this account belongs to, each with an optional `expiresAt`. An "
+              + "expired membership stops granting anything without anyone having to revoke it — "
+              + "the intended way to give temporary access.\n\n"
+              + "This is the only route to what a user is entitled to: permissions are never "
+              + "granted to an account directly.");
 
         // Effective permissions, for diagnosing "why can this person not see that camera".
         group.MapGet("/{id:guid}/permissions", async Task<Ok<IReadOnlyList<string>>> (
@@ -97,7 +115,15 @@ public static class UserEndpoints
             CallerContextFactory.From(http).Require("user.read");
             var permissions = await users.GetPermissionsAsync(id, ct);
             return TypedResults.Ok<IReadOnlyList<string>>([.. permissions.OrderBy(p => p, StringComparer.Ordinal)]);
-        }).RequirePermission("user.read");
+        }).RequirePermission("user.read")
+          .WithSummary("Resolve a user's effective permissions")
+          .WithDescription(
+              "The flattened set of permission codes this account currently holds, resolved "
+              + "through every unexpired group membership. **Computed, not stored** — there is "
+              + "nothing to write here; change membership instead.\n\n"
+              + "This is the route for answering 'why can this person not see that camera'. Note "
+              + "that a permission code alone does not say *where* it applies: scope comes from "
+              + "the grants on the groups that carried it, under `/access-groups/{id}`.");
 
         group.MapPost("/", async Task<Results<Created<CreatedResponse>, ProblemHttpResult>> (
             [FromBody] CreateUserRequest request, UserRepository users,
@@ -138,7 +164,14 @@ public static class UserEndpoints
             await work.CommitAsync(ct);
 
             return TypedResults.Created($"/api/v1/users/{id}", new CreatedResponse(id));
-        }).RequirePermission("user.manage");
+        }).RequirePermission("user.manage")
+          .WithSummary("Create a user account")
+          .WithDescription(
+              "Creates an account and nothing else: **a new user holds no permissions until "
+              + "added to a group**, so this grants no access by itself.\n\n"
+              + "The initial password must meet the policy and is always flagged must-change, so "
+              + "the credential the creator typed never stays the user's working one. A duplicate "
+              + "username is a 409.");
 
         group.MapPut("/{id:guid}", async Task<Results<NoContent, NotFound, ProblemHttpResult>> (
             Guid id, [FromBody] UpdateUserRequest request, UserRepository users,
@@ -182,7 +215,15 @@ public static class UserEndpoints
             await work.CommitAsync(ct);
 
             return TypedResults.NoContent();
-        }).RequirePermission("user.manage");
+        }).RequirePermission("user.manage")
+          .WithSummary("Update a user's profile or status")
+          .WithDescription(
+              "Changes display name, email or status. Membership is not touched here — use "
+              + "`/users/{id}/groups`.\n\n"
+              + "Deactivating the **last active account that can administer users** is refused "
+              + "with 409: nothing in the running system could undo it, and recovery would mean "
+              + "direct database access. Editing an account with more authority than the caller "
+              + "is refused as well.");
 
         group.MapPost("/{id:guid}/password", async Task<Results<NoContent, NotFound, ProblemHttpResult>> (
             Guid id, [FromBody] ResetPasswordRequest request, UserRepository users,
@@ -223,7 +264,19 @@ public static class UserEndpoints
             await work.CommitAsync(ct);
 
             return TypedResults.NoContent();
-        }).RequirePermission("user.manage");
+        }).RequirePermission("user.manage")
+          .WithSummary("Reset another user's password")
+          .WithDescription(
+              "The administrative reset, for an account whose holder cannot log in. A user "
+              + "changing their own password uses `POST /auth/password` instead, which requires "
+              + "the current one.\n\n"
+              + "The new password always lands flagged must-change: an administrator performing a "
+              + "reset necessarily knows the value, so it must not remain the user's working "
+              + "credential.\n\n"
+              + "Resetting an account with more authority than the caller is refused — otherwise "
+              + "`user.manage` alone would be enough to reset the bootstrap administrator and "
+              + "take the platform. The audit row records that a reset happened, never the "
+              + "value.");
 
         // ---- Group membership ----------------------------------------------
 
@@ -313,7 +366,20 @@ public static class UserEndpoints
             await work.CommitAsync(ct);
 
             return TypedResults.NoContent();
-        }).RequirePermission("user.manage");
+        }).RequirePermission("user.manage")
+          .WithSummary("Add a user to an access group")
+          .WithDescription(
+              "**How permissions are granted.** Optionally with `expiresAt`, which is the "
+              + "intended way to give access for an incident or a secondment — it lapses on its "
+              + "own rather than depending on someone remembering to revoke it.\n\n"
+              + "This is the platform's privilege-escalation chokepoint, and a scoped caller must "
+              + "clear three checks, each a 403:\n"
+              + "1. the group grants no permission the caller does not already hold;\n"
+              + "2. the group declares an organization scope — an unscoped group applies across "
+              + "every department, so granting one is granting the estate;\n"
+              + "3. the group's scopes are within the units the caller administers.\n\n"
+              + "A caller who is unscoped for `user.manage` bypasses all three, which is what "
+              + "being unscoped means.");
 
         group.MapDelete("/{id:guid}/groups/{groupId:guid}", async Task<Results<NoContent, NotFound, ProblemHttpResult>> (
             Guid id, Guid groupId, UserRepository users, AccessGroupRepository groups,
@@ -353,6 +419,14 @@ public static class UserEndpoints
             await work.CommitAsync(ct);
 
             return TypedResults.NoContent();
-        }).RequirePermission("user.manage");
+        }).RequirePermission("user.manage")
+          .WithSummary("Remove a user from an access group")
+          .WithDescription(
+              "Revokes a membership and every permission it carried. **Not instantaneous:** "
+              + "permission codes are carried as claims in an already-issued token, so a session "
+              + "holding one keeps those codes until it expires (8 hours by default). Scope is "
+              + "resolved against the database on every query and narrows immediately.\n\n"
+              + "Revoking the last remaining grant of user administration is refused with 409, "
+              + "the same lockout guard as deactivation and easier to trip by accident.");
     }
 }

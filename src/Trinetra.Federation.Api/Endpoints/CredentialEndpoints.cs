@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Mvc;
 using Trinetra.Federation.Api.Auth;
 using Trinetra.Federation.Api.Contracts;
+using Trinetra.Federation.Api.OpenApi;
 using Trinetra.Federation.Storage.Repositories;
 
 namespace Trinetra.Federation.Api.Endpoints;
@@ -32,7 +33,7 @@ public static class CredentialEndpoints
     public static void MapCredentialEndpoints(this IEndpointRouteBuilder app)
     {
         var group = app.MapGroup("/api/v1/vms/{id:guid}/credential")
-                       .WithTags("Credentials")
+                       .WithTags(ApiTags.Credentials)
                        .RequireAuthorization();
 
         group.MapPut("/", async Task<Results<Ok<CredentialResponse>, NotFound, ProblemHttpResult>> (
@@ -78,7 +79,21 @@ public static class CredentialEndpoints
             // Echoes the reference and a timestamp. Never any part of what was stored.
             return TypedResults.Ok(
                 new CredentialResponse(target.CredentialReference, DateTimeOffset.UtcNow));
-        }).RequirePermission("credential.write");
+        }).RequirePermission("credential.write")
+          .WithSummary("Store the credential a connector authenticates to this device with")
+          .WithDescription(
+              "**Step 2 of onboarding.** Seals a username with a password or a token under the "
+              + "reference already recorded on the target, encrypting it application-side with "
+              + "AES-256-GCM so the database never holds the key. Supply a password or a token; "
+              + "supplying neither is a 400.\n\n"
+              + "Writing again replaces what is there — this is also the rotation route. Workers "
+              + "pick the new value up at their next connect.\n\n"
+              + "The reference comes from the target row, **never from the request body**: a "
+              + "caller-supplied reference in a flat namespace would let a district-scoped "
+              + "administrator overwrite the credential of every target in the estate.\n\n"
+              + "The response echoes the reference and a timestamp, and nothing that was stored. "
+              + "Gated separately from `vms.update` because writing the password a connector "
+              + "authenticates with is the highest-privilege action in the system.");
 
         // Presence only, so an operator can see whether a target is provisioned without any path
         // existing that reveals the value.
@@ -97,6 +112,13 @@ public static class CredentialEndpoints
 
             return TypedResults.Ok(new CredentialExistsResponse(
                 target.CredentialReference, await secrets.ExistsAsync(target.CredentialReference, ct)));
-        }).RequirePermission("vms.read");
+        }).RequirePermission("vms.read")
+          .WithSummary("Check whether this target has a credential stored")
+          .WithDescription(
+              "Presence only — the reference and a boolean. This exists so an operator can tell "
+              + "an unprovisioned target from a misconfigured one without any route existing that "
+              + "reveals a secret.\n\n"
+              + "`exists: false` on a target that fails its connection test is the ordinary cause: "
+              + "it was registered but never given a credential.");
     }
 }

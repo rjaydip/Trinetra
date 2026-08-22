@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Mvc;
 using Trinetra.Federation.Api.Auth;
 using Trinetra.Federation.Api.Contracts;
+using Trinetra.Federation.Api.OpenApi;
 using Trinetra.Federation.Storage;
 using Trinetra.Federation.Storage.Repositories;
 
@@ -23,7 +24,7 @@ public static class HierarchyEndpoints
     private static void MapOrganizations(IEndpointRouteBuilder app)
     {
         var group = app.MapGroup("/api/v1/organizations")
-                       .WithTags("Organizations")
+                       .WithTags(ApiTags.Organizations)
                        .RequireAuthorization();
 
         group.MapGet("/", async Task<Ok<IReadOnlyList<OrganizationResponse>>> (
@@ -32,7 +33,12 @@ public static class HierarchyEndpoints
             var caller = CallerContextFactory.From(http);
             var orgs = await repo.ListAsync(caller, ct);
             return TypedResults.Ok<IReadOnlyList<OrganizationResponse>>([.. orgs.Select(ToResponse)]);
-        }).RequirePermission("geography.read");
+        }).RequirePermission("geography.read")
+          .WithSummary("List organizations")
+          .WithDescription(
+              "The top of the organizational dimension — one row per force, agency or operator "
+              + "whose units own VMS targets. Start here when building a scope picker, then walk "
+              + "down with `GET /organizations/{id}/units`.");
 
         group.MapGet("/{id:guid}", async Task<Results<Ok<OrganizationResponse>, NotFound>> (
             Guid id, OrganizationRepository repo, HttpContext http, CancellationToken ct) =>
@@ -40,7 +46,11 @@ public static class HierarchyEndpoints
             var caller = CallerContextFactory.From(http);
             var org = await repo.GetAsync(id, caller, ct);
             return org is null ? TypedResults.NotFound() : TypedResults.Ok(ToResponse(org));
-        }).RequirePermission("geography.read");
+        }).RequirePermission("geography.read")
+          .WithSummary("Read one organization")
+          .WithDescription(
+              "Code, name, type, description and status. An organization the caller has no grant "
+              + "over returns 404, matching the rest of the API.");
 
         group.MapPost("/", async Task<Created<CreatedResponse>> (
             [FromBody] OrganizationRequest request, OrganizationRepository repo,
@@ -65,7 +75,14 @@ public static class HierarchyEndpoints
             await work.CommitAsync(ct);
 
             return TypedResults.Created($"/api/v1/organizations/{id}", new CreatedResponse(id));
-        }).RequirePermission("organization.manage");
+        }).RequirePermission("organization.manage")
+          .WithSummary("Create an organization")
+          .WithDescription(
+              "Creates the root of an organizational tree. `code` is the stable identifier "
+              + "operators and integrations refer to; `name` is display text and can change. "
+              + "Status defaults to `ACTIVE`.\n\n"
+              + "An organization on its own owns nothing — add units beneath it before a VMS "
+              + "target can be assigned anywhere.");
 
         group.MapGet("/{id:guid}/units", async Task<Ok<IReadOnlyList<OrganizationUnitResponse>>> (
             Guid id, OrganizationRepository repo, HttpContext http, CancellationToken ct) =>
@@ -73,7 +90,12 @@ public static class HierarchyEndpoints
             var caller = CallerContextFactory.From(http);
             var units = await repo.ListUnitsAsync(id, caller, ct);
             return TypedResults.Ok<IReadOnlyList<OrganizationUnitResponse>>([.. units.Select(ToResponse)]);
-        }).RequirePermission("organization.read");
+        }).RequirePermission("organization.read")
+          .WithSummary("List an organization's units")
+          .WithDescription(
+              "The unit tree beneath one organization, each row carrying its `parentUnitId` so a "
+              + "client can assemble the hierarchy. These ids are what `organizationUnitId` on a "
+              + "VMS target and on an access-group scope grant refer to.");
 
         group.MapPost("/{id:guid}/units", async Task<Created<CreatedResponse>> (
             Guid id, [FromBody] OrganizationUnitRequest request, OrganizationRepository repo,
@@ -99,7 +121,14 @@ public static class HierarchyEndpoints
             await work.CommitAsync(ct);
 
             return TypedResults.Created($"/api/v1/organization-units/{unitId}", new CreatedResponse(unitId));
-        }).RequirePermission("organization.manage");
+        }).RequirePermission("organization.manage")
+          .WithSummary("Create a unit inside an organization")
+          .WithDescription(
+              "Adds a department, division, zone or station to the tree. Omit `parentUnitId` for "
+              + "a top-level unit, or set it to nest one.\n\n"
+              + "Placement is a security decision, not just taxonomy: a caller granted a unit is "
+              + "granted everything beneath it, so a unit created in the wrong place widens who "
+              + "can see the targets assigned to it.");
 
         app.MapPost("/api/v1/organization-units/{id:guid}/deactivate", async (
             Guid id, [FromBody] DeactivateRequest request, OrganizationRepository repo,
@@ -113,13 +142,24 @@ public static class HierarchyEndpoints
             return await DeactivateAsync(
                 strategy => repo.DeactivateUnitAsync(id, strategy, request.NewParentId, caller, work, ct),
                 request, caller, work, "organization_unit", id, ct);
-        }).RequireAuthorization().WithTags("Organizations").RequirePermission("organization.manage");
+        }).RequireAuthorization().WithTags(ApiTags.Organizations)
+          .RequirePermission("organization.manage")
+          .WithSummary("Deactivate an organization unit")
+          .WithDescription(
+              "Marks a unit inactive. Units are never hard-deleted — audit rows and VMS targets "
+              + "reference them, and a deleted unit would orphan both.\n\n"
+              + "**A unit with active children is refused with 409**, listing what would be "
+              + "affected. Re-send with `childStrategy: \"cascade\"` to deactivate the whole "
+              + "branch, or `\"reparent\"` plus `newParentId` to move the children somewhere "
+              + "else first. Neither is ever applied by default: cascading silently takes a "
+              + "department's whole estate out of scope, and silently reparenting hides a "
+              + "structural change no one approved.");
     }
 
     private static void MapGeography(IEndpointRouteBuilder app)
     {
         var areas = app.MapGroup("/api/v1/geographic-areas")
-                       .WithTags("Geography")
+                       .WithTags(ApiTags.Geography)
                        .RequireAuthorization();
 
         areas.MapGet("/", async Task<Ok<IReadOnlyList<GeographicAreaResponse>>> (
@@ -129,7 +169,13 @@ public static class HierarchyEndpoints
             var caller = CallerContextFactory.From(http);
             var areas = await repo.ListAreasAsync(parentId, rootsOnly ?? false, caller, ct);
             return TypedResults.Ok<IReadOnlyList<GeographicAreaResponse>>([.. areas.Select(ToResponse)]);
-        }).RequirePermission("geography.read");
+        }).RequirePermission("geography.read")
+          .WithSummary("List geographic areas")
+          .WithDescription(
+              "Areas within the caller's geographic scope. `rootsOnly=true` returns the top of "
+              + "the tree; `parentId` returns one level beneath a node. Send neither and the "
+              + "whole in-scope set comes back — fine for a small deployment, worth paging by "
+              + "level in a large one.");
 
         areas.MapGet("/{id:guid}", async Task<Results<Ok<GeographicAreaResponse>, NotFound>> (
             Guid id, GeographyRepository repo, HttpContext http, CancellationToken ct) =>
@@ -137,7 +183,11 @@ public static class HierarchyEndpoints
             var caller = CallerContextFactory.From(http);
             var area = await repo.GetAreaAsync(id, caller, ct);
             return area is null ? TypedResults.NotFound() : TypedResults.Ok(ToResponse(area));
-        }).RequirePermission("geography.read");
+        }).RequirePermission("geography.read")
+          .WithSummary("Read one geographic area")
+          .WithDescription(
+              "Code, name, area type, parent and status for a single node in the geographic "
+              + "hierarchy.");
 
         // Both directions of the tree, because a UI needs to render downward and a scope check
         // needs to reason upward.
@@ -147,7 +197,11 @@ public static class HierarchyEndpoints
             var caller = CallerContextFactory.From(http);
             var children = await repo.ListAreasAsync(id, false, caller, ct);
             return TypedResults.Ok<IReadOnlyList<GeographicAreaResponse>>([.. children.Select(ToResponse)]);
-        }).RequirePermission("geography.read");
+        }).RequirePermission("geography.read")
+          .WithSummary("List an area's immediate children")
+          .WithDescription(
+              "One level down, for rendering a tree as the user expands it rather than fetching "
+              + "the whole hierarchy up front.");
 
         areas.MapGet("/{id:guid}/ancestors", async Task<Ok<IReadOnlyList<GeographicAreaResponse>>> (
             Guid id, GeographyRepository repo, HttpContext http, CancellationToken ct) =>
@@ -155,7 +209,13 @@ public static class HierarchyEndpoints
             var caller = CallerContextFactory.From(http);
             var chain = await repo.GetAncestorsAsync(id, caller, ct);
             return TypedResults.Ok<IReadOnlyList<GeographicAreaResponse>>([.. chain.Select(ToResponse)]);
-        }).RequirePermission("geography.read");
+        }).RequirePermission("geography.read")
+          .WithSummary("Walk an area's ancestor chain to the root")
+          .WithDescription(
+              "The other direction of the tree: a UI renders downward, but explaining *why* a "
+              + "caller can see something means reasoning upward — a grant on a district covers "
+              + "every ward inside it. Use this to build a breadcrumb, or to show which ancestor "
+              + "a permission was actually granted on.");
 
         areas.MapGet("/types", async Task<Ok<IReadOnlyList<AreaTypeResponse>>> (
             GeographyRepository repo, HttpContext http, CancellationToken ct) =>
@@ -164,7 +224,13 @@ public static class HierarchyEndpoints
             var types = await repo.ListAreaTypesAsync(ct);
             return TypedResults.Ok<IReadOnlyList<AreaTypeResponse>>(
                 [.. types.Select(t => new AreaTypeResponse(t.Code, t.Name, t.LevelOrder))]);
-        }).RequirePermission("geography.read");
+        }).RequirePermission("geography.read")
+          .WithSummary("List the area types and their nesting order")
+          .WithDescription(
+              "Reference data: the levels this deployment models — state, district, zone, ward "
+              + "and so on — each with a `levelOrder` giving where it sits in the hierarchy. "
+              + "Clients should populate the `areaType` picker from here rather than hard-coding "
+              + "a list, since the levels are deployment configuration.");
 
         areas.MapPost("/", async Task<Created<CreatedResponse>> (
             [FromBody] GeographicAreaRequest request, GeographyRepository repo,
@@ -189,7 +255,13 @@ public static class HierarchyEndpoints
             await work.CommitAsync(ct);
 
             return TypedResults.Created($"/api/v1/geographic-areas/{id}", new CreatedResponse(id));
-        }).RequirePermission("geography.manage");
+        }).RequirePermission("geography.manage")
+          .WithSummary("Create a geographic area")
+          .WithDescription(
+              "Adds a node to the geographic hierarchy. `areaType` must be one of the codes from "
+              + "`GET /geographic-areas/types`; omit `parentAreaId` for a root.\n\n"
+              + "Like an organization unit, where an area sits decides who can see what is inside "
+              + "it — a grant on a parent reaches every descendant.");
 
         areas.MapPost("/{id:guid}/deactivate", async (
             Guid id, [FromBody] DeactivateRequest request, GeographyRepository repo,
@@ -203,9 +275,19 @@ public static class HierarchyEndpoints
             return await DeactivateAsync(
                 strategy => repo.DeactivateAreaAsync(id, strategy, request.NewParentId, caller, work, ct),
                 request, caller, work, "geographic_area", id, ct);
-        }).RequirePermission("geography.manage");
+        }).RequirePermission("geography.manage")
+          .WithSummary("Deactivate a geographic area")
+          .WithDescription(
+              "Marks an area inactive, with the same two-step refusal as unit deactivation: an "
+              + "area with active children or sites beneath it returns 409 listing what would be "
+              + "affected, and the caller re-sends with `childStrategy` `cascade` or `reparent` "
+              + "plus `newParentId`.\n\n"
+              + "A reparent target inside the branch being deactivated is a 400 — it would leave "
+              + "the children under an inactive ancestor.");
 
-        var sites = app.MapGroup("/api/v1/sites").WithTags("Geography").RequireAuthorization();
+        var sites = app.MapGroup("/api/v1/sites")
+                       .WithTags(ApiTags.Geography)
+                       .RequireAuthorization();
 
         sites.MapGet("/", async Task<Ok<IReadOnlyList<SiteResponse>>> (
             Guid? areaId, GeographyRepository repo, HttpContext http, CancellationToken ct) =>
@@ -213,7 +295,14 @@ public static class HierarchyEndpoints
             var caller = CallerContextFactory.From(http);
             var found = await repo.ListSitesAsync(areaId, caller, ct);
             return TypedResults.Ok<IReadOnlyList<SiteResponse>>([.. found.Select(ToResponse)]);
-        }).RequirePermission("geography.read");
+        }).RequirePermission("geography.read")
+          .WithSummary("List sites")
+          .WithDescription(
+              "Physical installations — a control room, junction, campus or building — each "
+              + "pinned to a geographic area and carrying an address and coordinates. Filter to "
+              + "one area with `areaId`.\n\n"
+              + "A site is what a VMS target's `siteId` points at, so this is the list to draw a "
+              + "site picker from during onboarding.");
 
         sites.MapPost("/", async Task<Created<CreatedResponse>> (
             [FromBody] SiteRequest request, GeographyRepository repo,
@@ -241,7 +330,14 @@ public static class HierarchyEndpoints
             await work.CommitAsync(ct);
 
             return TypedResults.Created($"/api/v1/sites/{id}", new CreatedResponse(id));
-        }).RequirePermission("geography.manage");
+        }).RequirePermission("geography.manage")
+          .WithSummary("Create a site")
+          .WithDescription(
+              "Registers a physical location inside a geographic area. Latitude and longitude are "
+              + "plain decimals with range checks — the platform stores no spatial types, and "
+              + "coverage geometry belongs to Model 1 rather than to this API.\n\n"
+              + "Create the site before the VMS targets installed at it, so each target can be "
+              + "assigned one at registration.");
     }
 
     // Explicit projections rather than serialising the storage records directly: a column added

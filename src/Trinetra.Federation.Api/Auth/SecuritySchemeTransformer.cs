@@ -11,6 +11,11 @@ namespace Trinetra.Federation.Api.Auth;
 /// so Swagger UI offers no Authorize button — and since every route except login and health
 /// requires a token, the whole page would return 401 with no way to fix it from the UI.
 /// </remarks>
+/// <remarks>
+/// Title and description belong to <see cref="OpenApi.TagDescriptionTransformer"/>, which runs
+/// after this one. Setting <c>Info</c> in both meant whichever transformer ran last silently won,
+/// and the losing text simply vanished from the page.
+/// </remarks>
 internal sealed class SecuritySchemeTransformer : IOpenApiDocumentTransformer
 {
     public Task TransformAsync(
@@ -28,8 +33,11 @@ internal sealed class SecuritySchemeTransformer : IOpenApiDocumentTransformer
                 BearerFormat = "JWT",
                 In = ParameterLocation.Header,
                 Description =
-                    "Paste the token from POST /api/v1/auth/login. Swagger adds the 'Bearer ' "
-                    + "prefix, so enter the token value alone.",
+                    "**Paste the token by itself. Do not type `Bearer`.**\n\n"
+                    + "Swagger adds the `Bearer ` prefix for you. Typing it as well sends "
+                    + "`Authorization: Bearer Bearer <token>`, which fails validation, and every "
+                    + "call comes back 401 with a token that is perfectly valid.\n\n"
+                    + "Get the value from the `token` field of `POST /api/v1/auth/login`.",
             },
             ["ApiKey"] = new OpenApiSecurityScheme
             {
@@ -40,12 +48,6 @@ internal sealed class SecuritySchemeTransformer : IOpenApiDocumentTransformer
                     "For service integrations. People use a bearer token instead.",
             },
         };
-
-        document.Info.Title = "Trinetra Federation API";
-        document.Info.Description =
-            "Model 3 — VMS federation and configuration.\n\n"
-            + "Every endpoint except /health and /api/v1/auth/login requires authentication. "
-            + "Log in first, then use Authorize to set the token.";
 
         return Task.CompletedTask;
     }
