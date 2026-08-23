@@ -19,6 +19,9 @@ appsettings.Local.json
 appsettings.*.Local.json
 .DS_Store
 
+# Agent worktrees are local implementation sandboxes, never repository content.
+.worktrees/
+
 # ---------------------------------------------------------------------------
 # Secrets — never commit
 # ---------------------------------------------------------------------------
