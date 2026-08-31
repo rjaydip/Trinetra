@@ -86,4 +86,13 @@ describe('BulkImportPage', () => {
     expect(screen.queryByRole('button', { name: /import cameras/i })).not.toBeInTheDocument();
     expect(fetch).not.toHaveBeenCalled();
   });
+
+  it('previews a .NET Guid VMS ID for server row validation', async () => {
+    signIn();
+    renderApp('/cameras/import');
+
+    await uploadJson('cameras.json', [{ vmsId: '00000000-0000-0000-0000-000000000001' }]);
+
+    expect(await screen.findByRole('button', { name: /import cameras/i })).toBeVisible();
+  });
 });

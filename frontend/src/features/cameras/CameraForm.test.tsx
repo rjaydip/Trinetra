@@ -78,6 +78,17 @@ describe('CameraForm', () => {
     expect(submit).not.toHaveBeenCalled();
   });
 
+  it('submits a VMS ID using the .NET Guid wire format', async () => {
+    const user = userEvent.setup();
+    const submit = vi.fn().mockResolvedValue(undefined);
+    const vmsId = '00000000-0000-0000-0000-000000000001';
+    render(<CameraForm onSubmit={submit} organizationUnits={[]} sites={[]} initialValues={validForm({ vmsId })} />);
+
+    await user.click(screen.getByRole('button', { name: /register camera/i }));
+
+    expect(submit).toHaveBeenCalledWith(expect.objectContaining({ vmsId }));
+  });
+
   it('connects every invalid required field to its rendered error message', async () => {
     const user = userEvent.setup();
     render(<CameraForm onSubmit={vi.fn()} organizationUnits={[]} sites={[]} />);
