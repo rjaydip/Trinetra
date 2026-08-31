@@ -17,6 +17,7 @@ export function buildMapRequest(bounds: Bounds, filters: MapFilters): URLSearchP
   const [west, south, east, north] = bounds;
   if (!Number.isFinite(west) || !Number.isFinite(south) || !Number.isFinite(east) || !Number.isFinite(north)
     || west >= east || south >= north
+    || west < -180 || east > 180 || south < -90 || north > 90
     || east - west > MAX_GIS_BOUNDS_DEGREES || north - south > MAX_GIS_BOUNDS_DEGREES) return null;
 
   const query = new URLSearchParams({ bbox: `${west},${south},${east},${north}` });

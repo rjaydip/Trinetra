@@ -40,7 +40,7 @@ export function CameraMap({ bounds, features, onBoundsChange, onSelect }: {
 
     void import('maplibre-gl').then(({ default: maplibregl }) => {
       if (cancelled || !container.current) return;
-      instance = new maplibregl.Map({ container: container.current, style: MAP_STYLE, bounds: [...bounds], fitBoundsOptions: { padding: 32 } });
+      instance = new maplibregl.Map({ container: container.current, style: MAP_STYLE, bounds: [...bounds], maxBounds: [[-180, -90], [180, 90]], fitBoundsOptions: { padding: 32 } });
       map.current = instance;
       instance.addControl(new maplibregl.NavigationControl(), 'top-right');
       instance.on('load', () => {
@@ -75,9 +75,24 @@ export function CameraMap({ bounds, features, onBoundsChange, onSelect }: {
     if (coverage && 'setData' in coverage && typeof coverage.setData === 'function') coverage.setData(toGeoJson(coverageFeatures(features)));
   }, [features]);
 
-  return (
+  const selections = features.features.flatMap((feature) => {
+    const cameraId = cameraIdForFeature(feature);
+    if (!cameraId) return [];
+    const name = typeof feature.properties.name === 'string'
+      ? feature.properties.name
+      : typeof feature.properties.cameraCode === 'string' ? feature.properties.cameraCode : cameraId;
+    return [{ cameraId, name }];
+  });
+
+  return <>
     <div className="map-canvas" data-testid="camera-map" ref={container}>
       <p className="map-canvas__fallback">Interactive camera map. {features.features.length} visible camera{features.features.length === 1 ? '' : 's'}.</p>
     </div>
-  );
+    <section aria-label="Visible camera selection" className="map-camera-selection">
+      <h2>Visible cameras</h2>
+      {selections.length ? <ul>{selections.map(({ cameraId, name }) => <li key={cameraId}>
+        <button type="button" onClick={() => onSelect(cameraId)}>Open camera {name}</button>
+      </li>)}</ul> : <p>No individual cameras are visible at this zoom level.</p>}
+    </section>
+  </>;
 }
