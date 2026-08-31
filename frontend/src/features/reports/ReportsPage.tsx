@@ -54,9 +54,9 @@ export function ReportsPage() {
       <section className="report-panel" aria-labelledby="coverage-summary-title">
         <div className="report-panel__header"><div><h2 id="coverage-summary-title">Coverage summary</h2><p>Estimated planning aid only; terrain and obstructions are not modelled.</p></div><StatusBadge tone="warning">Estimated</StatusBadge></div>
         <form className="coverage-scope-form" onSubmit={submitCoverage}>
-          <label htmlFor="coverage-bounding-box">Coverage bounding box <input id="coverage-bounding-box" value={boundingBox} onChange={(event) => setBoundingBox(event.target.value)} placeholder="west,south,east,north" /></label>
+          <label htmlFor="coverage-bounding-box">Coverage bounding box <input aria-describedby={scopeError ? 'coverage-scope-help coverage-scope-error' : 'coverage-scope-help'} aria-invalid={Boolean(scopeError)} id="coverage-bounding-box" value={boundingBox} onChange={(event) => setBoundingBox(event.target.value)} placeholder="west,south,east,north" /></label>
           <p id="coverage-scope-help">Use coordinates in west,south,east,north order for the area you are assessing.</p>
-          {scopeError && <p className="form-error" role="alert">{scopeError}</p>}
+          {scopeError && <p className="form-error" id="coverage-scope-error" role="alert">{scopeError}</p>}
           <button className="button" type="submit">Load coverage summary</button>
         </form>
         {coverage.isPending && submittedBoundingBox && <p role="status">Loading coverage summary…</p>}
