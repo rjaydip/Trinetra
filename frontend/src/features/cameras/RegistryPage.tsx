@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 
 import { api } from '../../api/endpoints';
 import { PageState } from '../../components/ui';
@@ -80,7 +80,7 @@ export function RegistryPage() {
 
   return (
     <section className="registry-page" aria-labelledby="camera-registry-title">
-      <header className="registry-page__header"><div><p className="eyebrow">Live registry</p><h1 id="camera-registry-title">Camera registry</h1></div></header>
+      <header className="registry-page__header"><div><p className="eyebrow">Live registry</p><h1 id="camera-registry-title">Camera registry</h1></div><div className="registry-page__actions"><Link className="button button--secondary" to="/cameras/import">Bulk import</Link><Link className="button" to="/cameras/new">Register camera</Link></div></header>
       <CameraFilters filters={draftFilters} onChange={setFilter} onClear={clearFilters} />
       {registry.data.items.length === 0 ? <PageState title="No cameras found">Change or clear filters to view authorized cameras.</PageState> : <>
         <CameraTable cameras={registry.data.items} />
