@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { api } from './endpoints';
+import { readSession, saveSession } from '../auth/session';
+import { sessionFixture } from '../test/fixtures';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -8,6 +10,18 @@ afterEach(() => {
 });
 
 describe('API client', () => {
+  it('does not expire a replacement session when an old request returns 401 late', async () => {
+    saveSession(sessionFixture('old'));
+    let finish: (response: Response) => void = () => {};
+    vi.stubGlobal('fetch', () => new Promise<Response>((resolve) => { finish = resolve; }));
+    const request = api.cameras.list({});
+    const replacement = sessionFixture('new');
+    saveSession(replacement);
+    finish(Response.json({ title: 'Expired' }, { status: 401 }));
+    await expect(request).rejects.toMatchObject({ status: 401 });
+    expect(readSession()?.token).toBe(replacement.token);
+  });
+
   it('turns a Problem Details response into an ApiProblem', async () => {
     vi.stubGlobal('fetch', async () => new Response(JSON.stringify({
       title: 'Forbidden',

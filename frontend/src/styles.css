@@ -96,7 +96,8 @@ a { color: var(--color-primary); }
 .registry-filters .checkbox-label input { min-height: 1.25rem; width: 1.25rem; }
 .button--secondary { color: var(--color-primary); background: var(--color-surface); }
 .button--secondary:hover { color: white; background: var(--color-primary); }
-.camera-table-wrap { display: none; overflow-x: auto; border: 1px solid var(--color-border); background: var(--color-surface); }
+.camera-table-wrap { display: block; overflow-x: auto; border: 1px solid var(--color-border); background: var(--color-surface); }
+.registry-page .camera-table-wrap { display: none; }
 .camera-table { width: 100%; border-collapse: collapse; text-align: left; }
 .camera-table th, .camera-table td { padding: .875rem; border-bottom: 1px solid var(--color-border); vertical-align: middle; }
 .camera-table th { color: var(--color-muted); font-size: .75rem; letter-spacing: .04em; text-transform: uppercase; }
@@ -157,8 +158,8 @@ a { color: var(--color-primary); }
 }
 
 @media (min-width: 43rem) {
-  .camera-table-wrap { display: block; }
-  .camera-cards { display: none; }
+  .registry-page .camera-table-wrap { display: block; }
+  .registry-page .camera-cards { display: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {
