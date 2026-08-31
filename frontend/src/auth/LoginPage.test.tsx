@@ -1,5 +1,5 @@
 import '@testing-library/jest-dom/vitest';
-import { render, screen } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -17,7 +17,12 @@ function renderApp(path: string) {
   );
 }
 
+function futureExpiry(): string {
+  return new Date(Date.now() + 60_000).toISOString();
+}
+
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   sessionStorage.clear();
 });
@@ -26,7 +31,7 @@ describe('LoginPage', () => {
   it('stores the returned token after a successful login', async () => {
     vi.stubGlobal('fetch', async () => new Response(JSON.stringify({
       token: 'signed-in-token',
-      expiresAt: '2030-01-01T00:00:00Z',
+      expiresAt: futureExpiry(),
       mustChangePassword: false,
     }), {
       status: 200,
@@ -47,7 +52,7 @@ describe('LoginPage', () => {
   it('routes a password-rotation session to the password form', async () => {
     vi.stubGlobal('fetch', async () => new Response(JSON.stringify({
       token: 'rotation-token',
-      expiresAt: '2030-01-01T00:00:00Z',
+      expiresAt: futureExpiry(),
       mustChangePassword: true,
     }), {
       status: 200,
@@ -81,5 +86,25 @@ describe('LoginPage', () => {
     await user.click(screen.getByRole('button', { name: /sign in/i }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent('The username or password is incorrect, or the account is unavailable.');
+  });
+
+  it('removes protected access when the active session expires', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-31T00:00:00Z'));
+    sessionStorage.setItem('trinetra.auth.session', JSON.stringify({
+      token: 'soon-expired-token',
+      expiresAt: new Date(Date.now() + 1_000).toISOString(),
+      mustChangePassword: false,
+    }));
+
+    renderApp('/dashboard');
+    expect(screen.getByRole('heading', { name: /camera map/i })).toBeVisible();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+
+    expect(screen.getByRole('heading', { name: /sign in/i })).toBeVisible();
+    expect(sessionStorage.getItem('trinetra.auth.session')).toBeNull();
   });
 });

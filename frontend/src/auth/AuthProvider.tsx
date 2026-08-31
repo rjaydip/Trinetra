@@ -18,6 +18,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => subscribeToSession(() => setSession(readSession())), []);
 
+  useEffect(() => {
+    if (!session) return undefined;
+
+    const delay = Date.parse(session.expiresAt) - Date.now();
+    if (!Number.isFinite(delay) || delay <= 0) {
+      clearSession();
+      return undefined;
+    }
+
+    const expiryTimer = window.setTimeout(clearSession, delay);
+    return () => window.clearTimeout(expiryTimer);
+  }, [session]);
+
   const value = useMemo<AuthContextValue>(() => ({
     session,
     async login(credentials) {

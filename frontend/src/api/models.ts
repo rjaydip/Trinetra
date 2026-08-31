@@ -51,6 +51,36 @@ export interface CameraWriteRequest {
   maintenanceStatus?: string | null;
 }
 
+/** Fields accepted by `PATCH /api/v1/cameras/{id}`. Omitted fields are unchanged; nullable fields clear when sent as `null`. */
+export interface CameraPatchRequest {
+  name?: string;
+  manufacturer?: string | null;
+  model?: string | null;
+  serialNumber?: string | null;
+  cameraType?: string;
+  organizationUnitId?: string;
+  siteId?: string;
+  latitude?: number;
+  longitude?: number;
+  altitude?: number | null;
+  mountingHeight?: number | null;
+  azimuth?: number | null;
+  tilt?: number | null;
+  horizontalFov?: number | null;
+  verticalFov?: number | null;
+  effectiveRange?: number | null;
+  ipAddress?: string | null;
+  port?: number | null;
+  protocol?: string | null;
+  vmsId?: string | null;
+  streamReference?: string | null;
+  credentialReference?: string | null;
+  installationDate?: string | null;
+  operationalStatus?: string;
+  connectivityStatus?: string;
+  maintenanceStatus?: string;
+}
+
 export interface CameraResponse extends CameraWriteRequest {
   id: string;
   operationalStatus: string;
