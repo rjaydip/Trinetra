@@ -66,4 +66,30 @@ describe('CameraForm', () => {
 
     expect(screen.queryByLabelText(/credential reference/i)).not.toBeInTheDocument();
   });
+
+  it('blocks submission when a populated VMS ID is not a UUID', async () => {
+    const user = userEvent.setup();
+    const submit = vi.fn();
+    render(<CameraForm onSubmit={submit} organizationUnits={[]} sites={[]} initialValues={validForm({ vmsId: 'not-a-uuid' })} />);
+
+    await user.click(screen.getByRole('button', { name: /register camera/i }));
+
+    expect(await screen.findByText(/VMS ID must be a valid UUID/i)).toBeVisible();
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  it('connects every invalid required field to its rendered error message', async () => {
+    const user = userEvent.setup();
+    render(<CameraForm onSubmit={vi.fn()} organizationUnits={[]} sites={[]} />);
+
+    await user.click(screen.getByRole('button', { name: /register camera/i }));
+
+    for (const label of ['Camera code', 'Name', 'Organization unit', 'Site', 'Camera type', 'Latitude', 'Longitude']) {
+      const field = screen.getByLabelText(label);
+      const errorId = field.getAttribute('aria-describedby');
+      expect(field).toHaveAttribute('aria-invalid', 'true');
+      expect(errorId).toBeTruthy();
+      expect(document.getElementById(errorId!)).toBeVisible();
+    }
+  });
 });

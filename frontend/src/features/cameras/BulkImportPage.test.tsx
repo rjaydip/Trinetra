@@ -70,4 +70,20 @@ describe('BulkImportPage', () => {
     expect(await screen.findByText(/between 1 and 500 items/i)).toBeVisible();
     expect(screen.queryByRole('button', { name: /import cameras/i })).not.toBeInTheDocument();
   });
+
+  it.each([
+    [{ vmsId: 'not-a-uuid' }, /VMS ID must be a valid UUID/i],
+    [{ installationDate: '2026-02-30' }, /Installation date must use the YYYY-MM-DD format/i],
+  ])('rejects malformed optional request values before sending: %o', async (item, message) => {
+    signIn();
+    const fetch = vi.fn();
+    vi.stubGlobal('fetch', fetch);
+    renderApp('/cameras/import');
+
+    await uploadJson('cameras.json', [item]);
+
+    expect(await screen.findByText(message)).toBeVisible();
+    expect(screen.queryByRole('button', { name: /import cameras/i })).not.toBeInTheDocument();
+    expect(fetch).not.toHaveBeenCalled();
+  });
 });

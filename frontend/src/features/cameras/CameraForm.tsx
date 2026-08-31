@@ -11,6 +11,7 @@ const protocols = ['RTSP', 'RTSPS', 'ONVIF', 'HTTP', 'HTTPS', 'RTMP', 'SRT', 'OT
 const operationalStatuses = ['ONLINE', 'OFFLINE', 'DEGRADED', 'UNKNOWN'] as const;
 const connectivityStatuses = ['CONNECTED', 'DISCONNECTED', 'UNKNOWN'] as const;
 const maintenanceStatuses = ['NORMAL', 'REQUIRED', 'UNDER_MAINTENANCE'] as const;
+const uuidSchema = z.uuid();
 
 type NumericField = 'altitude' | 'mountingHeight' | 'azimuth' | 'tilt' | 'horizontalFov' | 'verticalFov' | 'effectiveRange' | 'port';
 
@@ -74,6 +75,10 @@ function choice(values: readonly string[], message: string, required = false) {
   }, { message });
 }
 
+function optionalUuid(label: string) {
+  return z.string().refine((value) => !value || uuidSchema.safeParse(value).success, { message: `${label} must be a valid UUID.` });
+}
+
 const cameraFormSchema = z.object({
   cameraCode: requiredText('Camera code', 100),
   name: requiredText('Name', 255),
@@ -93,7 +98,7 @@ const cameraFormSchema = z.object({
   ipAddress: z.string(),
   port: numeric('Port', 1, 65535),
   protocol: choice(protocols, `Protocol must be one of: ${protocols.join(', ')}.`),
-  vmsId: z.string(),
+  vmsId: optionalUuid('VMS ID'),
   streamReference: z.string(),
   installationDate: z.string(),
   operationalStatus: choice(operationalStatuses, `Operational status must be one of: ${operationalStatuses.join(', ')}.`),
@@ -139,13 +144,16 @@ interface CameraFormProps {
   onSubmit(values: CameraWriteRequest): Promise<void>;
 }
 
-function FieldError({ message }: { message?: string }) {
-  return message ? <p className="form-error" role="alert">{message}</p> : null;
+function FieldError({ id, message }: { id: string; message?: string }) {
+  return message ? <p className="form-error" id={id} role="alert">{message}</p> : null;
 }
 
 export function CameraForm({ organizationUnits, sites, initialValues, onSubmit }: CameraFormProps) {
   const form = useForm<CameraFormValues>({ defaultValues: initialValues ?? defaults, resolver: zodResolver(cameraFormSchema) });
   const { register, formState: { errors, isSubmitting } } = form;
+  const validationProps = (name: keyof CameraFormValues) => errors[name]
+    ? { 'aria-describedby': `${name}-error`, 'aria-invalid': true }
+    : { 'aria-invalid': false };
   const numericFields: Array<{ name: NumericField; label: string; step?: string }> = [
     { name: 'altitude', label: 'Altitude', step: 'any' }, { name: 'mountingHeight', label: 'Mounting height', step: 'any' },
     { name: 'azimuth', label: 'Azimuth', step: 'any' }, { name: 'tilt', label: 'Tilt', step: 'any' },
@@ -163,28 +171,28 @@ export function CameraForm({ organizationUnits, sites, initialValues, onSubmit }
       }
     })}>
       <fieldset><legend>Identity and location</legend>
-        <label>Camera code<input {...register('cameraCode')} aria-describedby={errors.cameraCode ? 'cameraCode-error' : undefined} /></label><FieldError message={errors.cameraCode?.message} />
-        <label>Name<input {...register('name')} /></label><FieldError message={errors.name?.message} />
-        <label>Organization unit<select {...register('organizationUnitId')}><option value="">Select an organization unit</option>{organizationUnits.map((unit) => <option key={unit.id} value={unit.id}>{unit.name} ({unit.code})</option>)}</select></label><FieldError message={errors.organizationUnitId?.message} />
-        <label>Site<select {...register('siteId')}><option value="">Select a site</option>{sites.map((site) => <option key={site.id} value={site.id}>{site.name} ({site.code})</option>)}</select></label><FieldError message={errors.siteId?.message} />
-        <label>Camera type<select {...register('cameraType')}><option value="">Select a camera type</option>{cameraTypes.map((type) => <option key={type} value={type}>{type}</option>)}</select></label><FieldError message={errors.cameraType?.message} />
-        <label>Latitude<input inputMode="decimal" {...register('latitude')} /></label><FieldError message={errors.latitude?.message} />
-        <label>Longitude<input inputMode="decimal" {...register('longitude')} /></label><FieldError message={errors.longitude?.message} />
+        <label>Camera code<input {...register('cameraCode')} {...validationProps('cameraCode')} /></label><FieldError id="cameraCode-error" message={errors.cameraCode?.message} />
+        <label>Name<input {...register('name')} {...validationProps('name')} /></label><FieldError id="name-error" message={errors.name?.message} />
+        <label>Organization unit<select {...register('organizationUnitId')} {...validationProps('organizationUnitId')}><option value="">Select an organization unit</option>{organizationUnits.map((unit) => <option key={unit.id} value={unit.id}>{unit.name} ({unit.code})</option>)}</select></label><FieldError id="organizationUnitId-error" message={errors.organizationUnitId?.message} />
+        <label>Site<select {...register('siteId')} {...validationProps('siteId')}><option value="">Select a site</option>{sites.map((site) => <option key={site.id} value={site.id}>{site.name} ({site.code})</option>)}</select></label><FieldError id="siteId-error" message={errors.siteId?.message} />
+        <label>Camera type<select {...register('cameraType')} {...validationProps('cameraType')}><option value="">Select a camera type</option>{cameraTypes.map((type) => <option key={type} value={type}>{type}</option>)}</select></label><FieldError id="cameraType-error" message={errors.cameraType?.message} />
+        <label>Latitude<input inputMode="decimal" {...register('latitude')} {...validationProps('latitude')} /></label><FieldError id="latitude-error" message={errors.latitude?.message} />
+        <label>Longitude<input inputMode="decimal" {...register('longitude')} {...validationProps('longitude')} /></label><FieldError id="longitude-error" message={errors.longitude?.message} />
       </fieldset>
       <fieldset><legend>Device and network</legend>
-        <label>Manufacturer<input {...register('manufacturer')} /></label><label>Model<input {...register('model')} /></label><label>Serial number<input {...register('serialNumber')} /></label>
-        <label>IP address<input {...register('ipAddress')} /></label>
-        <label>Protocol<select {...register('protocol')}><option value="">Not recorded</option>{protocols.map((protocol) => <option key={protocol} value={protocol}>{protocol}</option>)}</select></label>
-        <label>VMS ID<input {...register('vmsId')} /></label><label>Stream reference<input {...register('streamReference')} /></label>
+        <label>Manufacturer<input {...register('manufacturer')} {...validationProps('manufacturer')} /></label><label>Model<input {...register('model')} {...validationProps('model')} /></label><label>Serial number<input {...register('serialNumber')} {...validationProps('serialNumber')} /></label>
+        <label>IP address<input {...register('ipAddress')} {...validationProps('ipAddress')} /></label>
+        <label>Protocol<select {...register('protocol')} {...validationProps('protocol')}><option value="">Not recorded</option>{protocols.map((protocol) => <option key={protocol} value={protocol}>{protocol}</option>)}</select></label><FieldError id="protocol-error" message={errors.protocol?.message} />
+        <label>VMS ID<input {...register('vmsId')} {...validationProps('vmsId')} /></label><FieldError id="vmsId-error" message={errors.vmsId?.message} /><label>Stream reference<input {...register('streamReference')} {...validationProps('streamReference')} /></label>
       </fieldset>
       <fieldset><legend>Position, optics, and status</legend>
-        {numericFields.map(({ name, label, step }) => <div key={name}><label>{label}<input type="number" step={step} {...register(name)} /></label><FieldError message={errors[name]?.message} /></div>)}
-        <label>Installation date<input type="date" {...register('installationDate')} /></label>
-        <label>Operational status<select {...register('operationalStatus')}><option value="">Use server default</option>{operationalStatuses.map((status) => <option key={status} value={status}>{status}</option>)}</select></label>
-        <label>Connectivity status<select {...register('connectivityStatus')}><option value="">Use server default</option>{connectivityStatuses.map((status) => <option key={status} value={status}>{status}</option>)}</select></label>
-        <label>Maintenance status<select {...register('maintenanceStatus')}><option value="">Use server default</option>{maintenanceStatuses.map((status) => <option key={status} value={status}>{status}</option>)}</select></label>
+        {numericFields.map(({ name, label, step }) => <div key={name}><label>{label}<input type="number" step={step} {...register(name)} {...validationProps(name)} /></label><FieldError id={`${name}-error`} message={errors[name]?.message} /></div>)}
+        <label>Installation date<input type="date" {...register('installationDate')} {...validationProps('installationDate')} /></label>
+        <label>Operational status<select {...register('operationalStatus')} {...validationProps('operationalStatus')}><option value="">Use server default</option>{operationalStatuses.map((status) => <option key={status} value={status}>{status}</option>)}</select></label><FieldError id="operationalStatus-error" message={errors.operationalStatus?.message} />
+        <label>Connectivity status<select {...register('connectivityStatus')} {...validationProps('connectivityStatus')}><option value="">Use server default</option>{connectivityStatuses.map((status) => <option key={status} value={status}>{status}</option>)}</select></label><FieldError id="connectivityStatus-error" message={errors.connectivityStatus?.message} />
+        <label>Maintenance status<select {...register('maintenanceStatus')} {...validationProps('maintenanceStatus')}><option value="">Use server default</option>{maintenanceStatuses.map((status) => <option key={status} value={status}>{status}</option>)}</select></label><FieldError id="maintenanceStatus-error" message={errors.maintenanceStatus?.message} />
       </fieldset>
-      <FieldError message={errors.root?.message} />
+      <FieldError id="camera-form-error" message={errors.root?.message} />
       <Button disabled={isSubmitting} type="submit">{isSubmitting ? 'Registering camera…' : 'Register camera'}</Button>
     </form>
   );
