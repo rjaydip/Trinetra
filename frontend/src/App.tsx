@@ -11,6 +11,7 @@ import { BulkImportPage } from './features/cameras/BulkImportPage';
 import { NewCameraPage } from './features/cameras/NewCameraPage';
 import { RegistryPage } from './features/cameras/RegistryPage';
 import { MapPage } from './features/map/MapPage';
+import { ReportsPage } from './features/reports/ReportsPage';
 
 export function App() {
   const [queryClient] = useState(() => new QueryClient({
@@ -24,6 +25,7 @@ export function App() {
         <Route path="/password" element={<RequireAuth passwordChangeOnly><PasswordPage /></RequireAuth>} />
         <Route element={<RequireAuth><AppShell /></RequireAuth>}>
           <Route path="/dashboard" element={<MapPage />} />
+          <Route path="/reports" element={<ReportsPage />} />
           <Route path="/cameras" element={<RegistryPage />} />
           <Route path="/cameras/new" element={<NewCameraPage />} />
           <Route path="/cameras/import" element={<BulkImportPage />} />
