@@ -48,6 +48,28 @@ public sealed record FederatedCameraRow
     public string Health { get; init; } = "";
     public DateTimeOffset? LastSeen { get; init; }
     public string[]? StreamReferences { get; init; }
+
+    /// <summary>When the current status began. Independent of history retention.</summary>
+    public DateTimeOffset? StatusChangedAt { get; init; }
+}
+
+/// <summary>
+/// One recorded change in a camera's status.
+/// </summary>
+/// <remarks>
+/// Previous values are null on the camera's first observation — that is "no earlier status",
+/// not "the earlier status is unknown". A row exists only where something actually changed, so
+/// the status at any instant is the newest row at or before it.
+/// </remarks>
+public sealed record CameraStatusChangeRow
+{
+    public DateTimeOffset ChangedAt { get; init; }
+    public string? PreviousHealth { get; init; }
+    public string Health { get; init; } = "";
+    public bool? PreviousEnabled { get; init; }
+    public bool IsEnabled { get; init; }
+    public bool? PreviousRecording { get; init; }
+    public bool? IsRecording { get; init; }
 }
 
 /// <summary>Estate counts, already restricted to what the caller may see.</summary>
@@ -130,10 +152,68 @@ public sealed class FederationQueryRepository
         var rows = await c.QueryAsync<FederatedCameraRow>(new CommandDefinition("""
             SELECT native_camera_id, camera_id, name, vendor_model, firmware,
                    is_enabled, is_recording, health::text AS health, last_seen,
-                   stream_references
+                   stream_references, status_changed_at
             FROM federation.federated_camera
             WHERE target_id = @targetId ORDER BY native_camera_id;
             """, new { targetId }, cancellationToken: ct));
+
+        return [.. rows];
+    }
+
+    /// <summary>
+    /// One camera's status transitions, newest first, within a window.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Bounded by <paramref name="from"/> so a query cannot walk the whole retained history of a
+    /// flapping camera. The bound is on the partition key, so PostgreSQL prunes to the days
+    /// actually asked for rather than scanning every partition.
+    /// </para>
+    /// <para>
+    /// The first row returned is the last transition <b>at or before</b> the window opens, not
+    /// the first one inside it. Without it a timeline starting mid-window has no idea what the
+    /// camera's status was when the window began — the transition that established it may be
+    /// weeks old, and a chart would have to guess.
+    /// </para>
+    /// </remarks>
+    public async Task<IReadOnlyList<CameraStatusChangeRow>> CameraStatusHistoryAsync(
+        Guid targetId, string nativeCameraId, DateTimeOffset from, DateTimeOffset to, int limit,
+        CancellationToken ct)
+    {
+        await using var c = await _dataSource.OpenConnectionAsync(ct);
+
+        var rows = await c.QueryAsync<CameraStatusChangeRow>(new CommandDefinition("""
+            WITH windowed AS (
+                SELECT changed_at,
+                       previous_health::text    AS previous_health,
+                       health::text             AS health,
+                       previous_enabled, is_enabled,
+                       previous_recording, is_recording
+                FROM federation.camera_status_history
+                WHERE target_id = @targetId
+                  AND native_camera_id = @nativeCameraId
+                  AND changed_at >= @from AND changed_at < @to
+                ORDER BY changed_at DESC
+                LIMIT @limit
+            ),
+            opening AS (
+                SELECT changed_at,
+                       previous_health::text    AS previous_health,
+                       health::text             AS health,
+                       previous_enabled, is_enabled,
+                       previous_recording, is_recording
+                FROM federation.camera_status_history
+                WHERE target_id = @targetId
+                  AND native_camera_id = @nativeCameraId
+                  AND changed_at < @from
+                ORDER BY changed_at DESC
+                LIMIT 1
+            )
+            SELECT * FROM windowed
+            UNION ALL
+            SELECT * FROM opening
+            ORDER BY changed_at DESC;
+            """, new { targetId, nativeCameraId, from, to, limit }, cancellationToken: ct));
 
         return [.. rows];
     }

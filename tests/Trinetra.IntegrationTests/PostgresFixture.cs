@@ -1,3 +1,4 @@
+using System.Globalization;
 using Microsoft.Extensions.Logging.Abstractions;
 using Npgsql;
 using Testcontainers.PostgreSql;
@@ -50,10 +51,12 @@ public sealed class PostgresFixture : IAsyncLifetime
 
     /// <summary>Every db/versions/*.sql, in the order a deployment applies them.</summary>
     /// <remarks>
-    /// Ordinal sort, so v1 precedes v1.1. Located by walking up from the test binary because the
-    /// working directory differs between `dotnet test` and an IDE runner.
+    /// Sorted by parsed version, not by string: an ordinal sort of the file names puts
+    /// <c>v1.1.sql</c> before <c>v1.sql</c> ('1' &lt; 's'), which would apply an ALTER before the
+    /// CREATE it depends on. Located by walking up from the test binary because the working
+    /// directory differs between `dotnet test` and an IDE runner.
     /// </remarks>
-    private static IReadOnlyList<string> VersionFiles()
+    private static string[] VersionFiles()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
 
@@ -64,17 +67,52 @@ public sealed class PostgresFixture : IAsyncLifetime
             if (Directory.Exists(versions))
             {
                 var files = Directory.GetFiles(versions, "*.sql");
-                Array.Sort(files, StringComparer.Ordinal);
 
-                return files.Length > 0
-                    ? files
-                    : throw new InvalidOperationException($"No .sql files in {versions}.");
+                if (files.Length == 0)
+                {
+                    throw new InvalidOperationException($"No .sql files in {versions}.");
+                }
+
+                Array.Sort(files, static (a, b) =>
+                    ParseVersion(a).CompareTo(ParseVersion(b)));
+
+                return files;
             }
 
             dir = dir.Parent;
         }
 
         throw new InvalidOperationException("db/versions was not found.");
+    }
+
+    /// <summary>
+    /// "v1.sql" -&gt; (1, 0), "v1.2.sql" -&gt; (1, 2). A name that does not parse sorts last, so a
+    /// stray file is obvious rather than silently reordering the real versions.
+    /// </summary>
+    private static (int Major, int Minor) ParseVersion(string path)
+    {
+        var name = Path.GetFileNameWithoutExtension(path);
+
+        if (name.Length < 2 || name[0] is not ('v' or 'V'))
+        {
+            return (int.MaxValue, int.MaxValue);
+        }
+
+        var parts = name[1..].Split('.');
+
+        if (!int.TryParse(parts[0], NumberStyles.None, CultureInfo.InvariantCulture, out var major))
+        {
+            return (int.MaxValue, int.MaxValue);
+        }
+
+        var minor = 0;
+        if (parts.Length > 1
+            && !int.TryParse(parts[1], NumberStyles.None, CultureInfo.InvariantCulture, out minor))
+        {
+            return (int.MaxValue, int.MaxValue);
+        }
+
+        return (major, minor);
     }
 
     public async Task DisposeAsync()

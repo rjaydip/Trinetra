@@ -1,0 +1,22 @@
+# Copy to cameras.yaml (gitignored) and fill in real RTSP URLs — dev/offline use only.
+#
+# CAMERA_SOURCE=trinetra (the default) discovers cameras from the Trinetra Federation.Api
+# instead (GET /api/v1/vms/{id}/cameras — see camera_source.py). This file only matters with
+# CAMERA_SOURCE=static: testing the pipeline without hitting the network, or against a camera
+# the registry doesn't know about yet.
+cameras:
+  - camera_id: CAM-001
+    name: "Main Gate"
+    rtsp_url: "rtsp://user:pass@192.168.1.50:554/stream1"
+    processing_fps: 2
+    enabled_models: ["vehicle", "plate", "ocr"]
+
+  - camera_id: CAM-002
+    name: "Exit Lane"
+    # Credentials can also be given separately instead of embedded above — percent-encoding
+    # is handled for you. Falls back to RTSP_USERNAME / RTSP_PASSWORD from the environment.
+    rtsp_url: "rtsp://192.168.1.51:554/stream1"
+    rtsp_username: "admin"
+    rtsp_password: "p@ss:word/1"
+    # processing_fps omitted -> falls back to PROCESSING_FPS
+    enabled_models: ["vehicle", "plate", "ocr"]

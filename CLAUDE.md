@@ -4,7 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository State
 
-**Model 3 (VMS Federation) is under active implementation. Models 1 and 2 are still specs only.**
+**Model 3 (VMS Federation) is under active implementation. Model 1 is still spec only. Model
+2's capture-and-inference worker exists standalone (`ai-worker/`, Python — not yet wired into
+the `.NET` event/metadata layer); the rest of Model 2 is still spec only.**
 
 Stack: **.NET 10 / ASP.NET Core minimal API**, PostgreSQL + PostGIS, Kafka, OpenSearch,
 deployed on **on-prem bare metal** with systemd — no Kubernetes. Scale target is **80,000
@@ -44,6 +46,7 @@ are pinned centrally in `Directory.Packages.props`; floating versions are reject
 | `Federation.Api` | Read/serve side, department-scoped and audited |
 | `Federation.Worker` | Connector worker host (systemd `Type=notify`) |
 | `tools/Trinetra.VmsSimulator` | Synthetic VMS estate for scale validation — a deliverable, not scaffolding |
+| `ai-worker/` | Model 2's capture + AI inference worker (Python, standalone) — see `ai-worker/README.md`. Discovers cameras via `Federation.Api` (`GET /api/v1/vms/{id}/cameras`); its ingest endpoint on the `.NET` side doesn't exist yet |
 
 Database schema is raw SQL in `db/versions/`, one file per version. `v1.sql` builds a complete
 database — tables, functions, views and the reference data authorisation resolves against;

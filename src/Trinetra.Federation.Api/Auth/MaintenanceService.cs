@@ -111,6 +111,9 @@ public sealed partial class MaintenanceService : BackgroundService
             connection, "drop_event_partitions_before", cutoffs.Events, cancellationToken);
         var health = await _maintenance.DropPartitionsAsync(
             connection, "drop_health_partitions_before", cutoffs.Health, cancellationToken);
+        var cameraStatus = await _maintenance.DropPartitionsAsync(
+            connection, "drop_camera_status_partitions_before", cutoffs.CameraStatus,
+            cancellationToken);
         var auditParts = await _maintenance.DropPartitionsAsync(
             connection, "drop_audit_partitions_before", cutoffs.Audit, cancellationToken);
 
@@ -121,14 +124,16 @@ public sealed partial class MaintenanceService : BackgroundService
             connection, "purge_deadletter_before", cutoffs.DeadLetter, cancellationToken);
 
         var summary =
-            $"events={events.Count} health={health.Count} audit={auditParts.Count} "
+            $"events={events.Count} health={health.Count} "
+            + $"cameraStatus={cameraStatus.Count} audit={auditParts.Count} "
             + $"connectionTests={tests} deadLetter={deadLetter}";
 
-        LogRetention(_logger, events.Count, health.Count, auditParts.Count, tests, deadLetter);
+        LogRetention(_logger, events.Count, health.Count, cameraStatus.Count,
+            auditParts.Count, tests, deadLetter);
 
         // Named individually at Information: after an incident, "which day did we lose?" must be
         // answerable from the logs rather than inferred from what is missing.
-        foreach (var partition in events.Concat(health).Concat(auditParts))
+        foreach (var partition in events.Concat(health).Concat(cameraStatus).Concat(auditParts))
         {
             LogDropped(_logger, partition);
         }
@@ -149,6 +154,7 @@ public sealed partial class MaintenanceService : BackgroundService
             {
                 eventPartitions = events,
                 healthPartitions = health,
+                cameraStatusPartitions = cameraStatus,
                 auditPartitions = auditParts,
                 connectionTestsPurged = tests,
                 deadLetterPurged = deadLetter,
@@ -166,12 +172,13 @@ public sealed partial class MaintenanceService : BackgroundService
     private static partial void LogSwept(ILogger logger, int count);
 
     [LoggerMessage(Level = LogLevel.Information,
-        Message = "Retention pass complete. Dropped {EventPartitions} event and {HealthPartitions} "
-                + "health partition(s), {AuditPartitions} audit partition(s); purged {Tests} "
-                + "connection test(s) and {DeadLetter} dead-letter row(s).")]
+        Message = "Retention pass complete. Dropped {EventPartitions} event, {HealthPartitions} "
+                + "health and {CameraStatusPartitions} camera-status partition(s), "
+                + "{AuditPartitions} audit partition(s); purged {Tests} connection test(s) and "
+                + "{DeadLetter} dead-letter row(s).")]
     private static partial void LogRetention(
-        ILogger logger, int eventPartitions, int healthPartitions, int auditPartitions,
-        int tests, int deadLetter);
+        ILogger logger, int eventPartitions, int healthPartitions, int cameraStatusPartitions,
+        int auditPartitions, int tests, int deadLetter);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Dropped partition {Partition}")]
     private static partial void LogDropped(ILogger logger, string partition);

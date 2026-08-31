@@ -47,25 +47,35 @@ public sealed partial class PostgresCredentialResolver : ICredentialResolver
         _logger = logger;
     }
 
+    public Task<Credential> ResolveAsync(
+        string credentialReference, CancellationToken cancellationToken) =>
+        ResolveAsync(
+            credentialReference,
+            new CredentialAccessContext(_accessorId, TargetId: null, AuditFailureIsFatal: false),
+            cancellationToken);
+
     public async Task<Credential> ResolveAsync(
-        string credentialReference, CancellationToken cancellationToken)
+        string credentialReference, CredentialAccessContext context, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(credentialReference);
+        ArgumentNullException.ThrowIfNull(context);
 
         try
         {
             var credential = await LoadAsync(credentialReference, cancellationToken)
                 .ConfigureAwait(false);
 
-            await AuditAsync(credentialReference, succeeded: true, reason: null, cancellationToken)
+            await AuditAsync(credentialReference, context, succeeded: true, reason: null, cancellationToken)
                 .ConfigureAwait(false);
 
             return credential;
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex) when (ex is not OperationCanceledException and not CredentialAuditException)
         {
-            // Audited before rethrowing, so a failure to resolve is never invisible.
-            await AuditAsync(credentialReference, succeeded: false, ex.Message, CancellationToken.None)
+            // Audited before rethrowing, so a failure to resolve is never invisible. A
+            // CredentialAuditException is the audit write itself failing — it is already loud and
+            // must not be turned into a second (also failing) "failed" row.
+            await AuditAsync(credentialReference, context, succeeded: false, ex.Message, CancellationToken.None)
                 .ConfigureAwait(false);
             throw;
         }
@@ -89,7 +99,7 @@ public sealed partial class PostgresCredentialResolver : ICredentialResolver
 
         if (row is null)
         {
-            throw new InvalidOperationException(
+            throw new CredentialNotProvisionedException(
                 $"No secret is stored for credential reference '{credentialReference}'. "
                 + "The target is configured but its credential was never provisioned.");
         }
@@ -150,12 +160,13 @@ public sealed partial class PostgresCredentialResolver : ICredentialResolver
     }
 
     private async Task AuditAsync(
-        string credentialReference, bool succeeded, string? reason, CancellationToken cancellationToken)
+        string credentialReference, CredentialAccessContext context,
+        bool succeeded, string? reason, CancellationToken cancellationToken)
     {
         const string sql = """
             INSERT INTO federation.credential_access_log
-                (credential_reference, accessed_by, succeeded, failure_reason)
-            VALUES (@Reference, @AccessedBy, @Succeeded, @Reason);
+                (credential_reference, accessed_by, target_id, succeeded, failure_reason)
+            VALUES (@Reference, @AccessedBy, @TargetId, @Succeeded, @Reason);
             """;
 
         try
@@ -166,7 +177,8 @@ public sealed partial class PostgresCredentialResolver : ICredentialResolver
             await connection.ExecuteAsync(new CommandDefinition(sql, new
             {
                 Reference = credentialReference,
-                AccessedBy = _accessorId,
+                AccessedBy = context.AccessedBy,
+                TargetId = context.TargetId,
                 Succeeded = succeeded,
                 // Truncated: an exception message can be long, and the audit row records that a
                 // failure happened, not a full diagnostic.
@@ -175,9 +187,18 @@ public sealed partial class PostgresCredentialResolver : ICredentialResolver
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            // A failed audit write must not block a worker from connecting to cameras, but it
-            // must be loud: an audit gap is a compliance finding.
+            // Always loud: an audit gap is a compliance finding.
             LogAuditWriteFailed(_logger, credentialReference, ex);
+
+            // On a disclosure path the request must fail rather than return the secret without a
+            // log row. On the in-process path a failed audit must NOT block a worker connecting
+            // to cameras, so it is logged and swallowed as before.
+            if (context.AuditFailureIsFatal)
+            {
+                throw new CredentialAuditException(
+                    $"Resolved credential '{credentialReference}' but could not write its access "
+                    + "audit row; the secret was withheld.", ex);
+            }
         }
     }
 

@@ -51,3 +51,24 @@ config/trinetra.settings.json
 # Logs and process files from local runs.
 *.log
 *.pid
+
+# ---------------------------------------------------------------------------
+# ai-worker (Python)
+# ---------------------------------------------------------------------------
+ai-worker/.venv/
+ai-worker/__pycache__/
+ai-worker/**/__pycache__/
+ai-worker/*.egg-info/
+ai-worker/.pytest_cache/
+ai-worker/.mypy_cache/
+ai-worker/.ruff_cache/
+# Downloaded pretrained weights: large binaries, fetched at setup time, not source.
+ai-worker/models/weights/
+ai-worker/*.pt
+ai-worker/cameras.yaml
+# Runtime-generated evidence snapshots.
+ai-worker/evidence/
+
+# Local onboarding / operational scripts — hold admin credentials or
+# environment-specific values inline.
+scripts/

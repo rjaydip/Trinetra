@@ -73,15 +73,27 @@ information on GIS → generate alert.**
 
 ## Running it
 
-Model 3 is implemented. Models 1 and 2 are specifications.
+Model 3 is implemented. Model 1 is a specification. Model 2's capture-and-inference worker
+(`ai-worker/`, Python — see `ai-worker/README.md`) exists standalone, discovering cameras from
+Model 3's registry and running real vehicle/plate/OCR inference; its integration into the
+platform's event/metadata layer (ingest endpoint, watchlist, alerts) is still specification.
+
+The database provider is deployment-specific and may change over time. The current development
+environment uses Supabase-hosted PostgreSQL. Supabase is not a permanent architectural
+requirement; configure the selected PostgreSQL provider through
+`ConnectionStrings:Federation` (or the `ConnectionStrings__Federation` environment variable).
 
 ``` bash
-docker compose up -d                                   # PostgreSQL 17
-psql -f db/versions/v1.sql                             # create the schema
-                                                       # then edit config/trinetra.settings.json
+# Optional local PostgreSQL fallback; skip this when using Supabase or another provider.
+docker compose up -d
+psql -h your-database-host -U your-database-user -d trinetra -f db/versions/v1.sql
+# Then configure config/trinetra.settings.json or ConnectionStrings__Federation.
 dotnet run --project src/Trinetra.Federation.Api       # HTTP API
 dotnet run --project src/Trinetra.Federation.Worker    # connector workers
 ```
+
+In the Development environment, the interactive Scalar API Reference is available at
+`/scalar`; the generated OpenAPI document is at `/openapi/v1.json`.
 
 Nothing in the running system creates, changes or checks the schema — that is entirely yours.
 `db/versions/v1.sql` builds a complete database; a later version adds its own file. To change the
@@ -119,6 +131,9 @@ deploy/systemd/                        unit files and environment templates
 src/                                   Core, Adapters, Runtime, Bus, Storage, Api, Worker
 tools/                                 admin CLI, VMS simulator
 tests/                                 unit, integration, load
+
+ai-worker/                             Model 2 capture + AI inference worker (Python) — see
+                                        ai-worker/README.md
 ```
 
 ## Design Principles

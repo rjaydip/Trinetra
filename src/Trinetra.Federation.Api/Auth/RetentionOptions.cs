@@ -45,6 +45,17 @@ public sealed class RetentionOptions
     /// </remarks>
     public int HealthDays { get; set; } = 30;
 
+    /// <summary>Days of per-camera status transitions retained.</summary>
+    /// <remarks>
+    /// Longer than connector health, because these are the rows an incident review reads: "the
+    /// camera covering that junction went Unreachable at 02:14" is a question asked weeks after
+    /// the fact, whereas connector latency is only interesting while a target is misbehaving now.
+    /// Affordable at this length precisely because only genuine transitions are stored —
+    /// federated_camera.status_changed_at keeps the current status readable regardless of what
+    /// this drops.
+    /// </remarks>
+    public int CameraStatusDays { get; set; } = 90;
+
     /// <summary>Months of audit history retained.</summary>
     /// <remarks>
     /// Far longer than everything else, and deliberately so. <c>config_audit</c> and
@@ -84,6 +95,7 @@ public sealed class RetentionOptions
 
         RequireDays(nameof(EventDays), EventDays);
         RequireDays(nameof(HealthDays), HealthDays);
+        RequireDays(nameof(CameraStatusDays), CameraStatusDays);
         RequireDays(nameof(ConnectionTestDays), ConnectionTestDays);
         RequireDays(nameof(DeadLetterDays), DeadLetterDays);
 
@@ -123,6 +135,7 @@ public sealed class RetentionOptions
         return new RetentionCutoffs(
             Events: today.AddDays(-EventDays),
             Health: today.AddDays(-HealthDays),
+            CameraStatus: today.AddDays(-CameraStatusDays),
             Audit: today.AddMonths(-AuditMonths),
             ConnectionTests: utcNow.AddDays(-ConnectionTestDays),
             DeadLetter: utcNow.AddDays(-DeadLetterDays));
@@ -133,6 +146,7 @@ public sealed class RetentionOptions
 public readonly record struct RetentionCutoffs(
     DateOnly Events,
     DateOnly Health,
+    DateOnly CameraStatus,
     DateOnly Audit,
     DateTimeOffset ConnectionTests,
     DateTimeOffset DeadLetter);

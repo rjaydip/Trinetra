@@ -47,4 +47,41 @@ public sealed class Credential
 public interface ICredentialResolver
 {
     Task<Credential> ResolveAsync(string credentialReference, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Resolves a credential on behalf of a named caller, recording <paramref name="context"/> on
+    /// the audit row.
+    /// </summary>
+    /// <remarks>
+    /// The parameterless overload attributes the access to the resolving process itself, which is
+    /// right for the in-process connector worker. This overload exists for the one HTTP path that
+    /// hands secret material back to a caller (the AI worker's
+    /// <c>GET /vms/{id}/credential/resolve</c>): the audit row must name <b>that</b> caller and the
+    /// target, and — because the response body carries the plaintext — an audit-write failure has
+    /// to fail the resolution rather than be swallowed. See <see cref="CredentialAccessContext"/>.
+    /// </remarks>
+    Task<Credential> ResolveAsync(
+        string credentialReference, CredentialAccessContext context, CancellationToken cancellationToken);
 }
+
+/// <summary>
+/// Who is resolving a credential, and how strict the audit is, for one call to
+/// <see cref="ICredentialResolver.ResolveAsync(string, CredentialAccessContext, CancellationToken)"/>.
+/// </summary>
+/// <param name="AccessedBy">
+/// Identity written to <c>credential_access_log.accessed_by</c> — the caller's actor string, not
+/// the resolving process.
+/// </param>
+/// <param name="TargetId">
+/// The connector target the credential belongs to, written to <c>credential_access_log.target_id</c>
+/// so a resolution can be traced back to a device without joining on the reference string.
+/// </param>
+/// <param name="AuditFailureIsFatal">
+/// When <see langword="true"/>, a failure to write the audit row throws
+/// <see cref="CredentialAuditException"/> instead of being logged and ignored. Set on paths that
+/// disclose the secret to a caller, where an unaudited disclosure is not acceptable; left
+/// <see langword="false"/> for the in-process path, where a failed audit must not stop a worker
+/// connecting to cameras.
+/// </param>
+public sealed record CredentialAccessContext(
+    string AccessedBy, Guid? TargetId, bool AuditFailureIsFatal = false);

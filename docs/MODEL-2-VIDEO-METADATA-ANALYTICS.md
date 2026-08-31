@@ -7,6 +7,48 @@ sources and generate searchable metadata from accessible live or
 recorded video without requiring replacement of existing departmental
 VMS infrastructure.
 
+## Input Boundary with Model 3
+
+Model 2 consumes video sources made available by Model 3. Model 3 discovers the VMS cameras,
+stores RTSP/HTTP stream references, reports camera/VMS status, and normalizes VMS-side events.
+Model 2 owns the media session and analytics processing:
+
+``` text
+VMS / Camera
+    |
+    | stream reference and access contract from Model 3
+    v
+Model 2 capture service
+    |
+    +--> FFmpeg decode
+    +--> frame sampling
+    +--> GPU inference
+    +--> ANPR / vehicle / person analytics
+    v
+metadata, observations and analytics events
+    |
+    +--> PostgreSQL / search index
+    +--> Kafka metadata topics
+    +--> alerts / correlation / GIS
+```
+
+Model 2 does not need to register the camera again. It uses the stable registry `camera_id` when
+available and retains the Model 3 `(target_id, native_camera_id)` mapping for source traceability.
+If a stream is unavailable, Model 2 reports a media-source failure; it does not rewrite the VMS
+inventory or registry record.
+
+The Model 3 discovery and stream-reference side is implemented. On the Model 2 side, the
+capture-and-inference worker itself now exists as a standalone component (`ai-worker/` at the
+repository root — see `ai-worker/README.md`): it discovers cameras via
+`GET /api/v1/vms/{id}/cameras` per this document's own boundary (never registering a camera
+itself, using `(target_id, native_camera_id)` for source traceability exactly as described
+above), decodes and samples frames, and runs real vehicle/plate/OCR inference. The `.NET` side
+of the sink now also exists: `POST /api/v1/detections` (idempotent on the worker's own event id,
+resolves the camera to its organization/site scope, matches the plate against an active
+watchlist entry in the same transaction) and `POST /api/v1/worker-health/heartbeat`. Not yet
+built: the Kafka metadata producer/consumer that would put detections on the event bus, and
+real-time alert push — `GET /api/v1/watchlist/alerts` is poll-only today.
+
 ## Processing Pipeline
 
 ``` text

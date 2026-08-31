@@ -13,9 +13,23 @@ namespace Trinetra.Federation.Api.Endpoints;
 /// <summary>Login and self-service password rotation — the caller's own credentials only.</summary>
 public static class AuthEndpoints
 {
-    public static void MapAuthEndpoints(this IEndpointRouteBuilder app)
+    public static void MapAuthEndpoints(this IEndpointRouteBuilder app, bool enableDevPasswordFlow)
     {
         var group = app.MapGroup("/api/v1/auth").WithTags(ApiTags.Authentication);
+
+        if (enableDevPasswordFlow)
+        {
+            // OAuth2 "password" grant, development only. Its sole purpose is to let Scalar's
+            // Authorize dialog take a username and password, fetch a token itself, and apply it
+            // to every request — no copy-paste. Not mapped outside Development; production and
+            // machine callers use /login (JSON) or an API key. Kept out of the OpenAPI document
+            // because it is UI plumbing, not part of the API contract.
+            group.MapPost("/token", TokenAsync)
+                 .AllowAnonymous()
+                 .RequireRateLimiting("login")
+                 .DisableAntiforgery()
+                 .ExcludeFromDescription();
+        }
 
         group.MapPost("/login", LoginAsync)
              .AllowAnonymous()
@@ -55,24 +69,81 @@ public static class AuthEndpoints
         JwtTokenService tokens,
         CancellationToken ct)
     {
-        var user = await users.FindForLoginAsync(request.Username, ct);
+        var auth = await TryAuthenticateAsync(
+            request.Username, request.Password, users, db, tokens, ct);
 
-        // One uniform failure for unknown user, wrong password, inactive account and lockout.
-        // Distinguishing them tells an attacker which usernames are real.
+        if (auth is not { } result)
+        {
+            return TypedResults.Problem(
+                title: "Authentication failed",
+                detail: "The username or password is incorrect, or the account is unavailable.",
+                statusCode: StatusCodes.Status401Unauthorized);
+        }
+
+        return TypedResults.Ok(
+            new LoginResponse(result.Token, result.ExpiresAt, result.MustChangePassword));
+    }
+
+    /// <summary>
+    /// OAuth2 "password" grant — development only, and deliberately absent from the OpenAPI
+    /// document. Scalar's Authorize dialog posts a form-encoded username and password here and
+    /// applies the returned token to every request. Runs the identical credential check as
+    /// <see cref="LoginAsync"/>; the only differences are the wire format and the error shape.
+    /// </summary>
+    private static async Task<Results<Ok<OAuthTokenResponse>, ProblemHttpResult>> TokenAsync(
+        [FromForm] string username,
+        [FromForm] string password,
+        UserRepository users,
+        NpgsqlDataSource db,
+        JwtTokenService tokens,
+        CancellationToken ct)
+    {
+        var auth = await TryAuthenticateAsync(username, password, users, db, tokens, ct);
+
+        if (auth is not { } result)
+        {
+            // RFC 6749 error code, so Scalar surfaces a real message instead of a blank failure.
+            return TypedResults.Problem(
+                title: "invalid_grant",
+                detail: "The username or password is incorrect, or the account is unavailable.",
+                statusCode: StatusCodes.Status400BadRequest);
+        }
+
+        var expiresIn = (int)Math.Max(
+            0, (result.ExpiresAt - DateTimeOffset.UtcNow).TotalSeconds);
+
+        return TypedResults.Ok(new OAuthTokenResponse(result.Token, "Bearer", expiresIn));
+    }
+
+    private readonly record struct AuthResult(
+        string Token, DateTimeOffset ExpiresAt, bool MustChangePassword);
+
+    /// <summary>
+    /// The shared credential path for both <see cref="LoginAsync"/> and <see cref="TokenAsync"/>.
+    /// Returns <see langword="null"/> for unknown user, wrong password, inactive account and
+    /// lockout alike — the callers must not distinguish them, or they leak which usernames exist.
+    /// </summary>
+    private static async Task<AuthResult?> TryAuthenticateAsync(
+        string username,
+        string password,
+        UserRepository users,
+        NpgsqlDataSource db,
+        JwtTokenService tokens,
+        CancellationToken ct)
+    {
+        var user = await users.FindForLoginAsync(username, ct);
+
         if (user is null
             || user.Status != "ACTIVE"
             || (user.LockedUntil is { } locked && locked > DateTimeOffset.UtcNow)
-            || !PasswordHasher.Verify(request.Password, user.Password))
+            || !PasswordHasher.Verify(password, user.Password))
         {
             if (user is not null)
             {
                 await users.RecordFailedLoginAsync(user.Id, ct);
             }
 
-            return TypedResults.Problem(
-                title: "Authentication failed",
-                detail: "The username or password is incorrect, or the account is unavailable.",
-                statusCode: StatusCodes.Status401Unauthorized);
+            return null;
         }
 
         // The cost can be raised over time; an old hash verifies at its own cost and is upgraded
@@ -81,8 +152,7 @@ public static class AuthEndpoints
         {
             await using var rehash = await UnitOfWork.BeginAsync(db, ct);
             await users.SetPasswordAsync(
-                user.Id, PasswordHasher.Hash(request.Password), user.MustChangePassword,
-                rehash, ct);
+                user.Id, PasswordHasher.Hash(password), user.MustChangePassword, rehash, ct);
             await rehash.CommitAsync(ct);
         }
 
@@ -95,7 +165,7 @@ public static class AuthEndpoints
         var (token, expires) = tokens.Issue(
             user.Id, user.Username, permissions, unscoped, unscopedGeo, user.MustChangePassword);
 
-        return TypedResults.Ok(new LoginResponse(token, expires, user.MustChangePassword));
+        return new AuthResult(token, expires, user.MustChangePassword);
     }
 
     private static async Task<Results<Ok<LoginResponse>, ProblemHttpResult>> ChangePasswordAsync(

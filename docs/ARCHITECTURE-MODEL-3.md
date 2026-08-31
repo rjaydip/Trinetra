@@ -277,6 +277,34 @@ location is Model 1's authoritative data, and Model 3 reads it rather than copyi
 100–400M rows/day. Partitions are created ahead of time by a maintenance job and dropped
 wholesale at retention expiry; there is no `DELETE FROM events`.
 
+### Camera status history is transitions, not samples
+
+`camera_status_history` records a row only when a camera's `health`, `is_enabled` or
+`is_recording` actually changes, carrying both the previous and the new value.
+
+The alternative — a row per camera per status poll — is arithmetic rather than opinion:
+
+```text
+   80,000 cameras / 30s poll  =  2,667 rows/s  ≈  230M rows/day
+```
+
+That is the same order as `federation_event`, for data that changes a few thousand times a day.
+Transitions answer every question samples would: the status at any past instant is the newest
+row at or before it, and a timeline draws directly from the from/to pair on each row.
+
+What transitions deliberately cannot answer is *"was this camera being polled at 10:31?"* — that
+belongs to `connector_health`, which records the target's poll cadence, and to
+`federated_camera.last_seen`.
+
+Detection is a **trigger** on `federated_camera`, not application code. The camera upsert arrives
+as one binary `COPY` plus one merge covering a whole target's inventory, so comparing in C# would
+mean reading current state back first — a round trip per poll — and would silently miss any write
+that did not come through that path. The trigger's `WHEN` clause is what makes it affordable:
+every camera is updated every 30 seconds and almost none of those updates enter the function.
+
+`federated_camera.status_changed_at` holds the current status's start instant separately, so
+"Healthy since March" survives history retention dropping the transition that proves it.
+
 ---
 
 ## 8. Correlation
@@ -307,12 +335,23 @@ Two invariants the implementation must hold, both from the specs:
 | Credentials | Never in the registry or events. `credential_reference` resolves against a secret store (Vault; fallback pgcrypto with a KMS-wrapped DEK) |
 | Transport | mTLS between platform services; TLS to VMS where the vendor supports it, explicitly flagged per target where it does not |
 | Authorisation | RBAC, scoped by organization **and** geography as independent dimensions. Enforced in SQL and at the repository layer, not in the API handler alone. See `AUTHORIZATION.md` |
-| Audit | Every credential resolution and configuration change is audit-logged, **in the same transaction as the change itself** — see §11 |
+| Audit | Every configuration change is audit-logged **in the same transaction as the change** (§11). Every credential resolution is logged to `credential_access_log` — accessor, target, outcome — including failures |
 | Isolation | Connector workers run as least-privilege service accounts, network-segmented toward their VMS subnets only |
 
 The `credential_reference` indirection is load-bearing: a connector worker resolves a
 secret at connect time and holds it in memory only. It is never written to the registry,
 never logged, and never enters the event envelope.
+
+The API surface has **one** route that returns secret material:
+`GET /api/v1/vms/{id}/credential/resolve`, added for Model 2's AI worker, which connects
+to camera RTSP streams directly rather than through a Model 3 adapter. It requires the
+`credential.resolve` permission — held only by the `DETECTION_WORKER` machine role — is
+scoped through the target like every other `/vms/{id}` route, and every call writes
+`credential_access_log`. A resolution whose audit row cannot be written returns 503 with
+the secret withheld: there is no path that discloses a credential without a log row. The
+in-process connector worker still resolves through `ICredentialResolver` directly and never
+touches this route. The worker→API hop for this call must be mTLS (or at minimum TLS) like
+every other platform-internal call — it carries a plaintext camera password.
 
 ---
 

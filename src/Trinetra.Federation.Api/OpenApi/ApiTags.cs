@@ -11,7 +11,7 @@ namespace Trinetra.Federation.Api.OpenApi;
 /// so a group cannot be added without saying what it does.
 /// </para>
 /// <para>
-/// Order matters: <see cref="Ordered"/> is the order Swagger UI renders the sections in, and it
+/// Order matters: <see cref="Ordered"/> is the order Scalar renders the sections in, and it
 /// follows the order an operator actually works through them — log in, model the estate, create
 /// the people, connect the systems, read what comes back.
 /// </para>
@@ -23,9 +23,13 @@ internal static class ApiTags
     public const string Geography = "Geography";
     public const string Users = "Users";
     public const string AccessControl = "Access control";
+    public const string ApiKeys = "API keys";
     public const string Vms = "VMS";
     public const string Credentials = "Credentials";
     public const string Events = "Events";
+    public const string Detections = "Detections";
+    public const string Watchlist = "Watchlist";
+    public const string WorkerHealth = "Worker health";
 
     /// <summary>Tag name to group description, in the order the document should present them.</summary>
     public static IReadOnlyList<(string Name, string Description)> Ordered { get; } =
@@ -64,6 +68,13 @@ internal static class ApiTags
             + "pickers from. This is the group that decides what everyone else can do, so every "
             + "write here needs `group.manage` and is audited."),
 
+        (ApiKeys,
+            "Keys for machine-to-machine callers — another department's system, a reporting job, "
+            + "the standalone AI worker. A key acts through one access group, exactly as a user "
+            + "does. The raw value is shown once at creation and only its SHA-256 is stored; "
+            + "revocation takes effect on the key's next request, after which it fails as a "
+            + "uniform 401. Managing keys needs `apikey.manage`, listing them `apikey.read`."),
+
         (Vms,
             "Connector targets — one row per VMS, NVR or camera gateway the platform federates — "
             + "plus everything the workers report back about them: health history, the probed "
@@ -72,12 +83,13 @@ internal static class ApiTags
             + "is polled as a whole, because per-camera polling does not survive 80,000 cameras."),
 
         (Credentials,
-            "Provisioning the credential a connector authenticates to a device with. **Write "
-            + "only.** There is no route on this API that returns secret material, and no "
-            + "response type that has ever carried it — only `/status`, which reports whether a "
-            + "credential exists. Reading a value is reachable only from a worker that is about "
-            + "to connect. Scoped through the target in the path, so a caller can only write a "
-            + "credential for a target they can already reach."),
+            "Provisioning the credential a connector authenticates to a device with, and "
+            + "resolving it. Writing (`PUT /`) and `/status` never return secret material. "
+            + "`GET /resolve` is the **single** route on this API that does: it requires "
+            + "`credential.resolve` — held only by the `DETECTION_WORKER` machine role — exists "
+            + "for the AI worker that connects to camera streams directly, and audits every call. "
+            + "Every route here is scoped through the target in the path, so a caller only "
+            + "touches a credential for a target they can already reach."),
 
         (Events,
             "Queries over the normalized event stream in its hot PostgreSQL window. `from` and "
@@ -85,5 +97,22 @@ internal static class ApiTags
             + "time and takes 100-400M rows a day, so an unbounded query cannot be served. Paging "
             + "is by opaque cursor, never offset. Wide historical and free-text search belongs to "
             + "OpenSearch and is not served here."),
+
+        (Detections,
+            "Model 2's vehicle/plate/OCR detections, submitted by the standalone AI worker "
+            + "(`ai-worker/`, Python) rather than produced inside this API. `POST /detections` is "
+            + "the ingest sink it POSTs to; a freshly-inserted detection is matched against the "
+            + "active watchlist in the same transaction. Machine-to-machine only — the worker "
+            + "authenticates with `X-Api-Key`, not a login token."),
+
+        (Watchlist,
+            "Plate numbers an operator wants flagged, and the alerts raised when a detection "
+            + "matches one. Matching happens once, at ingest — a retried detection POST never "
+            + "raises a second alert for the same match."),
+
+        (WorkerHealth,
+            "Liveness for AI-worker processes (`ai-worker/monitoring/heartbeat.py`). Separate "
+            + "from the connector-worker `worker_node` registry: an AI worker owns a static "
+            + "camera partition rather than a lease, so it has its own lifecycle here."),
     ];
 }

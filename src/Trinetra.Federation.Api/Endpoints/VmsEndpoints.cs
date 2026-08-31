@@ -27,16 +27,18 @@ namespace Trinetra.Federation.Api.Endpoints;
 /// </remarks>
 public static class VmsEndpoints
 {
+    /// <summary>Widest status-history window a single query may span.</summary>
+    private const int MaxStatusHistoryDays = 30;
+
+    private const int DefaultStatusHistoryLimit = 200;
+    private const int MaxStatusHistoryLimit = 1000;
+
     public static void MapVmsEndpoints(this IEndpointRouteBuilder app)
     {
         var group = app.MapGroup("/api/v1/vms").WithTags(ApiTags.Vms).RequireAuthorization();
 
-        group.MapGet("/", async Task<Ok<IReadOnlyList<VmsResponse>>> (
-            ConnectorTargetRepository repo, HttpContext http, CancellationToken ct) =>
-        {
-            var targets = await repo.ListAsync(CallerContextFactory.From(http), ct);
-            return TypedResults.Ok<IReadOnlyList<VmsResponse>>([.. targets.Select(ToResponse)]);
-        }).RequirePermission("vms.read")
+        group.MapGet("/", ListAsync)
+          .RequirePermission("vms.read")
           .WithSummary("List the VMS targets the caller can reach")
           .WithDescription(
               "Every connector target within the caller's organization and geography scope, with "
@@ -44,17 +46,8 @@ public static class VmsEndpoints
               + "scope are absent rather than refused. Credential *references* appear here; "
               + "credential values never do.");
 
-        group.MapGet("/{id:guid}", async Task<Results<Ok<VmsResponse>, NotFound>> (
-            Guid id, ConnectorTargetRepository repo, HttpContext http, CancellationToken ct) =>
-        {
-            var target = await repo.GetAsync(id, CallerContextFactory.From(http), ct);
-
-            // Out-of-scope targets return 404 rather than 403: telling an unauthorised caller
-            // that an id exists is itself a disclosure.
-            return target is null
-                ? TypedResults.NotFound()
-                : TypedResults.Ok(ToResponse(target));
-        }).RequirePermission("vms.read")
+        group.MapGet("/{id:guid}", GetAsync)
+          .RequirePermission("vms.read")
           .WithSummary("Read one VMS target's configuration")
           .WithDescription(
               "The full configuration row: vendor, runtime class, endpoint, TLS verification, "
@@ -62,26 +55,8 @@ public static class VmsEndpoints
               + "A target the caller is not scoped to returns **404, not 403** — telling an "
               + "unauthorized caller that an id exists is itself a disclosure.");
 
-        group.MapPost("/", async Task<Results<Created<CreatedResponse>, ProblemHttpResult>> (
-            [FromBody] ConnectorTargetRequest request, ConnectorTargetRepository repo,
-            NpgsqlDataSource db, HttpContext http, CancellationToken ct) =>
-        {
-            var caller = CallerContextFactory.From(http);
-
-            if (!TryBuild(request, Guid.Empty, out var target, out var problem))
-            {
-                return problem!;
-            }
-
-            await using var work = await UnitOfWork.BeginAsync(db, ct);
-
-            var id = await repo.UpsertAsync(target!, caller, work, ct);
-            await work.AuditAsync(caller, "create", "connector_target", id.ToString(),
-                before: null, after: Redact(request), request.OrganizationUnitId, ct);
-            await work.CommitAsync(ct);
-
-            return TypedResults.Created($"/api/v1/vms/{id}", new CreatedResponse(id));
-        }).RequirePermission("vms.create")
+        group.MapPost("/", RegisterAsync)
+          .RequirePermission("vms.create")
           .WithSummary("Register a VMS, NVR or camera gateway")
           .WithDescription(
               "**Step 1 of onboarding, and the only way cameras enter the system.** Creates the "
@@ -96,32 +71,8 @@ public static class VmsEndpoints
               + "/vms/{id}/state` activates it. An unparseable endpoint or unknown vendor is "
               + "rejected here rather than becoming an unexplained dead site later.");
 
-        group.MapPut("/{id:guid}", async Task<Results<NoContent, NotFound, ProblemHttpResult>> (
-            Guid id, [FromBody] ConnectorTargetRequest request, ConnectorTargetRepository repo,
-            NpgsqlDataSource db, HttpContext http, CancellationToken ct) =>
-        {
-            var caller = CallerContextFactory.From(http);
-            var before = await repo.GetAsync(id, caller, ct);
-
-            if (before is null)
-            {
-                return TypedResults.NotFound();
-            }
-
-            if (!TryBuild(request, id, out var target, out var problem))
-            {
-                return problem!;
-            }
-
-            await using var work = await UnitOfWork.BeginAsync(db, ct);
-
-            await repo.UpsertAsync(target!, caller, work, ct);
-            await work.AuditAsync(caller, "update", "connector_target", id.ToString(),
-                Redact(before), Redact(request), request.OrganizationUnitId, ct);
-            await work.CommitAsync(ct);
-
-            return TypedResults.NoContent();
-        }).RequirePermission("vms.update")
+        group.MapPut("/{id:guid}", ReplaceAsync)
+          .RequirePermission("vms.update")
           .WithSummary("Replace a VMS target's configuration")
           .WithDescription(
               "A full replacement, not a patch: every field is taken from the body, and one left "
@@ -132,33 +83,8 @@ public static class VmsEndpoints
               + "The before and after values are recorded in the audit log, with the credential "
               + "reference kept and its value never present to begin with.");
 
-        group.MapPost("/{id:guid}/state", async Task<Results<NoContent, NotFound, ProblemHttpResult>> (
-            Guid id, [FromBody] TargetStateRequest request, ConnectorTargetRepository repo,
-            NpgsqlDataSource db, HttpContext http, CancellationToken ct) =>
-        {
-            var caller = CallerContextFactory.From(http);
-
-            if (!Enum.TryParse<TargetState>(request.State, ignoreCase: true, out var state))
-            {
-                return TypedResults.Problem(
-                    title: "Unknown state",
-                    detail: $"Valid states: {string.Join(", ", Enum.GetNames<TargetState>())}.",
-                    statusCode: StatusCodes.Status400BadRequest);
-            }
-
-            await using var work = await UnitOfWork.BeginAsync(db, ct);
-
-            if (!await repo.SetStateAsync(id, state, caller, work, ct))
-            {
-                return TypedResults.NotFound();
-            }
-
-            await work.AuditAsync(caller, "update", "connector_target", id.ToString(),
-                before: null, after: new { state = state.ToString() }, organizationUnitId: null, ct);
-            await work.CommitAsync(ct);
-
-            return TypedResults.NoContent();
-        }).RequirePermission("vms.update")
+        group.MapPost("/{id:guid}/state", SetStateAsync)
+          .RequirePermission("vms.update")
           .WithSummary("Start, stop or quarantine polling for a target")
           .WithDescription(
               "**Step 4 of onboarding: this is what puts a target into service.** The workers act "
@@ -168,31 +94,8 @@ public static class VmsEndpoints
               + "taking out of the fleet without deleting it. Send the value as a string; the 400 "
               + "response lists the states this build accepts.");
 
-        group.MapDelete("/{id:guid}", async Task<Results<NoContent, NotFound>> (
-            Guid id, ConnectorTargetRepository repo, NpgsqlDataSource db,
-            HttpContext http, CancellationToken ct) =>
-        {
-            var caller = CallerContextFactory.From(http);
-            var before = await repo.GetAsync(id, caller, ct);
-
-            if (before is null)
-            {
-                return TypedResults.NotFound();
-            }
-
-            await using var work = await UnitOfWork.BeginAsync(db, ct);
-
-            if (!await repo.DeleteAsync(id, caller, work, ct))
-            {
-                return TypedResults.NotFound();
-            }
-
-            await work.AuditAsync(caller, "delete", "connector_target", id.ToString(),
-                Redact(before), after: null, before.OrganizationUnitId, ct);
-            await work.CommitAsync(ct);
-
-            return TypedResults.NoContent();
-        }).RequirePermission("vms.update")
+        group.MapDelete("/{id:guid}", RemoveAsync)
+          .RequirePermission("vms.update")
           .WithSummary("Remove a VMS target")
           .WithDescription(
               "A hard delete that cascades: the discovered camera inventory, capability matrix, "
@@ -204,28 +107,8 @@ public static class VmsEndpoints
 
         // ---- Monitoring ----------------------------------------------------
 
-        group.MapGet("/{id:guid}/health",
-            async Task<Results<Ok<IReadOnlyList<ConnectorHealthResponse>>, NotFound>> (
-            Guid id, int? limit, int? days, ConnectorTargetRepository repo, FederationQueryRepository queries,
-            HttpContext http, CancellationToken ct) =>
-        {
-            var caller = CallerContextFactory.From(http);
-
-            // Reached through the repository so the scope check is the same one the list uses.
-            if (await repo.GetAsync(id, caller, ct) is null)
-            {
-                return TypedResults.NotFound();
-            }
-
-            var rows = await queries.HealthAsync(id, limit ?? 50, days ?? 7, ct);
-
-            return TypedResults.Ok<IReadOnlyList<ConnectorHealthResponse>>(
-            [
-                .. rows.Select(r => new ConnectorHealthResponse(
-                    r.CheckedAt, r.Status, r.LatencyMs, r.CameraCount, r.ConsecutiveFailures,
-                    r.CircuitOpen, r.LastError, r.EventsSinceCheck, r.CursorLagSeconds)),
-            ]);
-        }).RequirePermission("vms.read")
+        group.MapGet("/{id:guid}/health", HealthAsync)
+          .RequirePermission("vms.read")
           .WithSummary("Read a target's connector health history")
           .WithDescription(
               "What the workers have observed about this target, newest first: poll latency, "
@@ -237,38 +120,8 @@ public static class VmsEndpoints
               + "Defaults to the last 50 checks within 7 days; `limit` and `days` narrow or widen "
               + "that.");
 
-        group.MapGet("/{id:guid}/capabilities",
-            async Task<Results<Ok<CapabilityResponse>, ProblemHttpResult>> (
-            Guid id, ConnectorTargetRepository repo, FederationQueryRepository queries,
-            HttpContext http, CancellationToken ct) =>
-        {
-            var caller = CallerContextFactory.From(http);
-
-            if (await repo.GetAsync(id, caller, ct) is null)
-            {
-                return TypedResults.Problem(
-                    title: "Not found", statusCode: StatusCodes.Status404NotFound);
-            }
-
-            // Served from the stored matrix, never by probing the device. At 80k cameras,
-            // letting a page render trigger probes turns one dashboard load into thousands of
-            // vendor round trips.
-            var row = await queries.CapabilitiesAsync(id, ct);
-
-            if (row is null)
-            {
-                return TypedResults.Problem(
-                    title: "Not probed yet",
-                    detail: "This target has not been contacted by a worker. Capabilities appear "
-                          + "once it connects for the first time.",
-                    statusCode: StatusCodes.Status404NotFound);
-            }
-
-            return TypedResults.Ok(new CapabilityResponse(
-                row.Supported, row.AdapterVersion, row.ProbedAt,
-                JsonSerializer.Deserialize<Dictionary<string, string>>(row.NotesJson ?? "{}")
-                    ?? []));
-        }).RequirePermission("vms.read")
+        group.MapGet("/{id:guid}/capabilities", CapabilitiesAsync)
+          .RequirePermission("vms.read")
           .WithSummary("Read what this target's adapter can actually do")
           .WithDescription(
               "The capability matrix probed when a worker last connected, plus the adapter "
@@ -281,28 +134,8 @@ public static class VmsEndpoints
               + "404 with 'Not probed yet' means the target exists but no worker has reached it "
               + "— check its state and its connection test before reading anything into it.");
 
-        group.MapGet("/{id:guid}/cameras",
-            async Task<Results<Ok<IReadOnlyList<FederatedCameraResponse>>, NotFound>> (
-            Guid id, ConnectorTargetRepository repo, FederationQueryRepository queries,
-            HttpContext http, CancellationToken ct) =>
-        {
-            var caller = CallerContextFactory.From(http);
-
-            if (await repo.GetAsync(id, caller, ct) is null)
-            {
-                return TypedResults.NotFound();
-            }
-
-            var rows = await queries.CamerasAsync(id, ct);
-
-            return TypedResults.Ok<IReadOnlyList<FederatedCameraResponse>>(
-            [
-                .. rows.Select(r => new FederatedCameraResponse(
-                    r.NativeCameraId, r.CameraId, r.Name, r.VendorModel, r.Firmware,
-                    r.IsEnabled, r.IsRecording, r.Health, r.LastSeen,
-                    r.StreamReferences ?? [])),
-            ]);
-        }).RequirePermission("vms.read")
+        group.MapGet("/{id:guid}/cameras", CamerasAsync)
+          .RequirePermission("vms.read")
           .WithSummary("List the cameras discovered behind this target")
           .WithDescription(
               "**The camera inventory, and it is read-only.** Cameras are not onboarded through "
@@ -315,20 +148,29 @@ public static class VmsEndpoints
               + "its stream **references**. Model 3 never touches video: a reference is an address "
               + "to hand to a player or to Model 2, not a stream.");
 
+        group.MapGet("/{id:guid}/cameras/{nativeCameraId}/status-history", CameraStatusHistoryAsync)
+          .RequirePermission("vms.read")
+          .WithSummary("Read one camera's status timeline")
+          .WithDescription(
+              "How this camera's health, enabled and recording flags have changed over time — "
+              + "newest first.\n\n"
+              + "**Transitions, not samples.** A row exists only where something actually "
+              + "changed, so a camera healthy for a month returns one row rather than a month of "
+              + "identical readings. Recording every poll would be 230M rows/day at 80,000 "
+              + "cameras. The status at any instant is the newest row at or before it, and each "
+              + "row carries the previous value as well as the new one so a timeline can be drawn "
+              + "without a second lookup.\n\n"
+              + "The last element may pre-date `from`: it is the transition that established the "
+              + "status the window opened with. Null previous values mean this is the camera's "
+              + "first observation, not that the earlier value is unknown.\n\n"
+              + "Defaults to the last 30 days; `from`, `to` and `limit` narrow it. This does not "
+              + "answer *whether the camera was being polled* at a given moment — that is "
+              + "`/vms/{id}/health` for the target, and `lastSeen` on the camera.");
+
         // ---- Fleet overview -------------------------------------------------
 
-        app.MapGet("/api/v1/overview", async Task<Ok<OverviewResponse>> (
-            FederationQueryRepository queries, HttpContext http, CancellationToken ct) =>
-        {
-            var caller = CallerContextFactory.From(http);
-            caller.Require("vms.read");
-
-            var row = await queries.OverviewAsync(caller, ct);
-
-            return TypedResults.Ok(new OverviewResponse(
-                row.Targets, row.ActiveTargets, row.QuarantinedTargets,
-                row.Cameras, row.UnreachableCameras));
-        }).RequireAuthorization().WithTags(ApiTags.Vms).RequirePermission("vms.read")
+        app.MapGet("/api/v1/overview", OverviewAsync)
+          .RequireAuthorization().WithTags(ApiTags.Vms).RequirePermission("vms.read")
           .WithSummary("Fleet totals for the caller's scope")
           .WithDescription(
               "One row of counters for a landing page: targets, how many are active, how many are "
@@ -438,4 +280,263 @@ public static class VmsEndpoints
         Vendor = t.Vendor.ToString(), t.Endpoint, t.CredentialReference,
         t.VerifyTls, t.ExpectedCameraCount,
     };
+
+    private static async Task<Ok<IReadOnlyList<VmsResponse>>> ListAsync(
+        ConnectorTargetRepository repo, HttpContext http, CancellationToken ct)
+    {
+        var targets = await repo.ListAsync(CallerContextFactory.From(http), ct);
+        return TypedResults.Ok<IReadOnlyList<VmsResponse>>([.. targets.Select(ToResponse)]);
+    }
+
+    private static async Task<Results<Ok<VmsResponse>, NotFound>> GetAsync(
+        Guid id, ConnectorTargetRepository repo, HttpContext http, CancellationToken ct)
+    {
+        var target = await repo.GetAsync(id, CallerContextFactory.From(http), ct);
+
+        // Out-of-scope targets return 404 rather than 403: telling an unauthorised caller
+        // that an id exists is itself a disclosure.
+        return target is null
+            ? TypedResults.NotFound()
+            : TypedResults.Ok(ToResponse(target));
+    }
+
+    private static async Task<Results<Created<CreatedResponse>, ProblemHttpResult>> RegisterAsync(
+        [FromBody] ConnectorTargetRequest request, ConnectorTargetRepository repo,
+        NpgsqlDataSource db, HttpContext http, CancellationToken ct)
+    {
+        var caller = CallerContextFactory.From(http);
+
+        if (!TryBuild(request, Guid.Empty, out var target, out var problem))
+        {
+            return problem!;
+        }
+
+        await using var work = await UnitOfWork.BeginAsync(db, ct);
+
+        var id = await repo.UpsertAsync(target!, caller, work, ct);
+        await work.AuditAsync(caller, "create", "connector_target", id.ToString(),
+            before: null, after: Redact(request), request.OrganizationUnitId, ct);
+        await work.CommitAsync(ct);
+
+        return TypedResults.Created($"/api/v1/vms/{id}", new CreatedResponse(id));
+    }
+
+    private static async Task<Results<NoContent, NotFound, ProblemHttpResult>> ReplaceAsync(
+        Guid id, [FromBody] ConnectorTargetRequest request, ConnectorTargetRepository repo,
+        NpgsqlDataSource db, HttpContext http, CancellationToken ct)
+    {
+        var caller = CallerContextFactory.From(http);
+        var before = await repo.GetAsync(id, caller, ct);
+
+        if (before is null)
+        {
+            return TypedResults.NotFound();
+        }
+
+        if (!TryBuild(request, id, out var target, out var problem))
+        {
+            return problem!;
+        }
+
+        await using var work = await UnitOfWork.BeginAsync(db, ct);
+
+        await repo.UpsertAsync(target!, caller, work, ct);
+        await work.AuditAsync(caller, "update", "connector_target", id.ToString(),
+            Redact(before), Redact(request), request.OrganizationUnitId, ct);
+        await work.CommitAsync(ct);
+
+        return TypedResults.NoContent();
+    }
+
+    private static async Task<Results<NoContent, NotFound, ProblemHttpResult>> SetStateAsync(
+        Guid id, [FromBody] TargetStateRequest request, ConnectorTargetRepository repo,
+        NpgsqlDataSource db, HttpContext http, CancellationToken ct)
+    {
+        var caller = CallerContextFactory.From(http);
+
+        if (!Enum.TryParse<TargetState>(request.State, ignoreCase: true, out var state))
+        {
+            return TypedResults.Problem(
+                title: "Unknown state",
+                detail: $"Valid states: {string.Join(", ", Enum.GetNames<TargetState>())}.",
+                statusCode: StatusCodes.Status400BadRequest);
+        }
+
+        await using var work = await UnitOfWork.BeginAsync(db, ct);
+
+        if (!await repo.SetStateAsync(id, state, caller, work, ct))
+        {
+            return TypedResults.NotFound();
+        }
+
+        await work.AuditAsync(caller, "update", "connector_target", id.ToString(),
+            before: null, after: new { state = state.ToString() }, organizationUnitId: null, ct);
+        await work.CommitAsync(ct);
+
+        return TypedResults.NoContent();
+    }
+
+    private static async Task<Results<NoContent, NotFound>> RemoveAsync(
+        Guid id, ConnectorTargetRepository repo, NpgsqlDataSource db,
+        HttpContext http, CancellationToken ct)
+    {
+        var caller = CallerContextFactory.From(http);
+        var before = await repo.GetAsync(id, caller, ct);
+
+        if (before is null)
+        {
+            return TypedResults.NotFound();
+        }
+
+        await using var work = await UnitOfWork.BeginAsync(db, ct);
+
+        if (!await repo.DeleteAsync(id, caller, work, ct))
+        {
+            return TypedResults.NotFound();
+        }
+
+        await work.AuditAsync(caller, "delete", "connector_target", id.ToString(),
+            Redact(before), after: null, before.OrganizationUnitId, ct);
+        await work.CommitAsync(ct);
+
+        return TypedResults.NoContent();
+    }
+
+    private static async Task<Results<Ok<IReadOnlyList<ConnectorHealthResponse>>, NotFound>> HealthAsync(
+        Guid id, int? limit, int? days, ConnectorTargetRepository repo, FederationQueryRepository queries,
+        HttpContext http, CancellationToken ct)
+    {
+        var caller = CallerContextFactory.From(http);
+
+        // Reached through the repository so the scope check is the same one the list uses.
+        if (await repo.GetAsync(id, caller, ct) is null)
+        {
+            return TypedResults.NotFound();
+        }
+
+        var rows = await queries.HealthAsync(id, limit ?? 50, days ?? 7, ct);
+
+        return TypedResults.Ok<IReadOnlyList<ConnectorHealthResponse>>(
+        [
+            .. rows.Select(r => new ConnectorHealthResponse(
+                r.CheckedAt, r.Status, r.LatencyMs, r.CameraCount, r.ConsecutiveFailures,
+                r.CircuitOpen, r.LastError, r.EventsSinceCheck, r.CursorLagSeconds)),
+        ]);
+    }
+
+    private static async Task<Results<Ok<CapabilityResponse>, ProblemHttpResult>> CapabilitiesAsync(
+        Guid id, ConnectorTargetRepository repo, FederationQueryRepository queries,
+        HttpContext http, CancellationToken ct)
+    {
+        var caller = CallerContextFactory.From(http);
+
+        if (await repo.GetAsync(id, caller, ct) is null)
+        {
+            return TypedResults.Problem(
+                title: "Not found", statusCode: StatusCodes.Status404NotFound);
+        }
+
+        // Served from the stored matrix, never by probing the device. At 80k cameras,
+        // letting a page render trigger probes turns one dashboard load into thousands of
+        // vendor round trips.
+        var row = await queries.CapabilitiesAsync(id, ct);
+
+        if (row is null)
+        {
+            return TypedResults.Problem(
+                title: "Not probed yet",
+                detail: "This target has not been contacted by a worker. Capabilities appear "
+                      + "once it connects for the first time.",
+                statusCode: StatusCodes.Status404NotFound);
+        }
+
+        return TypedResults.Ok(new CapabilityResponse(
+            row.Supported, row.AdapterVersion, row.ProbedAt,
+            JsonSerializer.Deserialize<Dictionary<string, string>>(row.NotesJson ?? "{}")
+                ?? []));
+    }
+
+    private static async Task<Results<Ok<IReadOnlyList<FederatedCameraResponse>>, NotFound>> CamerasAsync(
+        Guid id, ConnectorTargetRepository repo, FederationQueryRepository queries,
+        HttpContext http, CancellationToken ct)
+    {
+        var caller = CallerContextFactory.From(http);
+
+        if (await repo.GetAsync(id, caller, ct) is null)
+        {
+            return TypedResults.NotFound();
+        }
+
+        var rows = await queries.CamerasAsync(id, ct);
+
+        return TypedResults.Ok<IReadOnlyList<FederatedCameraResponse>>(
+        [
+            .. rows.Select(r => new FederatedCameraResponse(
+                r.NativeCameraId, r.CameraId, r.Name, r.VendorModel, r.Firmware,
+                r.IsEnabled, r.IsRecording, r.Health, r.LastSeen,
+                r.StreamReferences ?? [], r.StatusChangedAt)),
+        ]);
+    }
+
+    private static async Task<Results<Ok<CameraStatusHistoryResponse>, NotFound, ProblemHttpResult>> CameraStatusHistoryAsync(
+        Guid id, string nativeCameraId, DateTimeOffset? from, DateTimeOffset? to, int? limit,
+        ConnectorTargetRepository repo, FederationQueryRepository queries,
+        HttpContext http, CancellationToken ct)
+    {
+        var caller = CallerContextFactory.From(http);
+
+        if (await repo.GetAsync(id, caller, ct) is null)
+        {
+            return TypedResults.NotFound();
+        }
+
+        // Defaulted rather than required, unlike /events. Transitions are rare — a stable
+        // camera has one row, not one per poll — so a default window cannot produce the
+        // billion-row scan that made a mandatory range necessary there.
+        var end = to ?? DateTimeOffset.UtcNow;
+        var start = from ?? end.AddDays(-MaxStatusHistoryDays);
+
+        if (end <= start)
+        {
+            return TypedResults.Problem(
+                title: "Invalid time range", detail: "'to' must be after 'from'.",
+                statusCode: StatusCodes.Status400BadRequest);
+        }
+
+        if (end - start > TimeSpan.FromDays(MaxStatusHistoryDays))
+        {
+            return TypedResults.Problem(
+                title: "Time range too wide",
+                detail: $"The window may span at most {MaxStatusHistoryDays} days. The table "
+                      + "is partitioned by day, and an unbounded window defeats the pruning "
+                      + "that keeps this query cheap.",
+                statusCode: StatusCodes.Status400BadRequest);
+        }
+
+        var rows = await queries.CameraStatusHistoryAsync(
+            id, nativeCameraId, start, end,
+            Math.Clamp(limit ?? DefaultStatusHistoryLimit, 1, MaxStatusHistoryLimit), ct);
+
+        return TypedResults.Ok(new CameraStatusHistoryResponse(
+            nativeCameraId, start, end,
+            [
+                .. rows.Select(r => new CameraStatusChangeResponse(
+                    r.ChangedAt, r.PreviousHealth, r.Health,
+                    r.PreviousEnabled, r.IsEnabled,
+                    r.PreviousRecording, r.IsRecording)),
+            ]));
+    }
+
+    private static async Task<Ok<OverviewResponse>> OverviewAsync(
+        FederationQueryRepository queries, HttpContext http, CancellationToken ct)
+    {
+        var caller = CallerContextFactory.From(http);
+        caller.Require("vms.read");
+
+        var row = await queries.OverviewAsync(caller, ct);
+
+        return TypedResults.Ok(new OverviewResponse(
+            row.Targets, row.ActiveTargets, row.QuarantinedTargets,
+            row.Cameras, row.UnreachableCameras));
+    }
 }

@@ -11,6 +11,7 @@ CREATE TABLE federation.api_key (
     created_by uuid,
     expires_at timestamp with time zone,
     revoked_at timestamp with time zone,
+    revoked_by uuid,
     last_used_at timestamp with time zone
 );
 
@@ -47,3 +48,10 @@ ALTER TABLE ONLY federation.api_key
 
 ALTER TABLE ONLY federation.api_key
     ADD CONSTRAINT api_key_group_id_fkey FOREIGN KEY (group_id) REFERENCES federation.access_groups(id);
+
+--
+-- Name: api_key api_key_revoked_by_fkey; Type: FK CONSTRAINT; Schema: federation; Owner: -
+--
+
+ALTER TABLE ONLY federation.api_key
+    ADD CONSTRAINT api_key_revoked_by_fkey FOREIGN KEY (revoked_by) REFERENCES federation.platform_users(id);

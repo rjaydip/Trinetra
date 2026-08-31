@@ -3,7 +3,7 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" />
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" />
-    <PackageReference Include="Swashbuckle.AspNetCore.SwaggerUI" />
+    <PackageReference Include="Scalar.AspNetCore" />
     <ProjectReference Include="..\Trinetra.Federation.Core\Trinetra.Federation.Core.csproj" />
     <ProjectReference Include="..\Trinetra.Federation.Storage\Trinetra.Federation.Storage.csproj" />
     <ProjectReference Include="..\Trinetra.Federation.Bus\Trinetra.Federation.Bus.csproj" />

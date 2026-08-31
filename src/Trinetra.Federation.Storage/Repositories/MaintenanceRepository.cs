@@ -35,6 +35,7 @@ public sealed class MaintenanceRepository
         await c.ExecuteAsync(new CommandDefinition("""
             SELECT federation.ensure_event_partitions(CURRENT_DATE, 14);
             SELECT federation.ensure_health_partitions(CURRENT_DATE, 14);
+            SELECT federation.ensure_camera_status_partitions(CURRENT_DATE, 14);
             SELECT federation.ensure_audit_partitions();
             """, cancellationToken: ct));
     }

@@ -140,6 +140,36 @@ GET    /api/gis/coverage
 GET    /api/gis/gaps
 ```
 
+## Federation Discovery and Reconciliation
+
+Model 1 is the authoritative camera registry. Model 3 discovers what a VMS currently reports and
+stores that observation in `federation.federated_camera`; discovery does not create or delete
+registry records automatically.
+
+``` text
+VMS target (Model 3)
+  └── native_camera_id
+        |
+        | background inventory poll
+        v
+federated_camera
+        |
+        | explicit reconciliation
+        v
+camera registry record (Model 1)
+  └── camera_id
+```
+
+The discovered row is keyed by `(target_id, native_camera_id)`. Until reconciliation succeeds,
+`federated_camera.camera_id` is `NULL`; this identifies cameras that still need a registry match.
+The worker refreshes the discovered inventory approximately every five minutes and status every
+30 seconds. It does not remove a registry record, or mark a camera retired, merely because one
+poll returns a partial inventory.
+
+When the Model 1 registry API is implemented, manual registration will use the registry resource
+(`POST /api/cameras` in this specification). A reconciliation operation will then link the
+stable registry UUID to the VMS-native identifier while preserving both ownership models.
+
 ## Demonstration
 
 1.  Import sample cameras from multiple departments.

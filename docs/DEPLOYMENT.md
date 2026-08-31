@@ -4,6 +4,11 @@ There is no Kubernetes, no service mesh and no orchestrator. Scaling out is star
 processes; the fleet rebalances itself through the PostgreSQL lease. This document covers laying
 that out on real hosts.
 
+The database provider is deployment-specific and is deliberately not fixed in this document.
+The current development environment uses Supabase-hosted PostgreSQL; production may use another
+PostgreSQL provider or an on-premises PostgreSQL installation. Configure the selected provider in
+`ConnectionStrings:Federation` or through `ConnectionStrings__Federation`.
+
 `OPERATIONS.md` covers configuration and day-to-day running. This is about installing it.
 
 ---
@@ -40,6 +45,14 @@ Two properties follow from this and are worth stating plainly.
 **API hosts are interchangeable and hold nothing.** Losing one loses in-flight requests and
 nothing else. Above roughly four instances, put PgBouncer in transaction mode in front of
 PostgreSQL rather than raising `Maximum Pool Size` — see `OPERATIONS.md` §8.
+
+> **Rate limiting does not survive scale-out on its own.** The limiter is in-process, so each API
+> host keeps its own counters and the fleet's effective limit is `instances × the configured
+> value`. For the per-user global limit that is merely generous. For **login** it is a security
+> control being diluted: 10 attempts/minute/IP becomes 40 across four hosts, silently, at the
+> moment you scale out to handle more load. Enforce the login limit at the reverse proxy, which
+> is the only place that sees the whole fleet's traffic, and treat the in-process limit as a
+> backstop for a single host rather than as the fleet's control.
 
 **Worker hosts are not interchangeable in the moment, but recover without intervention.** A
 worker holds leases on specific targets. When it dies those leases expire on their TTL and other
@@ -283,6 +296,11 @@ Stated rather than implied, because each is real work that a production install 
   current implementation seals credentials with a local key. Moving to a KMS-wrapped DEK is the
   intended path and is not yet built.
 - **mTLS between platform services.** `ARCHITECTURE-MODEL-3.md` §9 calls for it. Not implemented.
+  This matters most for `GET /api/v1/vms/{id}/credential/resolve` — the one route that returns a
+  plaintext credential (used by Model 2's AI worker to reach camera RTSP streams). Until mTLS is
+  in place, keep that traffic on a segmented management network and terminate TLS at the proxy;
+  do not expose the API's plain-HTTP port beyond it. The worker's `DETECTION_WORKER` API key
+  must be provisioned with an access-group scope that covers exactly the targets it processes.
 - **Log shipping.** Everything goes to journald. Forwarding to a central collector is deployment
   policy, not application configuration.
 - **Kafka.** Not involved. Events are read from PostgreSQL.

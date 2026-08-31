@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Polly;
+using Polly.CircuitBreaker;
+using Polly.Timeout;
 using Trinetra.Federation.Adapters;
 using Trinetra.Federation.Core.Abstractions;
 using Trinetra.Federation.Core.Capabilities;
@@ -56,6 +58,7 @@ public sealed partial class TargetWorker : IAsyncDisposable
     private long _eventsSinceHealthCheck;
     private int _consecutiveFailures;
     private string? _lastError;
+    private int? _lastCameraCount;
 
     public TargetWorker(
         ConnectorTarget target,
@@ -194,6 +197,7 @@ public sealed partial class TargetWorker : IAsyncDisposable
                     ct => _adapter!.GetCamerasAsync(ct), cancellationToken).ConfigureAwait(false);
 
                 await _state.UpsertCamerasAsync(cameras, cancellationToken).ConfigureAwait(false);
+                _lastCameraCount = cameras.Count;
 
                 // Silent inventory drift is a common vendor failure: a device returns 3 of its
                 // 128 channels and every other signal still says healthy.
@@ -204,7 +208,7 @@ public sealed partial class TargetWorker : IAsyncDisposable
 
                 Interlocked.Exchange(ref _consecutiveFailures, 0);
             }
-            catch (Exception ex) when (ex is AdapterException and not AuthException)
+            catch (Exception ex) when (IsPollFailure(ex))
             {
                 RecordFailure(ex);
             }
@@ -231,9 +235,10 @@ public sealed partial class TargetWorker : IAsyncDisposable
                     ct => _adapter!.GetCameraStatusAsync(ct), cancellationToken).ConfigureAwait(false);
 
                 await _state.UpsertCamerasAsync(statuses, cancellationToken).ConfigureAwait(false);
+                _lastCameraCount = statuses.Count;
                 Interlocked.Exchange(ref _consecutiveFailures, 0);
             }
-            catch (Exception ex) when (ex is AdapterException and not AuthException)
+            catch (Exception ex) when (IsPollFailure(ex))
             {
                 RecordFailure(ex);
             }
@@ -267,7 +272,7 @@ public sealed partial class TargetWorker : IAsyncDisposable
             {
                 return;
             }
-            catch (Exception ex) when (ex is AdapterException and not AuthException)
+            catch (Exception ex) when (IsPollFailure(ex))
             {
                 RecordFailure(ex);
 
@@ -393,6 +398,11 @@ public sealed partial class TargetWorker : IAsyncDisposable
 
                     latency = started.Elapsed.TotalMilliseconds;
 
+                    // The device answered, so it is reachable again: clear the failure count the
+                    // poll loops raised while it was down. Without this the breaker can close and
+                    // calls succeed, yet ConsecutiveFailures stays elevated forever.
+                    Interlocked.Exchange(ref _consecutiveFailures, 0);
+
                     // Clock skew is measured rather than assumed: it silently corrupts every
                     // time-window correlation and, on ONVIF, breaks authentication outright.
                     var skew = deviceTime - DateTimeOffset.UtcNow;
@@ -415,13 +425,22 @@ public sealed partial class TargetWorker : IAsyncDisposable
             {
                 status = HealthStatus.AuthFailed;
             }
+            catch (Exception ex) when (ex is BrokenCircuitException or TimeoutRejectedException)
+            {
+                // The breaker is open (or an attempt timed out) — the target is unreachable, but
+                // this is not a fresh failure to count. The breaker half-opens on its own and
+                // this loop keeps running, so a recovered device is picked up automatically.
+                _lastError = ex.Message;
+                status = HealthStatus.Unreachable;
+            }
             catch (Exception ex) when (ex is AdapterException)
             {
                 RecordFailure(ex);
                 status = HealthStatus.Unreachable;
             }
 
-            await RecordHealthAsync(status, latency, null, cancellationToken).ConfigureAwait(false);
+            await RecordHealthAsync(status, latency, _lastCameraCount, cancellationToken)
+                .ConfigureAwait(false);
         }
     }
 
@@ -476,6 +495,23 @@ public sealed partial class TargetWorker : IAsyncDisposable
         Interlocked.Increment(ref _consecutiveFailures);
         _lastError = ex.Message;
     }
+
+    /// <summary>
+    /// A poll-loop failure the loop should absorb and keep running through, rather than let
+    /// escape and tear the whole target down.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="BrokenCircuitException"/> and <see cref="TimeoutRejectedException"/> come from
+    /// the resilience pipeline, not the adapter, so they are not <see cref="AdapterException"/>s.
+    /// Letting them propagate killed the worker permanently: the breaker would open while a
+    /// device was down, the exception would fault <c>Task.WhenAll</c>, and nothing restarts a
+    /// <see cref="TargetWorker"/> short of the lease churning. The loops must survive an open
+    /// breaker so the half-open probe can recover the target on its own.
+    /// </remarks>
+    private static bool IsPollFailure(Exception ex) =>
+        ex is (AdapterException and not AuthException)
+            or BrokenCircuitException
+            or TimeoutRejectedException;
 
     public async ValueTask DisposeAsync()
     {

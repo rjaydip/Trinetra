@@ -5,6 +5,20 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UserSecretsId>dotnet-Trinetra.Federation.Worker-b35f047e-697b-4377-b5f1-cefc75ab951e</UserSecretsId>
+
+    <!-- Stated explicitly because the Worker SDK, unlike the Web SDK, defaults to WORKSTATION
+         GC: one heap, one collection thread. This process holds up to Worker:MaxTargets
+         connectors at once, each polling over HTTP and parsing vendor JSON/XML, so allocation is
+         concurrent across cores and workstation GC serialises the collections behind it. The API
+         gets server GC for free from its SDK; without this line the worker — the process that
+         actually needs it — silently does not. -->
+    <ServerGarbageCollection>true</ServerGarbageCollection>
+
+    <!-- Paired with server GC deliberately. Background collection trades a little throughput for
+         shorter pauses, which is the right side of that trade here: a stalled worker stops
+         renewing its leases, and a pause past Worker:LeaseTtl hands its targets to someone
+         else. -->
+    <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
   </PropertyGroup>
 
   <ItemGroup>

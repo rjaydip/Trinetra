@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Dapper;
 using Npgsql;
+using NpgsqlTypes;
 using Trinetra.Federation.Core.Capabilities;
 using Trinetra.Federation.Core.Model;
 
@@ -167,10 +168,24 @@ public sealed class ConnectorStateStore
     /// Upserts the camera inventory reported by a target.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Deliberately does not delete cameras that stopped being reported. A VMS that returns 3 of
     /// its 128 channels is a common vendor failure mode, and treating that as "125 cameras were
     /// removed" would destroy inventory on a transient glitch. Reconciling genuine removals is a
     /// separate, deliberate operation.
+    /// </para>
+    /// <para>
+    /// <b>One binary COPY and one merge, never a statement per camera.</b> Passing an enumerable
+    /// to Dapper looks like a batch and is not: it re-executes the statement once per element, so
+    /// a 128-channel NVR cost 128 round trips and a full parameter set per row. This path runs on
+    /// the status poll — every 30 seconds per target, fleet-wide — which is where that turns from
+    /// wasteful into the thing saturating the link to the database.
+    /// </para>
+    /// <para>
+    /// The staging table is declared explicitly rather than with <c>LIKE federated_camera</c>
+    /// because <c>health</c> is an enum: binary COPY would need the enum mapped on the connection,
+    /// whereas staging it as text and casting once in the merge needs nothing.
+    /// </para>
     /// </remarks>
     public async Task<int> UpsertCamerasAsync(
         IReadOnlyCollection<FederatedCamera> cameras, CancellationToken cancellationToken)
@@ -182,15 +197,94 @@ public sealed class ConnectorStateStore
             return 0;
         }
 
-        const string sql = """
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        // ON COMMIT DROP is only meaningful inside a transaction block, and the COPY and the
+        // merge must land or fail together — the same reasoning as EventStore.AppendAsync.
+        await using var transaction = await connection
+            .BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+
+        await using (var create = new NpgsqlCommand("""
+            CREATE TEMP TABLE staged_camera (
+                ordinal              INT     NOT NULL,
+                target_id            UUID    NOT NULL,
+                native_camera_id     TEXT    NOT NULL,
+                camera_id            UUID,
+                organization_unit_id UUID    NOT NULL,
+                site_id              UUID,
+                name                 TEXT,
+                vendor_model         TEXT,
+                firmware             TEXT,
+                is_enabled           BOOLEAN NOT NULL,
+                is_recording         BOOLEAN,
+                health               TEXT    NOT NULL,
+                last_seen            TIMESTAMPTZ,
+                stream_references    TEXT[]  NOT NULL,
+                raw_reference        TEXT
+            ) ON COMMIT DROP;
+            """, connection, transaction))
+        {
+            await create.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        await using (var writer = await connection.BeginBinaryImportAsync("""
+            COPY staged_camera (
+                ordinal, target_id, native_camera_id, camera_id,
+                organization_unit_id, site_id,
+                name, vendor_model, firmware,
+                is_enabled, is_recording, health, last_seen, stream_references, raw_reference
+            ) FROM STDIN (FORMAT BINARY)
+            """, cancellationToken).ConfigureAwait(false))
+        {
+            var ordinal = 0;
+
+            foreach (var c in cameras)
+            {
+                await writer.StartRowAsync(cancellationToken).ConfigureAwait(false);
+                await writer.WriteAsync(ordinal++, NpgsqlDbType.Integer, cancellationToken).ConfigureAwait(false);
+                await writer.WriteAsync(c.TargetId, NpgsqlDbType.Uuid, cancellationToken).ConfigureAwait(false);
+                await writer.WriteAsync(c.NativeCameraId, NpgsqlDbType.Text, cancellationToken).ConfigureAwait(false);
+                await WriteNullableAsync(writer, c.CameraId, NpgsqlDbType.Uuid, cancellationToken).ConfigureAwait(false);
+                await writer.WriteAsync(c.OrganizationUnitId, NpgsqlDbType.Uuid, cancellationToken).ConfigureAwait(false);
+                await WriteNullableAsync(writer, c.SiteId, NpgsqlDbType.Uuid, cancellationToken).ConfigureAwait(false);
+                await WriteNullableAsync(writer, c.Name, NpgsqlDbType.Text, cancellationToken).ConfigureAwait(false);
+                await WriteNullableAsync(writer, c.VendorModel, NpgsqlDbType.Text, cancellationToken).ConfigureAwait(false);
+                await WriteNullableAsync(writer, c.Firmware, NpgsqlDbType.Text, cancellationToken).ConfigureAwait(false);
+                await writer.WriteAsync(c.IsEnabled, NpgsqlDbType.Boolean, cancellationToken).ConfigureAwait(false);
+                await WriteNullableAsync(writer, c.IsRecording, NpgsqlDbType.Boolean, cancellationToken).ConfigureAwait(false);
+                await writer.WriteAsync(c.Health.ToString(), NpgsqlDbType.Text, cancellationToken).ConfigureAwait(false);
+                await WriteNullableAsync(writer, c.LastSeen, NpgsqlDbType.TimestampTz, cancellationToken).ConfigureAwait(false);
+
+                // Materialised per row and released with it, rather than building a parameter
+                // object graph for the whole batch up front.
+                await writer.WriteAsync(
+                    c.StreamReferences as string[] ?? [.. c.StreamReferences],
+                    NpgsqlDbType.Array | NpgsqlDbType.Text, cancellationToken).ConfigureAwait(false);
+
+                await WriteNullableAsync(writer, c.RawReference, NpgsqlDbType.Text, cancellationToken).ConfigureAwait(false);
+            }
+
+            await writer.CompleteAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        // DISTINCT ON collapses a channel a VMS reported twice in one response. Without it the
+        // merge fails outright with "ON CONFLICT DO UPDATE command cannot affect row a second
+        // time" — a whole poll lost to one duplicate row, where the per-row path used to just
+        // apply the second write over the first. Ordering by ordinal DESC keeps the last
+        // occurrence, matching that behaviour.
+        const string merge = """
             INSERT INTO federation.federated_camera
                 (target_id, native_camera_id, camera_id, organization_unit_id, site_id,
                  name, vendor_model, firmware,
                  is_enabled, is_recording, health, last_seen, stream_references, raw_reference)
-            VALUES (@TargetId, @NativeCameraId, @CameraId, @OrganizationUnitId, @SiteId,
-                    @Name, @VendorModel, @Firmware,
-                    @IsEnabled, @IsRecording, @Health::federation.health_status, @LastSeen,
-                    @StreamReferences, @RawReference)
+            SELECT DISTINCT ON (target_id, native_camera_id)
+                   target_id, native_camera_id, camera_id, organization_unit_id, site_id,
+                   name, vendor_model, firmware,
+                   is_enabled, is_recording, health::federation.health_status, last_seen,
+                   stream_references, raw_reference
+            FROM staged_camera
+            ORDER BY target_id, native_camera_id, ordinal DESC
             ON CONFLICT (target_id, native_camera_id) DO UPDATE
             SET name = COALESCE(EXCLUDED.name, federated_camera.name),
                 vendor_model = COALESCE(EXCLUDED.vendor_model, federated_camera.vendor_model),
@@ -206,26 +300,46 @@ public sealed class ConnectorStateStore
                 updated_at = now();
             """;
 
-        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken)
+        var affected = await connection.ExecuteAsync(new CommandDefinition(
+            merge, transaction: transaction, cancellationToken: cancellationToken))
             .ConfigureAwait(false);
 
-        return await connection.ExecuteAsync(new CommandDefinition(sql, cameras.Select(c => new
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+
+        return affected;
+    }
+
+    /// <summary>Writes a value, or NULL when it has none.</summary>
+    /// <remarks>
+    /// <see cref="NpgsqlBinaryImporter"/> has no overload that treats a null as SQL NULL — a null
+    /// reaches the wire as a typed default instead, so <c>last_seen</c> would silently become the
+    /// zero timestamp on every camera a VMS has never reported seeing.
+    /// </remarks>
+    private static async Task WriteNullableAsync<T>(
+        NpgsqlBinaryImporter writer, T? value, NpgsqlDbType type, CancellationToken cancellationToken)
+        where T : struct
+    {
+        if (value is { } present)
         {
-            c.TargetId,
-            c.NativeCameraId,
-            c.CameraId,
-            c.OrganizationUnitId,
-            c.SiteId,
-            c.Name,
-            c.VendorModel,
-            c.Firmware,
-            c.IsEnabled,
-            c.IsRecording,
-            Health = c.Health.ToString(),
-            c.LastSeen,
-            StreamReferences = c.StreamReferences.ToArray(),
-            c.RawReference,
-        }), cancellationToken: cancellationToken)).ConfigureAwait(false);
+            await writer.WriteAsync(present, type, cancellationToken).ConfigureAwait(false);
+        }
+        else
+        {
+            await writer.WriteNullAsync(cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private static async Task WriteNullableAsync(
+        NpgsqlBinaryImporter writer, string? value, NpgsqlDbType type, CancellationToken cancellationToken)
+    {
+        if (value is null)
+        {
+            await writer.WriteNullAsync(cancellationToken).ConfigureAwait(false);
+        }
+        else
+        {
+            await writer.WriteAsync(value, type, cancellationToken).ConfigureAwait(false);
+        }
     }
 
     private sealed class CursorRow

@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Trinetra.Federation.Api.Contracts;
 
 // Request and response shapes for the API. Kept separate from the domain records so a field
@@ -9,6 +11,13 @@ public sealed record LoginRequest(string Username, string Password);
 public sealed record LoginResponse(string Token, DateTimeOffset ExpiresAt, bool MustChangePassword);
 
 public sealed record ChangePasswordRequest(string CurrentPassword, string NewPassword);
+
+// OAuth2 "password" grant response. Development only — this is the shape Scalar's Authorize
+// dialog expects back from the token URL. Field names are the RFC 6749 wire names.
+public sealed record OAuthTokenResponse(
+    [property: JsonPropertyName("access_token")] string AccessToken,
+    [property: JsonPropertyName("token_type")] string TokenType,
+    [property: JsonPropertyName("expires_in")] int ExpiresIn);
 
 public sealed record OrganizationRequest(
     string Code, string Name, string OrganizationType,
@@ -65,6 +74,20 @@ public sealed record CredentialRequest(
 /// <summary>Confirms a credential was stored. Deliberately echoes no secret material.</summary>
 public sealed record CredentialResponse(string CredentialReference, DateTimeOffset UpdatedAt);
 
+/// <summary>
+/// A resolved device credential. <b>The only response on this API that carries secret material.</b>
+/// </summary>
+/// <remarks>
+/// Returned only by <c>GET /vms/{id}/credential/resolve</c>, only to a machine caller holding
+/// <c>credential.resolve</c>, and every call is written to <c>credential_access_log</c>. It exists
+/// for the AI worker (<c>ai-worker/</c>), which reads camera RTSP streams directly and needs their
+/// login. Only the fields that were actually stored are populated; vendor extras
+/// (<c>Credential.Extra</c> — Milestone OAuth client, Genetec application id) are not carried, so
+/// a target that needs them cannot be resolved through this route.
+/// </remarks>
+public sealed record ResolvedCredentialResponse(
+    string CredentialReference, string? Username, string? Password, string? Token);
+
 /// <summary>One page of events, with the cursor for the next.</summary>
 /// <remarks>
 /// Keyset pagination, never OFFSET: a deep offset on a table taking hundreds of millions of rows
@@ -113,3 +136,44 @@ public sealed record CreateGroupRequest(
 public sealed record AddScopeRequest(
     string ScopeType, Guid? OrganizationUnitId = null, Guid? GeographicAreaId = null,
     string? ResourceType = null, Guid? ResourceId = null, string? Description = null);
+
+// ---- Detections, watchlist, AI-worker health --------------------------------
+
+/// <summary>
+/// A detection submitted by Model 2's AI worker — mirrors <c>ai-worker/pipeline.py</c>'s
+/// <c>DetectionEvent.to_json()</c> exactly. <c>CameraId</c> is <c>"{targetId}:{nativeCameraId}"</c>.
+/// </summary>
+public sealed record DetectionEventRequest(
+    string Id, string CameraId, string EventType, DateTimeOffset Timestamp, double Confidence,
+    IReadOnlyDictionary<string, string>? Attributes = null,
+    IReadOnlyDictionary<string, string>? Evidence = null);
+
+/// <summary>A stored detection, projected for search results.</summary>
+public sealed record DetectionResponse(
+    string Id, string CameraId, Guid? RegisteredCameraId, string EventType,
+    DateTimeOffset Timestamp, double? Confidence,
+    string? VehicleType, string? PlateNumber, string? SnapshotReference);
+
+public sealed record CreateWatchlistEntryRequest(
+    Guid OrganizationUnitId, string PlateNumber, string? Reason = null, string Severity = "Medium");
+
+public sealed record WatchlistEntryResponse(
+    Guid Id, Guid OrganizationUnitId, string PlateNumberNormalized,
+    string? Reason, string Severity, bool IsActive, DateTimeOffset CreatedAt);
+
+public sealed record WatchlistAlertResponse(
+    Guid Id, Guid WatchlistEntryId, string PlateNumberNormalized, string? Reason, string Severity,
+    string DetectionEventId, DateTimeOffset DetectionOccurredAt,
+    DateTimeOffset RaisedAt, DateTimeOffset? AcknowledgedAt);
+
+/// <summary>Heartbeat body posted by <c>ai-worker/monitoring/heartbeat.py</c>.</summary>
+public sealed record WorkerHeartbeatRequest(string WorkerId, string? Hostname, DateTimeOffset ReportedAt);
+
+public sealed record AiWorkerHealthResponse(
+    string WorkerId, string? Hostname, DateTimeOffset FirstSeenAt, DateTimeOffset LastHeartbeatAt);
+
+public sealed record CreateApiKeyRequest(
+    string DisplayName, Guid GroupId, DateTimeOffset? ExpiresAt = null);
+
+/// <summary>The raw key value — returned exactly once, at creation. Never retrievable again.</summary>
+public sealed record ApiKeyCreatedResponse(Guid Id, string KeyId, string RawKey);

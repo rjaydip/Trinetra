@@ -11,10 +11,10 @@ units, and rolling upgrades.
 ## 1. The order that matters
 
 ```text
-   docker compose up -d          database is running
+   selected database provider     database is reachable
             |
             v
-   psql -f db/versions/v1.sql    create the schema
+   apply db/versions/v1.sql      create the schema
             |
             v
    edit config/trinetra.settings.json      or set the equivalent environment variables
@@ -30,6 +30,11 @@ or check it — they assume it is there. The database is entirely yours to prepa
 The cost of that is worth stating: a service pointed at an unprepared or out-of-date database
 will start, report healthy, and fail requests with `relation ... does not exist` — which reads as
 a code fault rather than a missing setup step. Nothing will warn you.
+
+The database provider is intentionally not fixed by the documentation and may change between
+environments. The current development environment uses Supabase-hosted PostgreSQL. Supabase is
+only the current provider, not an application requirement. Set `ConnectionStrings:Federation` (or
+`ConnectionStrings__Federation`) to the selected PostgreSQL provider and apply the schema there.
 
 ### Versions
 
@@ -55,10 +60,20 @@ silently differ from those that ran the new one. Corrections go in the next vers
 
 ### Prepare the database
 
+The repository includes Docker Compose as an optional local PostgreSQL fallback. Skip it when
+using Supabase or another PostgreSQL provider. Apply `db/versions/v1.sql` through the selected
+provider's SQL client or with `psql`, using that provider's host, port, database, and credentials.
+
 ```bash
-docker compose up -d      # skip if you have your own PostgreSQL
-psql -U trinetra -d trinetra -f db/versions/v1.sql
+# Optional local fallback only.
+docker compose up -d
+
+# Example; replace the placeholders with the selected provider's connection details.
+psql -h your-database-host -U your-database-user -d trinetra -f db/versions/v1.sql
 ```
+
+For the current Supabase development environment, the same schema can be applied through the
+Supabase SQL editor or a `psql` connection created from the Supabase project settings.
 
 The file creates everything: schema, tables, functions, views, and the reference data
 (permissions, roles, role_permissions) that authorisation resolves against. A schema-only script
@@ -107,6 +122,7 @@ runs on a key that is in the repository, with no runtime symptom at all.
   "RunAtUtcHour": 3,
   "EventDays": 90,
   "HealthDays": 30,
+  "CameraStatusDays": 90,
   "AuditMonths": 84,
   "ConnectionTestDays": 30,
   "DeadLetterDays": 90
@@ -124,6 +140,13 @@ retention drops partitions — immediate, irreversible, no recycle bin.
 `Enabled: false` exists so deletion can be paused during an investigation. It is not a safe
 long-term setting: `federation_event` takes 100–400M rows/day, so leaving it off is a disk-full
 outage on a schedule.
+
+`CameraStatusDays` is longer than `HealthDays` on purpose. It governs `camera_status_history`,
+which stores **only genuine status transitions** — a camera healthy for a month is one row, not a
+month of samples — so 90 days costs very little, and "when did that junction camera go
+Unreachable?" is a question asked weeks after the fact. Dropping those partitions never affects
+what the camera's status *is now*: `federated_camera.status_changed_at` carries the current
+status and the instant it began, and is not subject to retention.
 
 ### Network
 
@@ -231,7 +254,33 @@ SELECT job, last_run_date, detail FROM federation.maintenance_run;
 -- Who changed what.
 SELECT changed_at, actor, action, entity_type, entity_id
 FROM federation.config_audit ORDER BY changed_at DESC LIMIT 50;
+
+-- Who resolved which credential, for which target. Repeated failures against one
+-- reference mean a rotated secret nobody updated, or someone probing.
+SELECT accessed_at, accessed_by, target_id, credential_reference, succeeded, failure_reason
+FROM federation.credential_access_log ORDER BY accessed_at DESC LIMIT 50;
 ```
+
+### The AI worker gets 403 or 404 resolving a stream credential
+
+`GET /api/v1/vms/{id}/credential/resolve` needs the `credential.resolve` permission, which only
+the `DETECTION_WORKER` role carries (added in `db/versions/v1.5.sql` — a database that stopped at
+v1.4 will 403). A 404 means either the target is outside the worker key's access-group scope, or
+the target has no credential stored yet (`GET /vms/{id}/credential/status` distinguishes them). A
+503 means the resolution succeeded but its `credential_access_log` row could not be written and
+the secret was withheld — check database health and retry.
+
+To bring an existing worker key up to the current contract — its group on the
+`DETECTION_WORKER` role, `ACTIVE`, holding all four grants (`vms.read`, `observation.write`,
+`worker.heartbeat`, `credential.resolve`) — without re-issuing it:
+
+Set `v_key_name` at the top of the script to the key's display name (it defaults to the name
+`create-detection-api-key.sh` uses), then run the whole file — `psql "$DSN" -f
+scripts/check-detection-api-key.sql`, or paste it into the VS Code SQL editor. It is a single
+PL/pgSQL block: no bind parameters, so no client prompts; progress prints as `NOTICE`s. It
+reports before/after, then grants the permission, re-roles and activates the group — all
+idempotent. Organization/geography scope is not touched — set that with
+`create-detection-api-key.sh` or `POST /api/v1/access-groups/{id}/scopes`.
 
 ### Permission coverage
 
@@ -254,6 +303,16 @@ legitimately declare none are anonymous: login, health, and the OpenAPI document
 | `Maximum Pool Size=40` | `(api instances × pool) + (workers × pool) < postgres max_connections`. Exceeding it fails at the database as "too many clients", which looks like an outage rather than a capacity setting. Above roughly four API instances, put PgBouncer in transaction mode in front rather than raising this |
 | `Timeout=10` | The wait for a pooled connection, deliberately shorter than `Command Timeout`. A saturated pool should surface quickly as backpressure, not as a slow request |
 | `Application Name` | What makes `pg_stat_activity` readable when diagnosing the 80k simulation |
+
+Two things do **not** scale with instance count, and both are quiet about it:
+
+- **Rate limits are per process.** `instances × limit` is the fleet's real ceiling. The login
+  limit is a credential-stuffing control and belongs at the reverse proxy — see `DEPLOYMENT.md`
+  §1.
+- **Server GC is set per project, not inherited.** The API gets it from the Web SDK; the worker
+  sets it explicitly in its csproj because the Worker SDK defaults to workstation GC — one heap
+  and one collection thread for a process holding up to `Worker:MaxTargets` connectors. A new
+  host project needs the same line or it quietly runs single-heap.
 
 Event queries are bounded by design: `from` and `to` are required, the window is capped, page size
 is capped, and paging is keyset rather than OFFSET. These are not tuning knobs — they are what

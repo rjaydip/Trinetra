@@ -27,55 +27,23 @@ public static class HierarchyEndpoints
                        .WithTags(ApiTags.Organizations)
                        .RequireAuthorization();
 
-        group.MapGet("/", async Task<Ok<IReadOnlyList<OrganizationResponse>>> (
-            OrganizationRepository repo, HttpContext http, CancellationToken ct) =>
-        {
-            var caller = CallerContextFactory.From(http);
-            var orgs = await repo.ListAsync(caller, ct);
-            return TypedResults.Ok<IReadOnlyList<OrganizationResponse>>([.. orgs.Select(ToResponse)]);
-        }).RequirePermission("geography.read")
+        group.MapGet("/", ListOrganizationsAsync)
+          .RequirePermission("geography.read")
           .WithSummary("List organizations")
           .WithDescription(
               "The top of the organizational dimension — one row per force, agency or operator "
               + "whose units own VMS targets. Start here when building a scope picker, then walk "
               + "down with `GET /organizations/{id}/units`.");
 
-        group.MapGet("/{id:guid}", async Task<Results<Ok<OrganizationResponse>, NotFound>> (
-            Guid id, OrganizationRepository repo, HttpContext http, CancellationToken ct) =>
-        {
-            var caller = CallerContextFactory.From(http);
-            var org = await repo.GetAsync(id, caller, ct);
-            return org is null ? TypedResults.NotFound() : TypedResults.Ok(ToResponse(org));
-        }).RequirePermission("geography.read")
+        group.MapGet("/{id:guid}", GetOrganizationAsync)
+          .RequirePermission("geography.read")
           .WithSummary("Read one organization")
           .WithDescription(
               "Code, name, type, description and status. An organization the caller has no grant "
               + "over returns 404, matching the rest of the API.");
 
-        group.MapPost("/", async Task<Created<CreatedResponse>> (
-            [FromBody] OrganizationRequest request, OrganizationRepository repo,
-            NpgsqlDataSource db, HttpContext http, CancellationToken ct) =>
-        {
-            var caller = CallerContextFactory.From(http);
-            caller.Require("organization.manage");
-
-            await using var work = await UnitOfWork.BeginAsync(db, ct);
-
-            var id = await repo.UpsertAsync(new Organization
-            {
-                Code = request.Code,
-                Name = request.Name,
-                OrganizationType = request.OrganizationType,
-                Description = request.Description,
-                Status = request.Status ?? "ACTIVE",
-            }, caller, work, ct);
-
-            await work.AuditAsync(caller, "create", "organization", id.ToString(),
-                before: null, after: request, organizationUnitId: null, ct);
-            await work.CommitAsync(ct);
-
-            return TypedResults.Created($"/api/v1/organizations/{id}", new CreatedResponse(id));
-        }).RequirePermission("organization.manage")
+        group.MapPost("/", CreateOrganizationAsync)
+          .RequirePermission("organization.manage")
           .WithSummary("Create an organization")
           .WithDescription(
               "Creates the root of an organizational tree. `code` is the stable identifier "
@@ -84,44 +52,16 @@ public static class HierarchyEndpoints
               + "An organization on its own owns nothing — add units beneath it before a VMS "
               + "target can be assigned anywhere.");
 
-        group.MapGet("/{id:guid}/units", async Task<Ok<IReadOnlyList<OrganizationUnitResponse>>> (
-            Guid id, OrganizationRepository repo, HttpContext http, CancellationToken ct) =>
-        {
-            var caller = CallerContextFactory.From(http);
-            var units = await repo.ListUnitsAsync(id, caller, ct);
-            return TypedResults.Ok<IReadOnlyList<OrganizationUnitResponse>>([.. units.Select(ToResponse)]);
-        }).RequirePermission("organization.read")
+        group.MapGet("/{id:guid}/units", ListUnitsAsync)
+          .RequirePermission("organization.read")
           .WithSummary("List an organization's units")
           .WithDescription(
               "The unit tree beneath one organization, each row carrying its `parentUnitId` so a "
               + "client can assemble the hierarchy. These ids are what `organizationUnitId` on a "
               + "VMS target and on an access-group scope grant refer to.");
 
-        group.MapPost("/{id:guid}/units", async Task<Created<CreatedResponse>> (
-            Guid id, [FromBody] OrganizationUnitRequest request, OrganizationRepository repo,
-            NpgsqlDataSource db, HttpContext http, CancellationToken ct) =>
-        {
-            var caller = CallerContextFactory.From(http);
-            caller.Require("organization.manage");
-
-            await using var work = await UnitOfWork.BeginAsync(db, ct);
-
-            var unitId = await repo.UpsertUnitAsync(new OrganizationUnit
-            {
-                OrganizationId = id,
-                ParentUnitId = request.ParentUnitId,
-                Code = request.Code,
-                Name = request.Name,
-                UnitType = request.UnitType,
-                Status = request.Status ?? "ACTIVE",
-            }, caller, work, ct);
-
-            await work.AuditAsync(caller, "create", "organization_unit", unitId.ToString(),
-                before: null, after: request, organizationUnitId: unitId, ct);
-            await work.CommitAsync(ct);
-
-            return TypedResults.Created($"/api/v1/organization-units/{unitId}", new CreatedResponse(unitId));
-        }).RequirePermission("organization.manage")
+        group.MapPost("/{id:guid}/units", CreateUnitAsync)
+          .RequirePermission("organization.manage")
           .WithSummary("Create a unit inside an organization")
           .WithDescription(
               "Adds a department, division, zone or station to the tree. Omit `parentUnitId` for "
@@ -130,19 +70,8 @@ public static class HierarchyEndpoints
               + "granted everything beneath it, so a unit created in the wrong place widens who "
               + "can see the targets assigned to it.");
 
-        app.MapPost("/api/v1/organization-units/{id:guid}/deactivate", async (
-            Guid id, [FromBody] DeactivateRequest request, OrganizationRepository repo,
-            NpgsqlDataSource db, HttpContext http, CancellationToken ct) =>
-        {
-            var caller = CallerContextFactory.From(http);
-            caller.Require("organization.manage");
-
-            await using var work = await UnitOfWork.BeginAsync(db, ct);
-
-            return await DeactivateAsync(
-                strategy => repo.DeactivateUnitAsync(id, strategy, request.NewParentId, caller, work, ct),
-                request, caller, work, "organization_unit", id, ct);
-        }).RequireAuthorization().WithTags(ApiTags.Organizations)
+        app.MapPost("/api/v1/organization-units/{id:guid}/deactivate", DeactivateUnitAsync)
+          .RequireAuthorization().WithTags(ApiTags.Organizations)
           .RequirePermission("organization.manage")
           .WithSummary("Deactivate an organization unit")
           .WithDescription(
@@ -162,14 +91,8 @@ public static class HierarchyEndpoints
                        .WithTags(ApiTags.Geography)
                        .RequireAuthorization();
 
-        areas.MapGet("/", async Task<Ok<IReadOnlyList<GeographicAreaResponse>>> (
-            Guid? parentId, bool? rootsOnly, GeographyRepository repo, HttpContext http,
-            CancellationToken ct) =>
-        {
-            var caller = CallerContextFactory.From(http);
-            var areas = await repo.ListAreasAsync(parentId, rootsOnly ?? false, caller, ct);
-            return TypedResults.Ok<IReadOnlyList<GeographicAreaResponse>>([.. areas.Select(ToResponse)]);
-        }).RequirePermission("geography.read")
+        areas.MapGet("/", ListAreasAsync)
+          .RequirePermission("geography.read")
           .WithSummary("List geographic areas")
           .WithDescription(
               "Areas within the caller's geographic scope. `rootsOnly=true` returns the top of "
@@ -177,13 +100,8 @@ public static class HierarchyEndpoints
               + "whole in-scope set comes back — fine for a small deployment, worth paging by "
               + "level in a large one.");
 
-        areas.MapGet("/{id:guid}", async Task<Results<Ok<GeographicAreaResponse>, NotFound>> (
-            Guid id, GeographyRepository repo, HttpContext http, CancellationToken ct) =>
-        {
-            var caller = CallerContextFactory.From(http);
-            var area = await repo.GetAreaAsync(id, caller, ct);
-            return area is null ? TypedResults.NotFound() : TypedResults.Ok(ToResponse(area));
-        }).RequirePermission("geography.read")
+        areas.MapGet("/{id:guid}", GetAreaAsync)
+          .RequirePermission("geography.read")
           .WithSummary("Read one geographic area")
           .WithDescription(
               "Code, name, area type, parent and status for a single node in the geographic "
@@ -191,25 +109,15 @@ public static class HierarchyEndpoints
 
         // Both directions of the tree, because a UI needs to render downward and a scope check
         // needs to reason upward.
-        areas.MapGet("/{id:guid}/children", async Task<Ok<IReadOnlyList<GeographicAreaResponse>>> (
-            Guid id, GeographyRepository repo, HttpContext http, CancellationToken ct) =>
-        {
-            var caller = CallerContextFactory.From(http);
-            var children = await repo.ListAreasAsync(id, false, caller, ct);
-            return TypedResults.Ok<IReadOnlyList<GeographicAreaResponse>>([.. children.Select(ToResponse)]);
-        }).RequirePermission("geography.read")
+        areas.MapGet("/{id:guid}/children", ListAreaChildrenAsync)
+          .RequirePermission("geography.read")
           .WithSummary("List an area's immediate children")
           .WithDescription(
               "One level down, for rendering a tree as the user expands it rather than fetching "
               + "the whole hierarchy up front.");
 
-        areas.MapGet("/{id:guid}/ancestors", async Task<Ok<IReadOnlyList<GeographicAreaResponse>>> (
-            Guid id, GeographyRepository repo, HttpContext http, CancellationToken ct) =>
-        {
-            var caller = CallerContextFactory.From(http);
-            var chain = await repo.GetAncestorsAsync(id, caller, ct);
-            return TypedResults.Ok<IReadOnlyList<GeographicAreaResponse>>([.. chain.Select(ToResponse)]);
-        }).RequirePermission("geography.read")
+        areas.MapGet("/{id:guid}/ancestors", ListAreaAncestorsAsync)
+          .RequirePermission("geography.read")
           .WithSummary("Walk an area's ancestor chain to the root")
           .WithDescription(
               "The other direction of the tree: a UI renders downward, but explaining *why* a "
@@ -217,14 +125,8 @@ public static class HierarchyEndpoints
               + "every ward inside it. Use this to build a breadcrumb, or to show which ancestor "
               + "a permission was actually granted on.");
 
-        areas.MapGet("/types", async Task<Ok<IReadOnlyList<AreaTypeResponse>>> (
-            GeographyRepository repo, HttpContext http, CancellationToken ct) =>
-        {
-            CallerContextFactory.From(http).Require("geography.read");
-            var types = await repo.ListAreaTypesAsync(ct);
-            return TypedResults.Ok<IReadOnlyList<AreaTypeResponse>>(
-                [.. types.Select(t => new AreaTypeResponse(t.Code, t.Name, t.LevelOrder))]);
-        }).RequirePermission("geography.read")
+        areas.MapGet("/types", ListAreaTypesAsync)
+          .RequirePermission("geography.read")
           .WithSummary("List the area types and their nesting order")
           .WithDescription(
               "Reference data: the levels this deployment models — state, district, zone, ward "
@@ -232,30 +134,8 @@ public static class HierarchyEndpoints
               + "Clients should populate the `areaType` picker from here rather than hard-coding "
               + "a list, since the levels are deployment configuration.");
 
-        areas.MapPost("/", async Task<Created<CreatedResponse>> (
-            [FromBody] GeographicAreaRequest request, GeographyRepository repo,
-            NpgsqlDataSource db, HttpContext http, CancellationToken ct) =>
-        {
-            var caller = CallerContextFactory.From(http);
-            caller.Require("geography.manage");
-
-            await using var work = await UnitOfWork.BeginAsync(db, ct);
-
-            var id = await repo.UpsertAreaAsync(new GeographicArea
-            {
-                ParentAreaId = request.ParentAreaId,
-                Code = request.Code,
-                Name = request.Name,
-                AreaType = request.AreaType,
-                Status = request.Status ?? "ACTIVE",
-            }, caller, work, ct);
-
-            await work.AuditAsync(caller, "create", "geographic_area", id.ToString(),
-                before: null, after: request, organizationUnitId: null, ct);
-            await work.CommitAsync(ct);
-
-            return TypedResults.Created($"/api/v1/geographic-areas/{id}", new CreatedResponse(id));
-        }).RequirePermission("geography.manage")
+        areas.MapPost("/", CreateAreaAsync)
+          .RequirePermission("geography.manage")
           .WithSummary("Create a geographic area")
           .WithDescription(
               "Adds a node to the geographic hierarchy. `areaType` must be one of the codes from "
@@ -263,19 +143,8 @@ public static class HierarchyEndpoints
               + "Like an organization unit, where an area sits decides who can see what is inside "
               + "it — a grant on a parent reaches every descendant.");
 
-        areas.MapPost("/{id:guid}/deactivate", async (
-            Guid id, [FromBody] DeactivateRequest request, GeographyRepository repo,
-            NpgsqlDataSource db, HttpContext http, CancellationToken ct) =>
-        {
-            var caller = CallerContextFactory.From(http);
-            caller.Require("geography.manage");
-
-            await using var work = await UnitOfWork.BeginAsync(db, ct);
-
-            return await DeactivateAsync(
-                strategy => repo.DeactivateAreaAsync(id, strategy, request.NewParentId, caller, work, ct),
-                request, caller, work, "geographic_area", id, ct);
-        }).RequirePermission("geography.manage")
+        areas.MapPost("/{id:guid}/deactivate", DeactivateAreaAsync)
+          .RequirePermission("geography.manage")
           .WithSummary("Deactivate a geographic area")
           .WithDescription(
               "Marks an area inactive, with the same two-step refusal as unit deactivation: an "
@@ -289,13 +158,8 @@ public static class HierarchyEndpoints
                        .WithTags(ApiTags.Geography)
                        .RequireAuthorization();
 
-        sites.MapGet("/", async Task<Ok<IReadOnlyList<SiteResponse>>> (
-            Guid? areaId, GeographyRepository repo, HttpContext http, CancellationToken ct) =>
-        {
-            var caller = CallerContextFactory.From(http);
-            var found = await repo.ListSitesAsync(areaId, caller, ct);
-            return TypedResults.Ok<IReadOnlyList<SiteResponse>>([.. found.Select(ToResponse)]);
-        }).RequirePermission("geography.read")
+        sites.MapGet("/", ListSitesAsync)
+          .RequirePermission("geography.read")
           .WithSummary("List sites")
           .WithDescription(
               "Physical installations — a control room, junction, campus or building — each "
@@ -304,33 +168,8 @@ public static class HierarchyEndpoints
               + "A site is what a VMS target's `siteId` points at, so this is the list to draw a "
               + "site picker from during onboarding.");
 
-        sites.MapPost("/", async Task<Created<CreatedResponse>> (
-            [FromBody] SiteRequest request, GeographyRepository repo,
-            NpgsqlDataSource db, HttpContext http, CancellationToken ct) =>
-        {
-            var caller = CallerContextFactory.From(http);
-            caller.Require("geography.manage");
-
-            await using var work = await UnitOfWork.BeginAsync(db, ct);
-
-            var id = await repo.UpsertSiteAsync(new Site
-            {
-                Code = request.Code,
-                Name = request.Name,
-                GeographicAreaId = request.GeographicAreaId,
-                SiteType = request.SiteType,
-                Address = request.Address,
-                Latitude = request.Latitude,
-                Longitude = request.Longitude,
-                Status = request.Status ?? "ACTIVE",
-            }, caller, work, ct);
-
-            await work.AuditAsync(caller, "create", "site", id.ToString(),
-                before: null, after: request, organizationUnitId: null, ct);
-            await work.CommitAsync(ct);
-
-            return TypedResults.Created($"/api/v1/sites/{id}", new CreatedResponse(id));
-        }).RequirePermission("geography.manage")
+        sites.MapPost("/", CreateSiteAsync)
+          .RequirePermission("geography.manage")
           .WithSummary("Create a site")
           .WithDescription(
               "Registers a physical location inside a geographic area. Latitude and longitude are "
@@ -419,5 +258,211 @@ public static class HierarchyEndpoints
         await work.CommitAsync(ct);
 
         return TypedResults.NoContent();
+    }
+
+    private static async Task<Ok<IReadOnlyList<OrganizationResponse>>> ListOrganizationsAsync(
+        OrganizationRepository repo, HttpContext http, CancellationToken ct)
+    {
+        var caller = CallerContextFactory.From(http);
+        var orgs = await repo.ListAsync(caller, ct);
+        return TypedResults.Ok<IReadOnlyList<OrganizationResponse>>([.. orgs.Select(ToResponse)]);
+    }
+
+    private static async Task<Results<Ok<OrganizationResponse>, NotFound>> GetOrganizationAsync(
+        Guid id, OrganizationRepository repo, HttpContext http, CancellationToken ct)
+    {
+        var caller = CallerContextFactory.From(http);
+        var org = await repo.GetAsync(id, caller, ct);
+        return org is null ? TypedResults.NotFound() : TypedResults.Ok(ToResponse(org));
+    }
+
+    private static async Task<Created<CreatedResponse>> CreateOrganizationAsync(
+        [FromBody] OrganizationRequest request, OrganizationRepository repo,
+        NpgsqlDataSource db, HttpContext http, CancellationToken ct)
+    {
+        var caller = CallerContextFactory.From(http);
+        caller.Require("organization.manage");
+
+        await using var work = await UnitOfWork.BeginAsync(db, ct);
+
+        var id = await repo.UpsertAsync(new Organization
+        {
+            Code = request.Code,
+            Name = request.Name,
+            OrganizationType = request.OrganizationType,
+            Description = request.Description,
+            Status = request.Status ?? "ACTIVE",
+        }, caller, work, ct);
+
+        await work.AuditAsync(caller, "create", "organization", id.ToString(),
+            before: null, after: request, organizationUnitId: null, ct);
+        await work.CommitAsync(ct);
+
+        return TypedResults.Created($"/api/v1/organizations/{id}", new CreatedResponse(id));
+    }
+
+    private static async Task<Ok<IReadOnlyList<OrganizationUnitResponse>>> ListUnitsAsync(
+        Guid id, OrganizationRepository repo, HttpContext http, CancellationToken ct)
+    {
+        var caller = CallerContextFactory.From(http);
+        var units = await repo.ListUnitsAsync(id, caller, ct);
+        return TypedResults.Ok<IReadOnlyList<OrganizationUnitResponse>>([.. units.Select(ToResponse)]);
+    }
+
+    private static async Task<Created<CreatedResponse>> CreateUnitAsync(
+        Guid id, [FromBody] OrganizationUnitRequest request, OrganizationRepository repo,
+        NpgsqlDataSource db, HttpContext http, CancellationToken ct)
+    {
+        var caller = CallerContextFactory.From(http);
+        caller.Require("organization.manage");
+
+        await using var work = await UnitOfWork.BeginAsync(db, ct);
+
+        var unitId = await repo.UpsertUnitAsync(new OrganizationUnit
+        {
+            OrganizationId = id,
+            ParentUnitId = request.ParentUnitId,
+            Code = request.Code,
+            Name = request.Name,
+            UnitType = request.UnitType,
+            Status = request.Status ?? "ACTIVE",
+        }, caller, work, ct);
+
+        await work.AuditAsync(caller, "create", "organization_unit", unitId.ToString(),
+            before: null, after: request, organizationUnitId: unitId, ct);
+        await work.CommitAsync(ct);
+
+        return TypedResults.Created($"/api/v1/organization-units/{unitId}", new CreatedResponse(unitId));
+    }
+
+    private static async Task<Results<NoContent, ProblemHttpResult>> DeactivateUnitAsync(
+        Guid id, [FromBody] DeactivateRequest request, OrganizationRepository repo,
+        NpgsqlDataSource db, HttpContext http, CancellationToken ct)
+    {
+        var caller = CallerContextFactory.From(http);
+        caller.Require("organization.manage");
+
+        await using var work = await UnitOfWork.BeginAsync(db, ct);
+
+        return await DeactivateAsync(
+            strategy => repo.DeactivateUnitAsync(id, strategy, request.NewParentId, caller, work, ct),
+            request, caller, work, "organization_unit", id, ct);
+    }
+
+    private static async Task<Ok<IReadOnlyList<GeographicAreaResponse>>> ListAreasAsync(
+        Guid? parentId, bool? rootsOnly, GeographyRepository repo, HttpContext http,
+        CancellationToken ct)
+    {
+        var caller = CallerContextFactory.From(http);
+        var areas = await repo.ListAreasAsync(parentId, rootsOnly ?? false, caller, ct);
+        return TypedResults.Ok<IReadOnlyList<GeographicAreaResponse>>([.. areas.Select(ToResponse)]);
+    }
+
+    private static async Task<Results<Ok<GeographicAreaResponse>, NotFound>> GetAreaAsync(
+        Guid id, GeographyRepository repo, HttpContext http, CancellationToken ct)
+    {
+        var caller = CallerContextFactory.From(http);
+        var area = await repo.GetAreaAsync(id, caller, ct);
+        return area is null ? TypedResults.NotFound() : TypedResults.Ok(ToResponse(area));
+    }
+
+    private static async Task<Ok<IReadOnlyList<GeographicAreaResponse>>> ListAreaChildrenAsync(
+        Guid id, GeographyRepository repo, HttpContext http, CancellationToken ct)
+    {
+        var caller = CallerContextFactory.From(http);
+        var children = await repo.ListAreasAsync(id, false, caller, ct);
+        return TypedResults.Ok<IReadOnlyList<GeographicAreaResponse>>([.. children.Select(ToResponse)]);
+    }
+
+    private static async Task<Ok<IReadOnlyList<GeographicAreaResponse>>> ListAreaAncestorsAsync(
+        Guid id, GeographyRepository repo, HttpContext http, CancellationToken ct)
+    {
+        var caller = CallerContextFactory.From(http);
+        var chain = await repo.GetAncestorsAsync(id, caller, ct);
+        return TypedResults.Ok<IReadOnlyList<GeographicAreaResponse>>([.. chain.Select(ToResponse)]);
+    }
+
+    private static async Task<Ok<IReadOnlyList<AreaTypeResponse>>> ListAreaTypesAsync(
+        GeographyRepository repo, HttpContext http, CancellationToken ct)
+    {
+        CallerContextFactory.From(http).Require("geography.read");
+        var types = await repo.ListAreaTypesAsync(ct);
+        return TypedResults.Ok<IReadOnlyList<AreaTypeResponse>>(
+            [.. types.Select(t => new AreaTypeResponse(t.Code, t.Name, t.LevelOrder))]);
+    }
+
+    private static async Task<Created<CreatedResponse>> CreateAreaAsync(
+        [FromBody] GeographicAreaRequest request, GeographyRepository repo,
+        NpgsqlDataSource db, HttpContext http, CancellationToken ct)
+    {
+        var caller = CallerContextFactory.From(http);
+        caller.Require("geography.manage");
+
+        await using var work = await UnitOfWork.BeginAsync(db, ct);
+
+        var id = await repo.UpsertAreaAsync(new GeographicArea
+        {
+            ParentAreaId = request.ParentAreaId,
+            Code = request.Code,
+            Name = request.Name,
+            AreaType = request.AreaType,
+            Status = request.Status ?? "ACTIVE",
+        }, caller, work, ct);
+
+        await work.AuditAsync(caller, "create", "geographic_area", id.ToString(),
+            before: null, after: request, organizationUnitId: null, ct);
+        await work.CommitAsync(ct);
+
+        return TypedResults.Created($"/api/v1/geographic-areas/{id}", new CreatedResponse(id));
+    }
+
+    private static async Task<Results<NoContent, ProblemHttpResult>> DeactivateAreaAsync(
+        Guid id, [FromBody] DeactivateRequest request, GeographyRepository repo,
+        NpgsqlDataSource db, HttpContext http, CancellationToken ct)
+    {
+        var caller = CallerContextFactory.From(http);
+        caller.Require("geography.manage");
+
+        await using var work = await UnitOfWork.BeginAsync(db, ct);
+
+        return await DeactivateAsync(
+            strategy => repo.DeactivateAreaAsync(id, strategy, request.NewParentId, caller, work, ct),
+            request, caller, work, "geographic_area", id, ct);
+    }
+
+    private static async Task<Ok<IReadOnlyList<SiteResponse>>> ListSitesAsync(
+        Guid? areaId, GeographyRepository repo, HttpContext http, CancellationToken ct)
+    {
+        var caller = CallerContextFactory.From(http);
+        var found = await repo.ListSitesAsync(areaId, caller, ct);
+        return TypedResults.Ok<IReadOnlyList<SiteResponse>>([.. found.Select(ToResponse)]);
+    }
+
+    private static async Task<Created<CreatedResponse>> CreateSiteAsync(
+        [FromBody] SiteRequest request, GeographyRepository repo,
+        NpgsqlDataSource db, HttpContext http, CancellationToken ct)
+    {
+        var caller = CallerContextFactory.From(http);
+        caller.Require("geography.manage");
+
+        await using var work = await UnitOfWork.BeginAsync(db, ct);
+
+        var id = await repo.UpsertSiteAsync(new Site
+        {
+            Code = request.Code,
+            Name = request.Name,
+            GeographicAreaId = request.GeographicAreaId,
+            SiteType = request.SiteType,
+            Address = request.Address,
+            Latitude = request.Latitude,
+            Longitude = request.Longitude,
+            Status = request.Status ?? "ACTIVE",
+        }, caller, work, ct);
+
+        await work.AuditAsync(caller, "create", "site", id.ToString(),
+            before: null, after: request, organizationUnitId: null, ct);
+        await work.CommitAsync(ct);
+
+        return TypedResults.Created($"/api/v1/sites/{id}", new CreatedResponse(id));
     }
 }

@@ -67,6 +67,15 @@ public sealed record RoleResponse(
 public sealed record PermissionResponse(
     string Code, string Name, string Category, string? Description);
 
+/// <summary>
+/// A provisioned API key, as listed. Carries no key material — the raw value is returned once,
+/// only in the creation response.
+/// </summary>
+public sealed record ApiKeyResponse(
+    Guid Id, string KeyId, string DisplayName, Guid GroupId, string GroupCode,
+    DateTimeOffset CreatedAt, DateTimeOffset? ExpiresAt, DateTimeOffset? LastUsedAt,
+    DateTimeOffset? RevokedAt);
+
 /// <summary>A connector target — one VMS the platform federates.</summary>
 public sealed record VmsResponse(
     Guid Id, string Code, Guid OrganizationUnitId, Guid? SiteId, string DisplayName,
@@ -100,7 +109,32 @@ public sealed record FederatedCameraResponse(
     Guid? CameraId,
     string? Name, string? VendorModel, string? Firmware,
     bool IsEnabled, bool? IsRecording, string Health, DateTimeOffset? LastSeen,
-    IReadOnlyList<string> StreamReferences);
+    IReadOnlyList<string> StreamReferences,
+    DateTimeOffset? StatusChangedAt);
+
+/// <summary>One recorded change in a camera's status.</summary>
+/// <remarks>
+/// The previous values are null on the camera's first observation, meaning "no earlier status"
+/// rather than "the earlier status is unknown". Rows exist only where something actually changed:
+/// a camera that has been healthy for a month has one row, not a month of samples.
+/// </remarks>
+public sealed record CameraStatusChangeResponse(
+    DateTimeOffset ChangedAt,
+    string? PreviousHealth, string Health,
+    bool? PreviousEnabled, bool IsEnabled,
+    bool? PreviousRecording, bool? IsRecording);
+
+/// <summary>A camera's status timeline over a requested window.</summary>
+/// <remarks>
+/// <c>Changes</c> is newest first, and its last element may pre-date <c>From</c>: that is the
+/// transition which established the status the window opened with, without which a chart cannot
+/// draw its first segment.
+/// </remarks>
+public sealed record CameraStatusHistoryResponse(
+    string NativeCameraId,
+    DateTimeOffset From,
+    DateTimeOffset To,
+    IReadOnlyList<CameraStatusChangeResponse> Changes);
 
 /// <summary>Fleet summary for a dashboard, scoped to what the caller may reach.</summary>
 public sealed record OverviewResponse(

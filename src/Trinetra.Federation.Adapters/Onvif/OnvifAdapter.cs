@@ -176,10 +176,31 @@ public sealed partial class OnvifAdapter : IVmsAdapter
         var profiles = await GetProfilesAsync(cancellationToken).ConfigureAwait(false);
         var deviceInfo = await GetDeviceInformationAsync(cancellationToken).ConfigureAwait(false);
 
+        // The physical sensors, straight from the device. This is the authoritative camera set:
+        // GetProfiles alone over-counts, because a single-sensor camera routinely publishes a
+        // main + sub + third profile and cheap devices omit or vary the SourceToken that would
+        // tie them back together, so keying inventory off the profiles yields 3 "cameras".
+        var videoSources = await GetVideoSourcesAsync(cancellationToken).ConfigureAwait(false);
+
         var bySource = new Dictionary<string, List<OnvifProfile>>(StringComparer.Ordinal);
+        foreach (var token in videoSources)
+        {
+            bySource[token] = [];
+        }
+
+        var soleSource = videoSources.Count == 1 ? videoSources[0] : null;
+
         foreach (var profile in profiles)
         {
-            var key = profile.SourceToken ?? profile.Token;
+            // Attach the profile to its own source when the device names one we know; otherwise,
+            // if the device has exactly one sensor, everything belongs to it. Only when neither
+            // holds do we fall back to treating the profile's own token as a distinct camera.
+            var key =
+                profile.SourceToken is { } s && bySource.ContainsKey(s) ? s
+                : soleSource
+                ?? profile.SourceToken
+                ?? profile.Token;
+
             if (!bySource.TryGetValue(key, out var list))
             {
                 bySource[key] = list = [];
@@ -191,14 +212,16 @@ public sealed partial class OnvifAdapter : IVmsAdapter
         var cameras = new List<FederatedCamera>(bySource.Count);
         foreach (var (sourceToken, sourceProfiles) in bySource)
         {
-            var primary = sourceProfiles[0];
+            // A sensor the device reports but publishes no profile for is still a camera —
+            // it exists, it just has no stream to hand out yet.
+            var primary = sourceProfiles.Count > 0 ? sourceProfiles[0] : null;
 
             cameras.Add(new FederatedCamera
             {
                 TargetId = Target.Id,
                 NativeCameraId = sourceToken,
                 OrganizationUnitId = Target.OrganizationUnitId,
-                Name = primary.Name ?? sourceToken,
+                Name = primary?.Name ?? sourceToken,
                 VendorModel = deviceInfo.Model,
                 Firmware = deviceInfo.FirmwareVersion,
                 IsEnabled = true,
@@ -647,6 +670,47 @@ public sealed partial class OnvifAdapter : IVmsAdapter
 
         static string? Read(XElement root, string name) =>
             root.Descendants().FirstOrDefault(e => e.Name.LocalName == name)?.Value;
+    }
+
+    /// <summary>
+    /// The device's physical video sources, in declaration order.
+    /// </summary>
+    /// <remarks>
+    /// One entry per sensor. A device that answers <c>GetProfiles</c> but not this — some very
+    /// old Profile S firmware — yields an empty list, and the caller falls back to grouping by
+    /// profile source token.
+    /// </remarks>
+    private async Task<IReadOnlyList<string>> GetVideoSourcesAsync(CancellationToken cancellationToken)
+    {
+        var media = _mediaService ?? throw new CapabilityException(
+            "Device advertised no Media service.", nameof(Capability.Inventory), Target.Id);
+
+        var body = new XElement(Ns.Media + "GetVideoSources",
+            new XAttribute(XNamespace.Xmlns + "trt", Ns.Media.NamespaceName));
+
+        XElement response;
+        try
+        {
+            response = await _soap.InvokeAsync(
+                media, body, authenticate: true, action: null, cancellationToken).ConfigureAwait(false);
+        }
+        catch (CapabilityException)
+        {
+            // Optional in practice: fall back to profile-derived grouping.
+            return [];
+        }
+
+        var tokens = new List<string>();
+        foreach (var element in response.Descendants().Where(e => e.Name.LocalName == "VideoSources"))
+        {
+            var token = element.Attribute("token")?.Value;
+            if (!string.IsNullOrWhiteSpace(token) && !tokens.Contains(token, StringComparer.Ordinal))
+            {
+                tokens.Add(token);
+            }
+        }
+
+        return tokens;
     }
 
     private async Task<IReadOnlyList<OnvifProfile>> GetProfilesAsync(CancellationToken cancellationToken)

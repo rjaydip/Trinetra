@@ -175,11 +175,16 @@ one either.
 
 Credential handling has its own rules:
 
-- No `GET` exists at any path for a stored credential.
+- Exactly one `GET` returns a stored credential: `GET /api/v1/vms/{id}/credential/resolve`,
+  gated on `credential.resolve` (only the `DETECTION_WORKER` machine role holds it), scoped
+  through the target, and audited on every call. It exists because Model 2's AI worker connects
+  to camera streams directly. If the audit row cannot be written the secret is withheld (503).
+  Nothing else — no other route, no other response type — carries credential material.
 - The write is audited as *that* it changed, never *to what*.
 - The reference comes from the target row, never from the request body.
 - `Credential.ToString()` is redacted deliberately.
-- Every credential *resolution* is logged separately, in `credential_access_log`.
+- Every credential *resolution* is logged separately, in `credential_access_log` — with the
+  accessor and the target, success or failure.
 
 ---
 

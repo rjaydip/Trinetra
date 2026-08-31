@@ -3,6 +3,7 @@ using System.Text.Json;
 using Dapper;
 using Microsoft.Extensions.Logging.Abstractions;
 using Shouldly;
+using Trinetra.Federation.Core.Abstractions;
 using Trinetra.Federation.Core.Events;
 using Trinetra.Federation.Storage;
 using Trinetra.Federation.Storage.Secrets;
@@ -159,6 +160,39 @@ public sealed class SecretsAndEventsTests : IClassFixture<PostgresFixture>, IAsy
         // go hunting the wrong problem.
         ex.Message.ShouldContain("test-key-1");
         ex.Message.ShouldContain("test-key-2");
+    }
+
+    [Fact]
+    public async Task ResolutionWithContext_AuditsTheCallerAndTarget()
+    {
+        // The worker credential-resolve endpoint must be able to answer "which caller read which
+        // credential, for which target" — not just attribute it to the resolving process.
+        await StoreSecretAsync("vault://x", "admin", "pw");
+
+        await NewResolver().ResolveAsync(
+            "vault://x",
+            new CredentialAccessContext("apikey:worker-42", TargetOne, AuditFailureIsFatal: true),
+            CancellationToken.None);
+
+        var audited = await _fixture.ScalarAsync<long>($"""
+            SELECT count(*) FROM federation.credential_access_log
+            WHERE credential_reference = 'vault://x' AND succeeded
+              AND accessed_by = 'apikey:worker-42' AND target_id = '{TargetOne}';
+            """);
+
+        audited.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task ResolutionWithContext_ForUnprovisionedTarget_ThrowsNotProvisioned()
+    {
+        // The endpoint maps this to 404, not 500: a target created but not yet given a
+        // credential is an ordinary onboarding state.
+        await Should.ThrowAsync<CredentialNotProvisionedException>(
+            NewResolver().ResolveAsync(
+                "vault://never-set",
+                new CredentialAccessContext("apikey:worker-42", TargetOne, AuditFailureIsFatal: true),
+                CancellationToken.None));
     }
 
     // ---- Event persistence -------------------------------------------------

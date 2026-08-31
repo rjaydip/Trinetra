@@ -7,7 +7,7 @@ namespace Trinetra.Federation.Api.OpenApi;
 /// Publishes the group descriptions from <see cref="ApiTags"/> into the document.
 /// </summary>
 /// <remarks>
-/// <c>MapGroup(...).WithTags(...)</c> names a section but says nothing about it, so Swagger UI
+/// <c>MapGroup(...).WithTags(...)</c> names a section but says nothing about it, so Scalar
 /// renders eight bare headings and a reader has to infer what each group is for from the route
 /// names beneath it. Declaring the tags at document level attaches a paragraph to each heading
 /// and fixes their order — tags that only appear on operations are otherwise emitted in whatever
@@ -31,7 +31,7 @@ internal sealed class TagDescriptionTransformer : IOpenApiDocumentTransformer
             + "and a resource outside their scope reads as 404 rather than 403 so that ids "
             + "cannot be probed.\n\n"
             + "**To try anything here:** call `POST /api/v1/auth/login`, copy the `token` value, "
-            + "click **Authorize**, and paste the token **without** typing `Bearer` — Swagger "
+            + "click **Authorize**, and paste the token **without** typing `Bearer` — Scalar "
             + "adds that prefix itself, and typing it too sends `Bearer Bearer <token>`, which "
             + "returns 401 on every call.\n\n"
             + "This API never carries video. Streams and snapshots appear as references only.";
