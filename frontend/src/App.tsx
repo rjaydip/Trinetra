@@ -6,6 +6,8 @@ import { LoginPage } from './auth/LoginPage';
 import { PasswordPage } from './auth/PasswordPage';
 import { RequireAuth } from './auth/RequireAuth';
 import { AppShell } from './components/AppShell';
+import { CameraDetailPage } from './features/cameras/CameraDetailPage';
+import { RegistryPage } from './features/cameras/RegistryPage';
 import { MapPage } from './features/map/MapPage';
 
 export function App() {
@@ -20,6 +22,8 @@ export function App() {
         <Route path="/password" element={<RequireAuth passwordChangeOnly><PasswordPage /></RequireAuth>} />
         <Route element={<RequireAuth><AppShell /></RequireAuth>}>
           <Route path="/dashboard" element={<MapPage />} />
+          <Route path="/cameras" element={<RegistryPage />} />
+          <Route path="/cameras/:cameraId" element={<CameraDetailPage />} />
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Route>
       </Routes>

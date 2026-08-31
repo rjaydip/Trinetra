@@ -74,11 +74,52 @@ a { color: var(--color-primary); }
 .camera-detail-sections dl div { display: grid; gap: .125rem; }
 .camera-detail-sections dt { color: var(--color-muted); font-weight: 600; }
 .camera-detail-sections dd { margin: 0; }
+.registry-page, .camera-detail-page { display: grid; gap: 1.25rem; }
+.registry-page__header h1, .camera-detail-page h1 { margin: .25rem 0 0; }
+.registry-filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); gap: .75rem; padding: 1rem; border: 1px solid var(--color-border); background: var(--color-surface); }
+.registry-filters legend { font-weight: 700; }
+.registry-filters label { display: grid; gap: .375rem; color: var(--color-text); font-size: .875rem; font-weight: 600; }
+.registry-filters input { min-height: 2.75rem; padding: .5rem .625rem; border: 1px solid var(--color-border); border-radius: .375rem; color: var(--color-text); background: var(--color-surface); font: inherit; }
+.registry-filters .checkbox-label { display: flex; align-items: center; gap: .5rem; padding-top: 1.7rem; }
+.registry-filters .checkbox-label input { min-height: 1.25rem; width: 1.25rem; }
+.button--secondary { color: var(--color-primary); background: var(--color-surface); }
+.button--secondary:hover { color: white; background: var(--color-primary); }
+.camera-table-wrap { display: none; overflow-x: auto; border: 1px solid var(--color-border); background: var(--color-surface); }
+.camera-table { width: 100%; border-collapse: collapse; text-align: left; }
+.camera-table th, .camera-table td { padding: .875rem; border-bottom: 1px solid var(--color-border); vertical-align: middle; }
+.camera-table th { color: var(--color-muted); font-size: .75rem; letter-spacing: .04em; text-transform: uppercase; }
+.camera-table a, .camera-card a, .back-link { color: var(--color-primary); font-weight: 700; }
+.camera-cards { display: grid; gap: .75rem; margin: 0; padding: 0; list-style: none; }
+.camera-card { display: grid; gap: .5rem; padding: 1rem; border: 1px solid var(--color-border); border-radius: .75rem; background: var(--color-surface); }
+.camera-card h2 { margin: .125rem 0 0; font-size: 1.125rem; }
+.camera-card > p { margin: 0; color: var(--color-muted); }
+.camera-card dl, .detail-panel dl { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .75rem; margin: .25rem 0 0; }
+.camera-card dl div, .detail-panel dl div { display: grid; gap: .25rem; }
+.camera-card dt, .detail-panel dt { color: var(--color-muted); font-size: .75rem; font-weight: 700; text-transform: uppercase; }
+.camera-card dd, .detail-panel dd { margin: 0; }
+.registry-pagination { display: flex; align-items: center; justify-content: space-between; gap: .75rem; }
+.registry-pagination span { color: var(--color-muted); }
+.registry-pagination button:disabled { cursor: not-allowed; opacity: .55; }
+.back-link { width: fit-content; }
+.camera-detail-page > header { padding-bottom: 1rem; border-bottom: 1px solid var(--color-border); }
+.detail-panel { padding: 1rem; border: 1px solid var(--color-border); border-radius: .75rem; background: var(--color-surface); }
+.detail-panel h2 { margin-top: 0; }
+.maintenance-records { display: grid; gap: .75rem; margin: 0; padding: 0; list-style: none; }
+.maintenance-records li { padding-top: .75rem; border-top: 1px solid var(--color-border); }
+.maintenance-records p { margin: .375rem 0 0; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 
 @media (max-width: 42rem) {
   .app-header { align-items: flex-start; flex-direction: column; gap: .75rem; }
   .app-content { width: min(100% - 1.5rem, 80rem); padding-block: 1.5rem; }
   .map-page__header { display: grid; }
+  .camera-card dl, .detail-panel dl { grid-template-columns: 1fr; }
+  .registry-pagination { align-items: stretch; flex-direction: column; }
+}
+
+@media (min-width: 43rem) {
+  .camera-table-wrap { display: block; }
+  .camera-cards { display: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {
