@@ -200,8 +200,10 @@ The first is a choice; the two after it are gaps.
   the trade being made. The consequence is that a new query which omits its scope predicate
   returns everything rather than nothing, so the compile-time `CallerContext` requirement is
   load-bearing rather than a convenience — see §3.
-- **Event geographic scoping is incomplete.** `federated_camera.camera_id` stays null until Model
-  1's registry exists, so events carry organization scope only. Organization scope works fully.
+- **Event geographic scoping is incomplete.** Events carry organization scope only. The camera
+  registry now exists (`v1.6`) and camera reads/writes are scoped on organization **and**
+  geography, but the event pipeline is not yet joined to a camera's site, so events remain
+  organization-scoped until that link is added. Organization scope works fully.
 - **The audit `before` snapshot is read outside the transaction.** If another writer changes the
   row in that window, the recorded `before` is stale. Rare, but it is the remaining inaccuracy in
   the trail.

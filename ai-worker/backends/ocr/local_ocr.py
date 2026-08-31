@@ -8,6 +8,7 @@ this step. EasyOCR is used as shipped, pretrained; no custom training.
 from __future__ import annotations
 
 import logging
+import statistics
 
 import numpy as np
 
@@ -45,7 +46,9 @@ class LocalOcrProcessor(AnprProcessor):
         results.sort(key=lambda item: min(point[0] for point in item[0]))
 
         text = "".join(fragment for _, fragment, _ in results)
-        confidence = min(conf for _, _, conf in results)
+        # Median, not min: a plate often OCRs as several fragments and one weak fragment should
+        # not veto an otherwise-confident read.
+        confidence = statistics.median(conf for _, _, conf in results)
 
         if not text or confidence < self._confidence_threshold:
             return None

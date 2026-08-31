@@ -66,6 +66,17 @@ public sealed record CallerContext
     public bool IsUnscopedFor(string permission) =>
         IsSystem || UnscopedPermissions.Contains(permission);
 
+    /// <summary>
+    /// Whether this caller exercises one specific permission without GEOGRAPHIC scope limits.
+    /// </summary>
+    /// <remarks>
+    /// The independent-dimension counterpart of <see cref="IsUnscopedFor"/>. ANDed with it,
+    /// never substituted for it: a caller unscoped organizationally may still be confined to a
+    /// district, and vice versa.
+    /// </remarks>
+    public bool IsUnscopedForGeography(string permission) =>
+        IsSystem || UnscopedGeography.Contains(permission);
+
     /// <summary>Source address, recorded on audit rows.</summary>
     public string? SourceAddress { get; init; }
 

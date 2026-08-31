@@ -270,8 +270,11 @@ retention onto an unpartitioned 400M-row/day table is not feasible.
 | Search | OpenSearch, rollover + ILM | 90–365 days | Free-text and faceted event search |
 | Cold | Object store, Parquet | Retention policy | Audit, forensics, replay |
 
-PostGIS lives in the same PostgreSQL instance and is shared with Model 1 — camera
-location is Model 1's authoritative data, and Model 3 reads it rather than copying it.
+Camera location is Model 1's authoritative data (`cameras`, `db/versions/v1.6.sql`). Model 3's
+`federated_camera` keeps its own *observed* coordinates from the VMS and is linked to the
+registry record by reconciliation (`federated_camera.camera_id`). PostGIS is **not** installed —
+Model 1's coverage sectors are computed in the application; spatial querying is deferred to the
+version that adds coverage-gap analysis.
 
 **Partitioning is not optional.** At the medium design point this table grows by
 100–400M rows/day. Partitions are created ahead of time by a maintenance job and dropped

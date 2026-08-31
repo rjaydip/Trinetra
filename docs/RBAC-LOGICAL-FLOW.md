@@ -123,6 +123,9 @@ Permissions represent concrete actions.
 camera.read
 camera.create
 camera.update
+camera.delete
+camera.import
+camera.reconcile
 camera.health.read
 camera.maintenance.read
 camera.maintenance.update

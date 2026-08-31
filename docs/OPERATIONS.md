@@ -41,7 +41,26 @@ only the current provider, not an application requirement. Set `ConnectionString
 ```text
    db/versions/v1.sql       everything for v1 — tables, functions, views, reference data
    db/versions/v1.1.sql     only what v1.1 adds, applied on top of a v1 database
+   ...
+   db/versions/v1.6.sql     camera registry, health & maintenance tables, and the
+                            camera.delete / camera.import / camera.reconcile permissions
 ```
+
+The latest version is `v1.6`. A database that stopped earlier will 403 on the camera-registry
+routes that need the new permissions, and 500 (`relation "cameras" does not exist`) on the
+registry and GIS endpoints.
+
+For a **fresh** database, `db/full-schema.sql` is a single self-contained script — every version
+file inlined in apply order, including the reference data (permissions, roles) — so one command
+builds the whole database:
+
+```text
+psql -U trinetra -d trinetra -f db/full-schema.sql
+```
+
+`db/versions/*.sql` stays the source of truth; regenerate `full-schema.sql` after adding a
+version file. Do not run it against a database that already has an earlier version — apply only
+the individual files it has not had. It does not include `db/seed/dev-sample-data.sql`.
 
 A fresh install applies them in order. An existing database applies only what it has not had.
 **A version file is never edited once applied anywhere** — installs that ran the old text would

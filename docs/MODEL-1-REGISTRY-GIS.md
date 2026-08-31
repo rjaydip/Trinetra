@@ -122,23 +122,36 @@ failure_reason
 
 ## APIs
 
-Example REST resources:
+A first slice is implemented under `/api/v1`. **`docs/MODEL-1-API-PLAN.md` is the authoritative
+contract** — request/response shapes, the `v1.6` schema, scope rules, validation, and what is
+and is not built. In outline:
 
 ``` text
-POST   /api/cameras
-GET    /api/cameras
-GET    /api/cameras/{cameraId}
-PUT    /api/cameras/{cameraId}
-DELETE /api/cameras/{cameraId}
+POST   /api/v1/cameras                          register (manual onboarding)
+GET    /api/v1/cameras                          paginated, filtered registry list
+GET    /api/v1/cameras/{id}
+PUT    /api/v1/cameras/{id}                      full replace
+PATCH  /api/v1/cameras/{id}                      partial update
+DELETE /api/v1/cameras/{id}                      soft-delete / retire
 
-POST   /api/cameras/bulk-import
-GET    /api/cameras/{cameraId}/health
-GET    /api/cameras/{cameraId}/maintenance
+POST   /api/v1/cameras/bulk-import              insert | upsert, per-row result
+GET    /api/v1/cameras/{id}/health              + /health/history
+PATCH  /api/v1/cameras/{id}/health              manual override
+GET    /api/v1/cameras/{id}/maintenance         + POST, + PATCH .../{recordId}
 
-GET    /api/gis/cameras
-GET    /api/gis/coverage
-GET    /api/gis/gaps
+GET    /api/v1/cameras/unreconciled             reconciliation backlog
+POST   /api/v1/cameras/{id}/reconcile           link to a VMS-discovered camera
+POST   /api/v1/cameras/from-federated           create + link in one call
+
+GET    /api/v1/gis/cameras                      GeoJSON map source, bbox-limited
+GET    /api/v1/cameras/{id}/coverage            estimated coverage sector
+GET    /api/v1/gis/coverage                     aggregate counts, no geometry
+GET    /api/v1/gis/gaps                         501 until spatial querying lands
 ```
+
+Coverage sectors are computed in the application from azimuth + horizontal FOV + effective
+range; there is no stored geometry and no PostGIS. Coverage-gap analysis is deferred to the
+version that introduces spatial querying.
 
 ## Federation Discovery and Reconciliation
 
@@ -166,9 +179,10 @@ The worker refreshes the discovered inventory approximately every five minutes a
 30 seconds. It does not remove a registry record, or mark a camera retired, merely because one
 poll returns a partial inventory.
 
-When the Model 1 registry API is implemented, manual registration will use the registry resource
-(`POST /api/cameras` in this specification). A reconciliation operation will then link the
-stable registry UUID to the VMS-native identifier while preserving both ownership models.
+Manual registration uses the registry resource (`POST /api/v1/cameras`). Reconciliation
+(`POST /api/v1/cameras/{id}/reconcile`, or `GET /api/v1/cameras/unreconciled` for the backlog)
+then links the stable registry UUID to the VMS-native identifier while preserving both ownership
+models; the inventory poll never clears an existing link.
 
 ## Demonstration
 

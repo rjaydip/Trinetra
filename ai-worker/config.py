@@ -87,5 +87,10 @@ class Settings(BaseSettings):
     # --- Evidence -----------------------------------------------------------------------------
     evidence_dir: str = str(AI_WORKER_ROOT / "evidence")
 
+    # --- Logging -----------------------------------------------------------------------------
+    # DEBUG adds the per-stage pipeline trace (vehicle regions -> plate candidates -> OCR text
+    # -> normalized), which is how you see which stage drops a plate.
+    log_level: str = "INFO"
+
 
 settings = Settings()

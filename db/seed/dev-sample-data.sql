@@ -1,10 +1,12 @@
 -- Trinetra — development sample data
 --
--- Fills a v1 database with a plausible estate so the frontend has something to render:
+-- Fills the database with a plausible estate so the frontend has something to render:
 -- hierarchies, sites, users across every role, connector targets in every state, ~230
--- federated cameras, a week of health history, ~6,500 normalised events, audit trails.
+-- federated cameras, 36 registered cameras (Model 1) with coverage optics / health / open
+-- maintenance and twelve reconciled to VMS rows, a week of health history, ~6,500 normalised
+-- events, audit trails.
 --
---     psql -U trinetra -d trinetra -f db/versions/v1.sql          # schema first
+--     psql -U trinetra -d trinetra -f db/full-schema.sql          # schema first (v1..v1.6)
 --     psql -U trinetra -d trinetra -f db/seed/dev-sample-data.sql # then this
 --
 -- NOT a schema version. It lives outside db/versions/ deliberately: version files are never
@@ -1136,6 +1138,186 @@ SELECT now() - (n * interval '7 minutes'),
 FROM generate_series(1, 9) AS n;
 
 
+-- ===========================================================================
+-- 14. camera registry, health and maintenance  (Model 1, schema v1.6)
+-- ===========================================================================
+-- 36 registered cameras across six sites: a mix of types, most with the optics a coverage
+-- sector needs (azimuth + horizontal_fov + effective_range), and a spread of operational,
+-- connectivity and maintenance states — one retired, a few under maintenance, a few flagged.
+-- Then health-history rows, open/closed maintenance records, and reconciliation of the first
+-- twelve to the cameras the VMS targets already report.
+--
+-- All ids are fixed (f1... cameras, f2... maintenance) and every statement is ON CONFLICT or
+-- NOT EXISTS guarded, so this section is re-runnable like the rest of the file.
+
+WITH place(seq, site_id, org_unit_id, tail) AS (VALUES
+    (0, 'd0000000-0000-4000-8000-000000000001'::uuid, 'c0000000-0000-4000-8000-000000000003'::uuid, 'AHM-SG'),
+    (1, 'd0000000-0000-4000-8000-000000000002'::uuid, 'c0000000-0000-4000-8000-000000000003'::uuid, 'AHM-MANI'),
+    (2, 'd0000000-0000-4000-8000-000000000004'::uuid, 'c0000000-0000-4000-8000-000000000002'::uuid, 'AHM-KANK'),
+    (3, 'd0000000-0000-4000-8000-000000000005'::uuid, 'c0000000-0000-4000-8000-000000000006'::uuid, 'SRT-RING'),
+    (4, 'd0000000-0000-4000-8000-000000000007'::uuid, 'c0000000-0000-4000-8000-000000000007'::uuid, 'VAD-ALKA'),
+    (5, 'd0000000-0000-4000-8000-000000000008'::uuid, 'c0000000-0000-4000-8000-000000000007'::uuid, 'VAD-STN')
+),
+gen AS (
+    SELECT p.seq, p.site_id, p.org_unit_id, p.tail, n, (p.seq * 10 + n) AS rn
+    FROM place p CROSS JOIN generate_series(1, 6) AS n
+)
+INSERT INTO cameras (
+    id, camera_code, name, organization_unit_id, site_id, manufacturer, model, camera_type,
+    latitude, longitude, mounting_height, azimuth, tilt, horizontal_fov, vertical_fov,
+    effective_range, ip_address, port, protocol,
+    operational_status, connectivity_status, maintenance_status,
+    deleted_at, deleted_by, last_seen_at, last_health_check_at, created_by, updated_by)
+SELECT
+    ('f1000000-0000-4000-8000-' || lpad(to_hex(g.rn), 12, '0'))::uuid,
+    format('CAM-%s-%s', g.tail, lpad(g.n::text, 2, '0')),
+    format('%s — Camera %s', g.tail, lpad(g.n::text, 2, '0')),
+    g.org_unit_id, g.site_id,
+    -- Only vendors the platform actually integrates (see the vendor_kind enum in v1.sql):
+    -- CP Plus units run the Dahua CGI adapter. Reconciled cameras below get their
+    -- manufacturer/model corrected to the linked VMS target's vendor.
+    (ARRAY['Hikvision','Dahua','CP Plus'])[1 + (g.rn % 3)],
+    (ARRAY['DS-2CD2T47G2-L','IPC-HFW3849T1','CP-UNC-TA51L3S'])[1 + (g.rn % 3)],
+    (ARRAY['FIXED','FIXED','PTZ','DOME','BULLET','ANPR'])[1 + (g.n % 6)],
+    s.latitude  + ((g.n % 5) - 2) * 0.00080,
+    s.longitude + ((g.n % 3) - 1) * 0.00100,
+    round((4 + (g.rn % 6))::numeric, 1),
+    (g.n * 57 % 360),
+    -5,
+    (ARRAY[60,90,110,45])[1 + (g.n % 4)],
+    35,
+    (ARRAY[80,120,150,200])[1 + (g.rn % 4)],
+    ('10.20.' || (g.seq + 1) || '.' || (10 + g.n))::inet,
+    554, 'RTSP',
+    CASE WHEN g.rn % 13 = 0 THEN 'OFFLINE'
+         WHEN g.rn % 7  = 0 THEN 'DEGRADED'
+         ELSE 'ONLINE' END,
+    CASE WHEN g.rn % 13 = 0 THEN 'DISCONNECTED' ELSE 'CONNECTED' END,
+    CASE WHEN g.rn % 17 = 0 THEN 'RETIRED'
+         WHEN g.rn % 9  = 0 THEN 'UNDER_MAINTENANCE'
+         WHEN g.rn % 5  = 0 THEN 'REQUIRED'
+         ELSE 'NORMAL' END,
+    CASE WHEN g.rn % 17 = 0 THEN now() - interval '20 days' END,
+    CASE WHEN g.rn % 17 = 0 THEN 'e0000000-0000-4000-8000-000000000001'::uuid END,
+    now() - ((g.rn % 45) * interval '1 minute'),
+    now() - ((g.rn % 30) * interval '1 minute'),
+    'e0000000-0000-4000-8000-000000000001'::uuid,
+    'e0000000-0000-4000-8000-000000000001'::uuid
+FROM gen g JOIN sites s ON s.id = g.site_id
+ON CONFLICT (id) DO UPDATE SET
+    operational_status  = EXCLUDED.operational_status,
+    connectivity_status = EXCLUDED.connectivity_status,
+    maintenance_status  = EXCLUDED.maintenance_status,
+    deleted_at = EXCLUDED.deleted_at, deleted_by = EXCLUDED.deleted_by,
+    last_seen_at = EXCLUDED.last_seen_at, last_health_check_at = EXCLUDED.last_health_check_at,
+    updated_at = now();
+
+-- One baseline health-history row per live camera, a week back, so /health/history is not empty.
+INSERT INTO camera_health_history (camera_id, operational_status, connectivity_status,
+                                   checked_at, source, recorded_by)
+SELECT c.id, 'ONLINE', 'CONNECTED', now() - interval '7 days', 'FEDERATION', NULL
+FROM cameras c
+WHERE c.id::text LIKE 'f1000000-%' AND c.deleted_at IS NULL
+  AND NOT EXISTS (SELECT 1 FROM camera_health_history h WHERE h.camera_id = c.id);
+
+-- A recent MANUAL override row for every camera not currently ONLINE.
+INSERT INTO camera_health_history (camera_id, operational_status, connectivity_status,
+                                   checked_at, failure_reason, source, recorded_by)
+SELECT c.id, c.operational_status, c.connectivity_status,
+       now() - interval '6 hours',
+       CASE c.operational_status
+           WHEN 'OFFLINE'  THEN 'No RTSP response; power suspected at the pole.'
+           WHEN 'DEGRADED' THEN 'Intermittent packet loss on the uplink.'
+           ELSE 'Operator status check.' END,
+       'MANUAL', 'e0000000-0000-4000-8000-000000000001'::uuid
+FROM cameras c
+WHERE c.id::text LIKE 'f1000000-%' AND c.deleted_at IS NULL
+  AND c.operational_status <> 'ONLINE'
+  AND NOT EXISTS (SELECT 1 FROM camera_health_history h
+                  WHERE h.camera_id = c.id AND h.source = 'MANUAL');
+
+-- An open maintenance record for every REQUIRED / UNDER_MAINTENANCE camera.
+INSERT INTO maintenance_records (id, camera_id, maintenance_type, status, description,
+                                 reported_at, started_at, next_due_at, performed_by,
+                                 created_by, updated_by)
+SELECT
+    ('f2000000-0000-4000-8000-' ||
+     lpad(to_hex(row_number() OVER (ORDER BY c.camera_code)), 12, '0'))::uuid,
+    c.id,
+    CASE WHEN c.maintenance_status = 'UNDER_MAINTENANCE' THEN 'CORRECTIVE' ELSE 'PREVENTIVE' END,
+    CASE WHEN c.maintenance_status = 'UNDER_MAINTENANCE' THEN 'IN_PROGRESS' ELSE 'OPEN' END,
+    CASE WHEN c.maintenance_status = 'UNDER_MAINTENANCE'
+         THEN 'Housing water ingress; unit swap scheduled.'
+         ELSE 'Lens clean, mount re-torque and firmware check.' END,
+    now() - interval '2 days',
+    CASE WHEN c.maintenance_status = 'UNDER_MAINTENANCE' THEN now() - interval '1 day' END,
+    now() + interval '30 days',
+    'FieldOps Contractor',
+    'e0000000-0000-4000-8000-000000000001'::uuid,
+    'e0000000-0000-4000-8000-000000000001'::uuid
+FROM cameras c
+WHERE c.id::text LIKE 'f1000000-%' AND c.deleted_at IS NULL
+  AND c.maintenance_status IN ('REQUIRED', 'UNDER_MAINTENANCE')
+  AND NOT EXISTS (SELECT 1 FROM maintenance_records m
+                  WHERE m.camera_id = c.id AND m.status IN ('OPEN', 'IN_PROGRESS'))
+ON CONFLICT (id) DO NOTHING;
+
+-- One historical, completed record so the maintenance timeline has depth.
+INSERT INTO maintenance_records (id, camera_id, maintenance_type, status, description,
+                                 reported_at, started_at, completed_at, performed_by,
+                                 created_by, updated_by)
+SELECT 'f2000000-0000-4000-8000-0000000000ff'::uuid, c.id, 'INSPECTION', 'COMPLETED',
+       'Annual inspection — passed, no action.',
+       now() - interval '40 days', now() - interval '39 days', now() - interval '38 days',
+       'FieldOps Contractor',
+       'e0000000-0000-4000-8000-000000000001'::uuid,
+       'e0000000-0000-4000-8000-000000000001'::uuid
+FROM cameras c
+WHERE c.camera_code = 'CAM-AHM-SG-01'
+ON CONFLICT (id) DO NOTHING;
+
+-- Reconcile the first twelve registered cameras to the VMS-reported cameras that have no
+-- registry match yet. Registry cameras already linked are skipped, so a re-run is a no-op.
+WITH reg AS (
+    SELECT c.id, row_number() OVER (ORDER BY c.camera_code) AS rn
+    FROM cameras c
+    WHERE c.id::text LIKE 'f1000000-%' AND c.deleted_at IS NULL
+      AND NOT EXISTS (SELECT 1 FROM federated_camera fc WHERE fc.camera_id = c.id)
+    LIMIT 12
+),
+fed AS (
+    SELECT target_id, native_camera_id,
+           row_number() OVER (ORDER BY target_id, native_camera_id) AS rn
+    FROM federated_camera
+    WHERE camera_id IS NULL
+    ORDER BY target_id, native_camera_id
+    LIMIT 12
+)
+UPDATE federated_camera f
+SET camera_id = reg.id, updated_at = now()
+FROM reg JOIN fed ON fed.rn = reg.rn
+WHERE f.target_id = fed.target_id AND f.native_camera_id = fed.native_camera_id;
+
+-- Adopt the VMS id, primary stream reference, and the target's actual vendor/model onto the
+-- cameras just reconciled — so a reconciled registry camera always names an integrated vendor.
+UPDATE cameras c
+SET vms_id = f.target_id,
+    stream_reference = f.stream_references[1],
+    manufacturer = CASE t.vendor
+        WHEN 'HikvisionIsapi'   THEN 'Hikvision'
+        WHEN 'DahuaCgi'         THEN 'Dahua'
+        WHEN 'Onvif'            THEN 'ONVIF'
+        WHEN 'MilestoneGateway' THEN 'Milestone'
+        WHEN 'GenetecWebSdk'    THEN 'Genetec'
+        WHEN 'Simulator'        THEN 'Simulator'
+    END,
+    model = COALESCE(f.vendor_model, c.model),
+    updated_at = now()
+FROM federated_camera f
+JOIN connector_target t ON t.id = f.target_id
+WHERE f.camera_id = c.id AND c.vms_id IS NULL;
+
+
 COMMIT;
 
 
@@ -1151,7 +1333,10 @@ COMMIT;
 --   UNION ALL SELECT 'users',     count(*) FROM federation.platform_users
 --   UNION ALL SELECT 'groups',    count(*) FROM federation.access_groups
 --   UNION ALL SELECT 'targets',   count(*) FROM federation.connector_target
---   UNION ALL SELECT 'cameras',   count(*) FROM federation.federated_camera
+--   UNION ALL SELECT 'federated cameras', count(*) FROM federation.federated_camera
+--   UNION ALL SELECT 'registered cameras', count(*) FROM federation.cameras
+--   UNION ALL SELECT 'reconciled', count(*) FROM federation.federated_camera WHERE camera_id IS NOT NULL
+--   UNION ALL SELECT 'maintenance', count(*) FROM federation.maintenance_records
 --   UNION ALL SELECT 'health',    count(*) FROM federation.connector_health
 --   UNION ALL SELECT 'events',    count(*) FROM federation.federation_event
 --   ORDER BY 1;
@@ -1171,6 +1356,8 @@ COMMIT;
 --
 -- DELETE FROM credential_access_log WHERE accessed_by LIKE '%@demo';
 -- DELETE FROM config_audit          WHERE source_address LIKE '198.51.100.%';
+-- UPDATE federated_camera SET camera_id = NULL WHERE camera_id::text LIKE 'f1000000-%';
+-- DELETE FROM cameras               WHERE id::text LIKE 'f1000000-%';  -- health + maintenance cascade
 -- DELETE FROM federation_event      WHERE source_vms_id::text LIKE 'c1000000-%';
 -- DELETE FROM federation_event_deadletter WHERE target_id::text LIKE 'c1000000-%';
 -- DELETE FROM connection_test       WHERE id::text LIKE 'a3000000-%';

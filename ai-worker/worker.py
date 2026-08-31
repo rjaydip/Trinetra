@@ -45,7 +45,8 @@ class _RedactRtspCredentials(logging.Filter):
 
 
 logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
+    level=getattr(logging, settings.log_level.upper(), logging.INFO),
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
 # On the handler, not the logger: a logger's own filters are skipped for records that reach
 # it by propagation from a child logger, but a handler's filters run for every record it emits.

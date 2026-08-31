@@ -235,9 +235,11 @@ Layer-by-layer:
 
 ## 5. What is spec-only (not in this diagram's "implemented" scope)
 
-- **Model 1 (Registry & GIS)** — camera registry beyond what Model 3 needs for its own
-  `cameras` rows, coverage-sector geometry, GIS plotting. Spec only:
-  `docs/MODEL-1-REGISTRY-GIS.md`.
+- **Model 1 (Registry & GIS)** — a first slice is **implemented**: the `cameras` registry
+  (`v1.6`), CRUD + bulk-import + health + maintenance + reconciliation endpoints under
+  `/api/v1/cameras`, and a GIS map source + application-computed coverage sectors under
+  `/api/v1/gis`. See `docs/MODEL-1-API-PLAN.md`. Still spec only: coverage-**gap** analysis
+  (needs spatial querying) and DB-backed integration tests.
 - **Kafka event bus / OpenSearch search index** — `docs/ARCHITECTURE-MODEL-3.md` names
   these as the eventual seam between producers (adapters, `ai-worker`) and consumers
   (correlation, search, alerting, GIS); today `EventStore` and `POST /api/v1/detections`

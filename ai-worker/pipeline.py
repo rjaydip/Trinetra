@@ -16,7 +16,13 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from backends.base import AnprProcessor, PlateDetector, VehicleDetector
+from backends.base import (
+    AnprProcessor,
+    BoundingBox,
+    PlateDetector,
+    VehicleDetection,
+    VehicleDetector,
+)
 from capture.base import Frame
 from monitoring.metrics import (
     detections_total,
@@ -31,6 +37,34 @@ logger = logging.getLogger(__name__)
 
 ANPR_DETECTED = "ANPR_DETECTED"
 VEHICLE_DETECTED = "VEHICLE_DETECTED"
+
+# The vehicle box is often tight enough to clip a plate that sits at the very bottom edge;
+# widen it slightly before looking for the plate inside.
+_VEHICLE_BBOX_PAD_FRACTION = 0.08
+
+# EasyOCR needs a reasonable pixel height to read; a plate crop straight off a distant vehicle
+# is often only tens of pixels wide. Upscale small crops before OCR.
+_OCR_MIN_CROP_WIDTH = 240
+
+
+def _pad_bbox(bbox: BoundingBox, image_shape: tuple, fraction: float) -> BoundingBox:
+    h, w = image_shape[:2]
+    pad_x = int((bbox.x2 - bbox.x1) * fraction)
+    pad_y = int((bbox.y2 - bbox.y1) * fraction)
+    return BoundingBox(
+        max(0, bbox.x1 - pad_x), max(0, bbox.y1 - pad_y),
+        min(w, bbox.x2 + pad_x), min(h, bbox.y2 + pad_y),
+    )
+
+
+def _upscale_for_ocr(crop: np.ndarray) -> np.ndarray:
+    if crop.size == 0:
+        return crop
+    ch, cw = crop.shape[:2]
+    if cw == 0 or cw >= _OCR_MIN_CROP_WIDTH:
+        return crop
+    scale = _OCR_MIN_CROP_WIDTH / cw
+    return cv2.resize(crop, (int(cw * scale), int(ch * scale)), interpolation=cv2.INTER_CUBIC)
 
 
 @dataclass(frozen=True)
@@ -84,8 +118,25 @@ class Pipeline:
             logger.exception("Vehicle detection failed for camera %s", camera_id)
             return events
 
+        # No vehicle in frame is normal for a fixed ANPR lane camera (the car fills the frame,
+        # or only a bumper shows) and for bench testing with a plate held up to the lens. Fall
+        # back to scanning the whole frame for a plate rather than dropping it silently.
+        full_frame_scan = False
+        if not vehicles and "plate" in enabled_models:
+            fh, fw = frame.image.shape[:2]
+            vehicles = [VehicleDetection(
+                bbox=BoundingBox(0, 0, fw, fh), vehicle_type="unknown", confidence=1.0)]
+            full_frame_scan = True
+
+        logger.debug(
+            "camera %s: %d vehicle region(s)%s",
+            camera_id, len(vehicles), " (full-frame scan)" if full_frame_scan else "",
+        )
+
         for vehicle in vehicles:
-            vehicle_crop = vehicle.bbox.crop(frame.image)
+            region = vehicle.bbox if full_frame_scan else _pad_bbox(
+                vehicle.bbox, frame.image.shape, _VEHICLE_BBOX_PAD_FRACTION)
+            vehicle_crop = region.crop(frame.image)
             plate_text: str | None = None
             plate_confidence = 0.0
             snapshot_path: str | None = None
@@ -99,9 +150,12 @@ class Pipeline:
                     logger.exception("Plate detection failed for camera %s", camera_id)
                     plates = []
 
+                logger.debug(
+                    "camera %s: %d plate candidate(s) in region", camera_id, len(plates))
+
                 if plates and "ocr" in enabled_models:
                     best_plate = max(plates, key=lambda p: p.confidence)
-                    plate_crop = best_plate.bbox.crop(vehicle_crop)
+                    plate_crop = _upscale_for_ocr(best_plate.bbox.crop(vehicle_crop))
                     try:
                         with inference_latency_seconds.labels(stage="ocr").time():
                             anpr = self._ocr_processor.read(plate_crop)
@@ -112,21 +166,32 @@ class Pipeline:
 
                     if anpr is not None:
                         normalized = normalize_plate(anpr.text)
+                        logger.debug(
+                            "camera %s: OCR '%s' (conf %.2f) -> '%s'",
+                            camera_id, anpr.text, anpr.confidence, normalized,
+                        )
                         if normalized:
                             plate_text = normalized
                             plate_confidence = anpr.confidence
                             snapshot_path = self._save_evidence(camera_id, plate_crop)
 
             if plate_text:
+                # A full-frame scan has no real vehicle confidence to combine — use the plate's.
+                confidence = plate_confidence if full_frame_scan else min(
+                    vehicle.confidence, plate_confidence)
                 event = DetectionEvent(
                     camera_id=camera_id,
                     event_type=ANPR_DETECTED,
                     timestamp=frame.captured_at,
-                    confidence=min(vehicle.confidence, plate_confidence),
+                    confidence=confidence,
                     attributes={"vehicleType": vehicle.vehicle_type, "plateNumber": plate_text},
                     evidence={"snapshotPath": snapshot_path} if snapshot_path else {},
                 )
                 matches_total.labels(camera_id=camera_id).inc()
+            elif full_frame_scan:
+                # No plate found scanning the whole frame, and there is no real vehicle to
+                # report — emit nothing rather than a VEHICLE_DETECTED covering the frame.
+                continue
             else:
                 snapshot_path = self._save_evidence(camera_id, vehicle_crop)
                 event = DetectionEvent(

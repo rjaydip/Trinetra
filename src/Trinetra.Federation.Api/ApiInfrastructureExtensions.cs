@@ -42,6 +42,11 @@ internal static class ApiInfrastructureExtensions
         services.AddScoped<GeographyRepository>();
         services.AddScoped<UserRepository>();
         services.AddScoped<ConnectorTargetRepository>();
+        services.AddScoped<CameraRepository>();
+        services.AddScoped<GisQueryRepository>();
+        services.AddScoped<CameraHealthRepository>();
+        services.AddScoped<CameraMaintenanceRepository>();
+        services.AddScoped<ReconciliationRepository>();
         services.AddScoped<FederationQueryRepository>();
         services.AddScoped<ConnectionTestRepository>();
         services.AddScoped<EventQueryRepository>();

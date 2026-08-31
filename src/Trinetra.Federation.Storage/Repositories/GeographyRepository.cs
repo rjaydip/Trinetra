@@ -287,7 +287,7 @@ public sealed class GeographyRepository
     /// other -- either hiding areas the caller may see, or showing areas they may not.
     /// </remarks>
     private static bool Geo(CallerContext caller, string permission) =>
-        caller.IsSystem || caller.UnscopedGeography.Contains(permission);
+        caller.IsUnscopedForGeography(permission);
 
     /// <summary>Throws unless the caller's geographic scope covers the area.</summary>
     private static async Task RequireAreaAsync(

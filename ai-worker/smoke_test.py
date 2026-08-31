@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sys
 from datetime import datetime, timezone
 
@@ -21,7 +22,10 @@ from capture.base import Frame
 from config import settings
 from pipeline import Pipeline
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logging.basicConfig(
+    level=getattr(logging, os.environ.get("LOG_LEVEL", "DEBUG").upper(), logging.DEBUG),
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
 
 
 def main() -> None:

@@ -73,7 +73,10 @@ information on GIS → generate alert.**
 
 ## Running it
 
-Model 3 is implemented. Model 1 is a specification. Model 2's capture-and-inference worker
+Model 3 is implemented. Model 1 (Registry & GIS) has a first slice implemented — the camera
+registry, its CRUD / bulk-import / health / maintenance / reconciliation endpoints, and a
+GeoJSON map source with estimated coverage sectors (`docs/MODEL-1-API-PLAN.md`); coverage-gap
+analysis is still specification. Model 2's capture-and-inference worker
 (`ai-worker/`, Python — see `ai-worker/README.md`) exists standalone, discovering cameras from
 Model 3's registry and running real vehicle/plate/OCR inference; its integration into the
 platform's event/metadata layer (ingest endpoint, watchlist, alerts) is still specification.
@@ -112,7 +115,8 @@ docs/
   OPERATIONS.md                        setup, configuration, upgrades, troubleshooting
   DEPLOYMENT.md                        bare-metal topology, systemd, rolling upgrades
 
-  MODEL-1-REGISTRY-GIS.md              specification
+  MODEL-1-REGISTRY-GIS.md              specification — first slice implemented
+  MODEL-1-API-PLAN.md                  camera registry + GIS API contract and build status
   MODEL-2-VIDEO-METADATA-ANALYTICS.md  specification
   MODEL-3-VMS-FEDERATION-MIDDLEWARE.md specification — implemented
   TECHNICAL-DESIGN.md                  integration view across the three models

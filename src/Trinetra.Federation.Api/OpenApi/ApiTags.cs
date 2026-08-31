@@ -25,6 +25,8 @@ internal static class ApiTags
     public const string AccessControl = "Access control";
     public const string ApiKeys = "API keys";
     public const string Vms = "VMS";
+    public const string Cameras = "Cameras";
+    public const string Gis = "GIS";
     public const string Credentials = "Credentials";
     public const string Events = "Events";
     public const string Detections = "Detections";
@@ -81,6 +83,20 @@ internal static class ApiTags
             + "capability matrix, the discovered camera inventory, and connection tests against "
             + "the live device. Cameras are discovered, never registered one at a time: a target "
             + "is polled as a whole, because per-camera polling does not survive 80,000 cameras."),
+
+        (Cameras,
+            "The authoritative camera registry: the CCTV assets themselves, registered "
+            + "deliberately — one at a time, by bulk import, or via API — rather than discovered "
+            + "from a VMS. Ownership (an organization unit) and location (a site) are independent "
+            + "dimensions and a caller's grants over both decide which cameras they see. This is "
+            + "the stable camera identity that observations and VMS reconciliation point at."),
+
+        (Gis,
+            "The map source and coverage analysis over the registry. `GET /gis/cameras` returns "
+            + "a bounding-box-limited GeoJSON FeatureCollection to draw markers and coverage "
+            + "wedges from; per-camera coverage sectors are computed from azimuth, horizontal FOV "
+            + "and effective range. Coverage is an **estimate** — terrain and obstructions are "
+            + "not modelled. Gap analysis needs a spatial engine and is not available yet."),
 
         (Credentials,
             "Provisioning the credential a connector authenticates to a device with, and "

@@ -100,12 +100,13 @@ expertise.
 
 ### Database
 
-**PostgreSQL + PostGIS** for:
+**PostgreSQL** (no extensions today; PostGIS is reserved for coverage-gap analysis — see
+`docs/MODEL-1-API-PLAN.md`) for:
 
 -   Camera registry
 -   Departments
 -   Locations
--   Camera coverage
+-   Camera coverage (sectors computed in the application over plain lat/long)
 -   Events
 -   Maintenance
 -   Geographic queries
@@ -228,13 +229,20 @@ is listed there under Deliberate non-goals.
 
 ## 9. Suggested Development Order
 
-### Phase 1
+Phases 1–2 have a first implementation (`docs/MODEL-1-API-PLAN.md`); Model 3 is in progress
+(`ARCHITECTURE-MODEL-3.md`).
 
-Build Model 1 registry and GIS.
+### Phase 1 — implemented (first slice)
 
-### Phase 2
+Model 1 registry and GIS: the `cameras` registry (`v1.6`), CRUD + bulk-import + reconciliation
+under `/api/v1/cameras`, and a GeoJSON map source + application-computed coverage sectors under
+`/api/v1/gis`. Coverage-gap analysis (`GET /api/v1/gis/gaps`) is a documented 501 until spatial
+querying is introduced.
 
-Add camera health and maintenance.
+### Phase 2 — implemented (first slice)
+
+Camera health (`/api/v1/cameras/{id}/health`, `/health/history`, manual override) and
+maintenance (`/api/v1/cameras/{id}/maintenance`, records driving `maintenance_status`).
 
 ### Phase 3
 

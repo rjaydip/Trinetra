@@ -4,12 +4,26 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository State
 
-**Model 3 (VMS Federation) is under active implementation. Model 1 is still spec only. Model
-2's capture-and-inference worker exists standalone (`ai-worker/`, Python — not yet wired into
-the `.NET` event/metadata layer); the rest of Model 2 is still spec only.**
+**Model 3 (VMS Federation) is under active implementation. Model 1 (Registry & GIS) has a first
+slice implemented — see below. Model 2's capture-and-inference worker exists standalone
+(`ai-worker/`, Python — not yet wired into the `.NET` event/metadata layer); the rest of Model 2
+is still spec only.**
 
-Stack: **.NET 10 / ASP.NET Core minimal API**, PostgreSQL + PostGIS, Kafka, OpenSearch,
-deployed on **on-prem bare metal** with systemd — no Kubernetes. Scale target is **80,000
+**Model 1 status.** `docs/MODEL-1-API-PLAN.md` is the working plan (BA draft + .NET review +
+resolutions + implementation status). Shipped: `db/versions/v1.6.sql` (`cameras`,
+`camera_health_history`, `maintenance_records`; permissions `camera.delete` / `camera.import` /
+`camera.reconcile`); `Federation.Core` `Camera` model + `CoverageSector` (pure-trig sectors, no
+PostGIS); `Federation.Storage` `CameraRepository`, `GisQueryRepository`, `CameraHealthRepository`,
+`CameraMaintenanceRepository`, `ReconciliationRepository`, shared `CameraScope`; `Federation.Api`
+`CameraEndpoints` / `CameraHealthEndpoints` / `CameraReconciliationEndpoints` / `GisEndpoints`
+(`/api/v1/cameras/*` CRUD + list + bulk-import + health + maintenance + reconcile,
+`/api/v1/gis/*` map source + per-camera coverage + aggregate; `GET /gis/gaps` is a documented
+501). Not yet done: DB-backed integration tests, and real coverage-gap analysis (needs PostGIS —
+deferred). Camera access is scoped on organization **and** geography, ANDed, via
+`CallerContext.IsUnscopedFor` / `IsUnscopedForGeography`.
+
+Stack: **.NET 10 / ASP.NET Core minimal API**, PostgreSQL (no extensions — see below), Kafka,
+OpenSearch, deployed on **on-prem bare metal** with systemd — no Kubernetes. Scale target is **80,000
 cameras in production**, validated against a simulator; first-phase rollout is 100+ cameras.
 
 `docs/ARCHITECTURE-MODEL-3.md` is the authoritative design for this work. Read it before
@@ -42,8 +56,8 @@ are pinned centrally in `Directory.Packages.props`; floating versions are reject
 | `Federation.Adapters` | Vendor implementations — **the only place vendor-specific code may exist** |
 | `Federation.Runtime` | Lease manager, rate limiting, circuit breaking, connector workers |
 | `Federation.Bus` | Kafka producer/consumer, envelope serialisation |
-| `Federation.Storage` | Npgsql/Dapper repositories, lease store |
-| `Federation.Api` | Read/serve side, department-scoped and audited |
+| `Federation.Storage` | Npgsql/Dapper repositories, lease store, camera registry + GIS repositories |
+| `Federation.Api` | Read/serve side plus the camera registry write side, department-scoped and audited |
 | `Federation.Worker` | Connector worker host (systemd `Type=notify`) |
 | `tools/Trinetra.VmsSimulator` | Synthetic VMS estate for scale validation — a deliverable, not scaffolding |
 | `ai-worker/` | Model 2's capture + AI inference worker (Python, standalone) — see `ai-worker/README.md`. Discovers cameras via `Federation.Api` (`GET /api/v1/vms/{id}/cameras`); its ingest endpoint on the `.NET` side doesn't exist yet |
@@ -62,8 +76,10 @@ silently differ from those that ran the new one. Corrections go in the next vers
 
 **No PostgreSQL extensions.** Coordinates are plain `DECIMAL(10,7)` with range CHECKs, and
 `gen_random_uuid()` is core from PostgreSQL 13. PostGIS and pgcrypto were both verified
-unnecessary and removed — spatial querying belongs to Model 1, and credential sealing is
-application-side AES-256-GCM so the database never holds the key.
+unnecessary and removed. Model 1's coverage sectors (`v1.6`) are computed in the application
+over plain lat/long; PostGIS is reserved for the later coverage-gap-analysis slice and is not
+installed today. Credential sealing is application-side AES-256-GCM so the database never holds
+the key.
 
 ## The Three Models
 
@@ -85,6 +101,7 @@ The whole design is organised around three subsystems that share one metadata/ev
 | `docs/DEPLOYMENT.md` | Bare-metal topology, systemd units, rolling upgrades |
 | `docs/RBAC-LOGICAL-FLOW.md` | The authorization model itself, ahead of its implementation |
 | `docs/{DEPARTMENT,GEOGRAPHY,CAMERA}-SCHEMA.md` | The entity models these follow |
+| `docs/MODEL-1-API-PLAN.md` | Changing the camera registry or GIS endpoints — the contract, `v1.6` schema, scope rules and what is / isn't built |
 
 `docs/TECHNICAL-DESIGN.md` is the integration view: logical architecture, data flows, the API surface (`/api/cameras`, `/api/gis`, `/api/observations`, `/api/events`, …), the common event contract, and a 10-phase build order starting with Model 1.
 
@@ -96,7 +113,7 @@ These constraints run across all three specs and should survive any implementati
 - **The event bus is the seam.** Adapters and analytics publish into a common event schema; correlation, search, alerting, and GIS are all subscribers. New consumers must not require producer changes.
 - **Video is the source; metadata is the product.** Search, correlation, and GIS operate on observation/event records, not on video. Video and snapshots are referenced (`stream_reference`, `snapshot_reference`, `video_reference`), never inlined.
 - **Credentials are references, not fields.** `credential_reference` points at a secret-management system; camera/adapter credentials never live in registry metadata or the event schema.
-- **Coverage is estimated, not measured.** Coverage sectors are derived from `azimuth` + `horizontal_fov` + `effective_range` via PostGIS. Present them as a planning aid — terrain and obstructions are not modelled.
+- **Coverage is estimated, not measured.** Coverage sectors are derived from `azimuth` + `horizontal_fov` + `effective_range` — today computed in the application (`Federation.Core` `CoverageSector`), PostGIS later for gap analysis. Present them as a planning aid — terrain and obstructions are not modelled.
 - **Cross-camera identity is probabilistic.** A tracker ID is valid only within one camera. Cross-camera association (Re-ID, face similarity, ANPR chains) must carry a confidence score and must never be surfaced as certainty.
 - **Every sensitive operation is RBAC-gated, department-scoped where applicable, and audit-logged.**
 

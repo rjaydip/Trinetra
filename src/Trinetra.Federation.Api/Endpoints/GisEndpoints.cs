@@ -1,0 +1,266 @@
+using System.Globalization;
+using System.Text.Json;
+using Microsoft.AspNetCore.Http.HttpResults;
+using Trinetra.Federation.Api.Auth;
+using Trinetra.Federation.Api.Contracts;
+using Trinetra.Federation.Api.OpenApi;
+using Trinetra.Federation.Core.Geo;
+using Trinetra.Federation.Storage.Repositories;
+
+namespace Trinetra.Federation.Api.Endpoints;
+
+/// <summary>
+/// The GIS map source and coverage analysis over the camera registry.
+/// </summary>
+/// <remarks>
+/// <para>
+/// Coverage sectors are computed on read from <c>azimuth</c> + <c>horizontalFov</c> +
+/// <c>effectiveRange</c>. They are an <b>estimate</b>: terrain, buildings, lighting and lens
+/// characteristics are not modelled (<c>CLAUDE.md</c>). Every rendered sector carries the
+/// disclaimer.
+/// </para>
+/// <para>
+/// Nothing here is stored as geometry and nothing needs PostGIS. Coverage-gap analysis does —
+/// <c>GET /gis/gaps</c> returns 501 until the version that introduces it.
+/// </para>
+/// </remarks>
+public static class GisEndpoints
+{
+    /// <summary>Widest bbox span accepted by the feed, so one call cannot pull the whole estate.</summary>
+    private const double MaxBboxDegrees = 2.0;
+
+    private const int FeedLimit = 5000;
+
+    private const string GeoJsonMediaType = "application/geo+json";
+
+    public static void MapGisEndpoints(this IEndpointRouteBuilder app)
+    {
+        app.MapGet("/api/v1/gis/cameras", FeedAsync)
+           .RequireAuthorization().WithTags(ApiTags.Gis).RequirePermission("gis.read")
+           .WithSummary("Camera map source (GeoJSON)")
+           .WithDescription(
+               "A GeoJSON `FeatureCollection`, one `Point` feature per in-scope live camera "
+               + "inside `bbox` (**required**, `minLon,minLat,maxLon,maxLat`, span at most "
+               + $"{MaxBboxDegrees}° each way). Feature properties carry the camera id, code, "
+               + "owner, type, the three status axes and the sector inputs. Pass "
+               + "`includeSectors=true` to attach each camera's computed coverage `Polygon`. "
+               + "Narrow with `organizationUnitId`, `operationalStatus`, `maintenanceStatus`.");
+
+        app.MapGet("/api/v1/cameras/{id:guid}/coverage", CoverageAsync)
+           .RequireAuthorization().WithTags(ApiTags.Gis).RequirePermission("gis.coverage.read")
+           .WithSummary("One camera's estimated coverage sector")
+           .WithDescription(
+               "A GeoJSON `Feature` whose `Polygon` is the estimated ground area the camera can "
+               + "see: apex at the camera, bisector along its azimuth, width `horizontalFov`, "
+               + "radius `effectiveRange`. `204` when any of those three is missing. The "
+               + "response carries `estimated: true` and the modelling disclaimer.");
+
+        app.MapGet("/api/v1/gis/coverage", SummaryAsync)
+           .RequireAuthorization().WithTags(ApiTags.Gis).RequirePermission("gis.coverage.read")
+           .WithSummary("Coverage aggregate — counts, no geometry")
+           .WithDescription(
+               "Camera counts over an area (`geographicAreaId`, includes descendants) or a "
+               + "`bbox`, one of which is required, bucketed by operational status, maintenance "
+               + "status, manufacturer, owning unit, and whether the sector inputs are present. "
+               + "Optionally narrowed by `organizationUnitId`. No merged coverage polygon — that "
+               + "needs a spatial engine.");
+
+        app.MapGet("/api/v1/gis/gaps", GapsAsync)
+           .RequireAuthorization().WithTags(ApiTags.Gis).RequirePermission("gis.coverage.read")
+           .WithSummary("Coverage-gap layer — not available yet")
+           .WithDescription(
+               "Planned for the release that introduces PostGIS and administrative boundary "
+               + "polygons. Returns 501 until then; the route exists so the contract is stable.");
+    }
+
+    // -------------------------------------------------------------------
+
+    private static async Task<Results<JsonHttpResult<GeoJsonFeatureCollection>, ProblemHttpResult>> FeedAsync(
+        string? bbox, bool? includeSectors, bool? includeRetired,
+        Guid? organizationUnitId, string? operationalStatus, string? maintenanceStatus,
+        GisQueryRepository gis, HttpContext http, CancellationToken ct)
+    {
+        var caller = CallerContextFactory.From(http);
+
+        if (string.IsNullOrWhiteSpace(bbox))
+        {
+            return Problem("bbox is required", "Supply bbox as minLon,minLat,maxLon,maxLat.");
+        }
+
+        if (!TryParseBbox(bbox, out var box, out var problem))
+        {
+            return problem!;
+        }
+
+        if (box.MaxLon - box.MinLon > MaxBboxDegrees || box.MaxLat - box.MinLat > MaxBboxDegrees)
+        {
+            return Problem("bbox too large",
+                $"Each side may span at most {MaxBboxDegrees}°. Zoom in and request again.");
+        }
+
+        var rows = await gis.FeedAsync(
+            box,
+            new GisFeedFilter(
+                FeedLimit, includeRetired ?? false, organizationUnitId,
+                Upper(operationalStatus), Upper(maintenanceStatus)),
+            caller, ct);
+
+        var withSectors = includeSectors ?? false;
+        var features = new List<GeoJsonFeature>(rows.Count);
+
+        foreach (var r in rows)
+        {
+            var props = new Dictionary<string, JsonElement>
+            {
+                ["cameraId"] = Json(r.Id),
+                ["cameraCode"] = Json(r.Code),
+                ["name"] = Json(r.Name),
+                ["organizationUnitId"] = Json(r.OrganizationUnitId),
+                ["manufacturer"] = Json(r.Manufacturer),
+                ["cameraType"] = Json(r.CameraType),
+                ["operationalStatus"] = Json(r.OperationalStatus),
+                ["connectivityStatus"] = Json(r.ConnectivityStatus),
+                ["maintenanceStatus"] = Json(r.MaintenanceStatus),
+                ["azimuth"] = Json(r.Azimuth),
+                ["horizontalFov"] = Json(r.HorizontalFov),
+                ["effectiveRange"] = Json(r.EffectiveRange),
+                ["hasCoverage"] = Json(CoverageSector.CanCompute(r.Azimuth, r.HorizontalFov, r.EffectiveRange)),
+            };
+
+            if (withSectors
+                && CoverageSector.CanCompute(r.Azimuth, r.HorizontalFov, r.EffectiveRange))
+            {
+                var ring = CoverageSector.Ring(
+                    r.Latitude, r.Longitude, r.Azimuth!.Value, r.HorizontalFov!.Value, r.EffectiveRange!.Value);
+                props["coverageSector"] = Json(new[] { ring });
+                props["coverageEstimated"] = Json(true);
+            }
+
+            features.Add(new GeoJsonFeature(
+                "Feature",
+                new GeoJsonGeometry("Point", new[] { r.Longitude, r.Latitude }),
+                props));
+        }
+
+        return TypedResults.Json(
+            new GeoJsonFeatureCollection("FeatureCollection", features),
+            contentType: GeoJsonMediaType);
+    }
+
+    private static async Task<Results<JsonHttpResult<GeoJsonFeature>, NoContent, NotFound>> CoverageAsync(
+        Guid id, GisQueryRepository gis, HttpContext http, CancellationToken ct)
+    {
+        var caller = CallerContextFactory.From(http);
+
+        var camera = await gis.PointAsync(id, caller, ct);
+        if (camera is null)
+        {
+            return TypedResults.NotFound();
+        }
+
+        if (!CoverageSector.CanCompute(camera.Azimuth, camera.HorizontalFov, camera.EffectiveRange))
+        {
+            return TypedResults.NoContent();
+        }
+
+        var ring = CoverageSector.Ring(
+            camera.Latitude, camera.Longitude,
+            camera.Azimuth!.Value, camera.HorizontalFov!.Value, camera.EffectiveRange!.Value);
+
+        var props = new Dictionary<string, JsonElement>
+        {
+            ["cameraId"] = Json(camera.Id),
+            ["cameraCode"] = Json(camera.Code),
+            ["azimuth"] = Json(camera.Azimuth),
+            ["horizontalFov"] = Json(camera.HorizontalFov),
+            ["effectiveRange"] = Json(camera.EffectiveRange),
+            ["estimated"] = Json(true),
+            ["disclaimer"] = Json(CoverageSector.EstimateDisclaimer),
+        };
+
+        return TypedResults.Json(
+            new GeoJsonFeature(
+                "Feature",
+                new GeoJsonGeometry("Polygon", new[] { ring }),
+                props),
+            contentType: GeoJsonMediaType);
+    }
+
+    private static async Task<Results<Ok<CoverageSummaryResponse>, ProblemHttpResult>> SummaryAsync(
+        Guid? geographicAreaId, string? bbox, Guid? organizationUnitId,
+        GisQueryRepository gis, HttpContext http, CancellationToken ct)
+    {
+        var caller = CallerContextFactory.From(http);
+
+        BoundingBox? box = null;
+        if (!string.IsNullOrWhiteSpace(bbox))
+        {
+            if (!TryParseBbox(bbox, out var parsed, out var problem))
+            {
+                return problem!;
+            }
+
+            box = parsed;
+        }
+
+        if (geographicAreaId is null && box is null)
+        {
+            return Problem("area required", "Supply one of geographicAreaId or bbox.");
+        }
+
+        var rows = await gis.SummaryAsync(geographicAreaId, box, organizationUnitId, caller, ct);
+
+        var buckets = rows
+            .GroupBy(r => r.Dimension)
+            .ToDictionary(
+                g => g.Key,
+                g => (IReadOnlyDictionary<string, long>)g.ToDictionary(x => x.Key, x => x.Count));
+
+        return TypedResults.Ok(new CoverageSummaryResponse(buckets));
+    }
+
+    private static Results<Ok, ProblemHttpResult> GapsAsync() =>
+        TypedResults.Problem(
+            title: "Coverage-gap analysis is not available yet",
+            detail: "Planned for the release that introduces spatial querying and administrative "
+                  + "boundary polygons.",
+            statusCode: StatusCodes.Status501NotImplemented);
+
+    // -------------------------------------------------------------------
+
+    private static string? Upper(string? s) =>
+        string.IsNullOrWhiteSpace(s) ? null : s.Trim().ToUpperInvariant();
+
+    private static JsonElement Json<T>(T value) =>
+        JsonSerializer.SerializeToElement(value);
+
+    private static ProblemHttpResult Problem(string title, string detail) =>
+        TypedResults.Problem(title: title, detail: detail, statusCode: StatusCodes.Status400BadRequest);
+
+    private static bool TryParseBbox(string raw, out BoundingBox box, out ProblemHttpResult? problem)
+    {
+        box = default;
+        problem = null;
+
+        var parts = raw.Split(',');
+        if (parts.Length != 4
+            || !double.TryParse(parts[0], NumberStyles.Float, CultureInfo.InvariantCulture, out var minLon)
+            || !double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out var minLat)
+            || !double.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out var maxLon)
+            || !double.TryParse(parts[3], NumberStyles.Float, CultureInfo.InvariantCulture, out var maxLat))
+        {
+            problem = Problem("invalid bbox", "bbox must be four comma-separated numbers.");
+            return false;
+        }
+
+        if (minLon >= maxLon || minLat >= maxLat
+            || minLon < -180 || maxLon > 180 || minLat < -90 || maxLat > 90)
+        {
+            problem = Problem("invalid bbox", "bbox is out of range or has min >= max.");
+            return false;
+        }
+
+        box = new BoundingBox(minLon, minLat, maxLon, maxLat);
+        return true;
+    }
+}

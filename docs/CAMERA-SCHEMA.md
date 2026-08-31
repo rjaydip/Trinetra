@@ -266,6 +266,8 @@ updated_at
 
 ## API Examples
 
+Implemented — see `docs/MODEL-1-API-PLAN.md` for the full contract.
+
 ```http
 POST   /api/v1/cameras
 GET    /api/v1/cameras
@@ -276,10 +278,17 @@ DELETE /api/v1/cameras/{id}
 
 POST   /api/v1/cameras/bulk-import
 
-GET    /api/v1/cameras/{id}/health
-GET    /api/v1/cameras/{id}/maintenance
+GET    /api/v1/cameras/{id}/health          # + /health/history, PATCH /health
+GET    /api/v1/cameras/{id}/maintenance     # + POST, + PATCH .../{recordId}
 GET    /api/v1/cameras/{id}/coverage
+
+GET    /api/v1/cameras/unreconciled
+POST   /api/v1/cameras/{id}/reconcile
+POST   /api/v1/cameras/from-federated
 ```
+
+The `cameras`, `camera_health_history` and `maintenance_records` tables land in
+`db/versions/v1.6.sql`.
 
 ## RBAC
 
