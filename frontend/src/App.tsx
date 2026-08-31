@@ -1,28 +1,20 @@
 import { Navigate, Route, Routes } from 'react-router-dom';
 
+import { LoginPage } from './auth/LoginPage';
+import { PasswordPage } from './auth/PasswordPage';
+import { RequireAuth } from './auth/RequireAuth';
 import { AppShell } from './components/AppShell';
 
 export function App() {
   return (
     <Routes>
-      <Route path="/login" element={<SignInPage />} />
-      <Route element={<AppShell />}>
+      <Route path="/login" element={<LoginPage />} />
+      <Route path="/password" element={<RequireAuth passwordChangeOnly><PasswordPage /></RequireAuth>} />
+      <Route element={<RequireAuth><AppShell /></RequireAuth>}>
         <Route path="/dashboard" element={<DashboardPage />} />
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Route>
     </Routes>
-  );
-}
-
-function SignInPage() {
-  return (
-    <main className="auth-page">
-      <section className="auth-card" aria-labelledby="sign-in-title">
-        <p className="eyebrow">Trinetra Registry</p>
-        <h1 id="sign-in-title">Sign in</h1>
-        <p>Use your Trinetra account to access the camera registry.</p>
-      </section>
-    </main>
   );
 }
 
