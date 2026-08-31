@@ -4,7 +4,7 @@ import type { BulkImportRequest, CameraWriteRequest } from '../../api/models';
 
 const nullableString = z.string().nullable().optional();
 const nullableNumber = z.number().finite().nullable().optional();
-const nullableUuid = z.uuid({ error: 'VMS ID must be a valid UUID.' }).nullable().optional();
+const nullableUuid = z.guid({ error: 'VMS ID must be a valid UUID.' }).nullable().optional();
 const nullableDateOnly = z.iso.date({ error: 'Installation date must use the YYYY-MM-DD format.' }).nullable().optional();
 
 // This is deliberately a transport-shape check rather than a duplicate of server-side camera
