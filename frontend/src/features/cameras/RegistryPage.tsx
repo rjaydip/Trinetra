@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 
 import { api } from '../../api/endpoints';
@@ -26,42 +26,50 @@ function filtersFromSearch(search: URLSearchParams): RegistryFilters {
   return filters;
 }
 
+function filterSignature(filters: RegistryFilters) {
+  return filterNames.map((name) => `${name}:${filters[name] ?? ''}`).join('|');
+}
+
 export function RegistryPage() {
   const [search, setSearch] = useSearchParams();
-  const [filters, setFilters] = useState<RegistryFilters>(() => filtersFromSearch(search));
-  const hasMounted = useRef(false);
+  const committedFilters = filtersFromSearch(search);
+  const [draftFilters, setDraftFilters] = useState<RegistryFilters>(() => committedFilters);
+  const committedSignature = filterSignature(committedFilters);
+  const draftSignature = filterSignature(draftFilters);
 
   useEffect(() => {
-    if (!hasMounted.current) {
-      hasMounted.current = true;
-      return undefined;
-    }
+    if (draftSignature !== committedSignature) setDraftFilters(committedFilters);
+  }, [search.toString()]);
+
+  useEffect(() => {
+    if (draftSignature === committedSignature) return undefined;
     const updateUrl = window.setTimeout(() => {
       const updated = new URLSearchParams(search);
       filterNames.forEach((name) => updated.delete(name));
       updated.delete('cursor');
       filterNames.forEach((name) => {
-        const value = filters[name];
+        const value = draftFilters[name];
         if (value !== undefined && value !== false) updated.set(name, String(value));
       });
       if (updated.toString() !== search.toString()) setSearch(updated);
     }, 200);
     return () => window.clearTimeout(updateUrl);
-  }, [filters]);
+  }, [committedSignature, draftFilters, draftSignature, search, setSearch]);
 
-  const request = { ...filters, cursor: search.get('cursor') || undefined, limit: 50 };
+  const request = { ...committedFilters, cursor: search.get('cursor') || undefined, limit: 50 };
   const registry = useQuery({ queryKey: ['cameras', 'registry', search.toString()], queryFn: () => api.cameras.list(request) });
+  const filtersPending = draftSignature !== committedSignature;
 
   function setFilter(name: keyof RegistryFilters, value: string | boolean | undefined) {
-    setFilters((previous) => ({ ...previous, [name]: value }));
+    setDraftFilters((previous) => ({ ...previous, [name]: value }));
   }
 
   function clearFilters() {
-    setFilters({});
+    setDraftFilters({});
   }
 
   function nextPage() {
-    if (!registry.data?.nextCursor) return;
+    if (filtersPending || !registry.data?.nextCursor) return;
     const updated = new URLSearchParams(search);
     updated.set('cursor', registry.data.nextCursor);
     setSearch(updated);
@@ -73,14 +81,14 @@ export function RegistryPage() {
   return (
     <section className="registry-page" aria-labelledby="camera-registry-title">
       <header className="registry-page__header"><div><p className="eyebrow">Live registry</p><h1 id="camera-registry-title">Camera registry</h1></div></header>
-      <CameraFilters filters={filters} onChange={setFilter} onClear={clearFilters} />
+      <CameraFilters filters={draftFilters} onChange={setFilter} onClear={clearFilters} />
       {registry.data.items.length === 0 ? <PageState title="No cameras found">Change or clear filters to view authorized cameras.</PageState> : <>
         <CameraTable cameras={registry.data.items} />
         <CameraCards cameras={registry.data.items} />
       </>}
       <nav className="registry-pagination" aria-label="Camera registry pagination">
         <span aria-live="polite">{registry.data.nextCursor ? 'More camera records are available.' : 'End of available camera records.'}</span>
-        <button className="button" disabled={!registry.data.nextCursor} onClick={nextPage} type="button">Next page</button>
+        <button className="button" disabled={filtersPending || !registry.data.nextCursor} onClick={nextPage} type="button">Next page</button>
       </nav>
     </section>
   );
