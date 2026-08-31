@@ -45,10 +45,35 @@ a { color: var(--color-primary); }
 .status-badge--success { color: var(--color-success); background: #dcfce7; }
 .status-badge--warning { color: var(--color-warning); background: #fef3c7; }
 .status-badge--danger { color: var(--color-danger); background: #fee2e2; }
+.map-page { display: grid; gap: 1rem; }
+.map-page__header { display: flex; align-items: start; justify-content: space-between; gap: 1rem; }
+.map-page h1 { margin: .25rem 0 0; }
+.coverage-notice, .map-legend { margin: 0; color: var(--color-muted); max-width: 50rem; }
+.coverage-notice { padding: .75rem; border-left: .25rem solid var(--color-warning); background: #fffbeb; }
+.map-filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); gap: .75rem; padding: 1rem; border: 1px solid var(--color-border); background: var(--color-surface); }
+.map-filters legend { font-weight: 700; }
+.map-filters label { display: grid; gap: .375rem; font-weight: 600; font-size: .875rem; }
+.map-filters input { min-height: 2.5rem; padding: .5rem; border: 1px solid var(--color-border); border-radius: .375rem; font: inherit; }
+.map-filters .checkbox-label { display: flex; align-items: center; gap: .5rem; padding-top: 1.5rem; }
+.map-filters .checkbox-label input { min-height: 1.25rem; width: 1.25rem; }
+.map-canvas { min-height: min(62vh, 42rem); overflow: hidden; border: 1px solid var(--color-border); border-radius: .75rem; background: #dbeafe; }
+.map-canvas__fallback { margin: 0; padding: 1rem; color: var(--color-muted); }
+.map-error { display: flex; align-items: center; flex-wrap: wrap; gap: .75rem; padding: 1rem; color: var(--color-danger); border: 1px solid #fecaca; background: #fef2f2; }
+.camera-drawer { position: fixed; z-index: 2; top: 0; right: 0; width: min(100%, 30rem); height: 100vh; overflow-y: auto; padding: 1.25rem; background: var(--color-surface); border-left: 1px solid var(--color-border); box-shadow: -1rem 0 3rem rgb(15 23 42 / 18%); }
+.camera-drawer__header { display: flex; align-items: start; justify-content: space-between; gap: 1rem; }
+.camera-drawer__header h2 { margin-top: 0; }
+.camera-detail-sections { display: grid; gap: 1rem; }
+.camera-detail-sections section { padding-top: .5rem; border-top: 1px solid var(--color-border); }
+.camera-detail-sections h3 { margin-bottom: .5rem; }
+.camera-detail-sections dl { display: grid; gap: .75rem; margin: 0; }
+.camera-detail-sections dl div { display: grid; gap: .125rem; }
+.camera-detail-sections dt { color: var(--color-muted); font-weight: 600; }
+.camera-detail-sections dd { margin: 0; }
 
 @media (max-width: 42rem) {
   .app-header { align-items: flex-start; flex-direction: column; gap: .75rem; }
   .app-content { width: min(100% - 1.5rem, 80rem); padding-block: 1.5rem; }
+  .map-page__header { display: grid; }
 }
 
 @media (prefers-reduced-motion: reduce) {
