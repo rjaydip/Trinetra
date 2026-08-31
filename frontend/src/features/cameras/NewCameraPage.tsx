@@ -27,8 +27,15 @@ export function NewCameraPage() {
     },
   });
 
+  if (organizations.isError || organizationUnits.isError || sites.isError) return <section>
+    <PageState title="Couldn&apos;t load onboarding options">Try again to retrieve the organization units and sites you can use.</PageState>
+    <button className="button" type="button" onClick={() => {
+      if (organizations.isError) void organizations.refetch();
+      if (sites.isError) void sites.refetch();
+      if (organizationUnits.isError) void organizationUnits.refetch();
+    }}>Try again</button>
+  </section>;
   if (organizations.isPending || organizationUnits.isPending || sites.isPending) return <PageState title="Loading onboarding options">Retrieving the organization units and sites you can use…</PageState>;
-  if (organizations.isError || organizationUnits.isError || sites.isError) return <PageState title="Couldn&apos;t load onboarding options">Refresh the page to retrieve the organization units and sites you can use.</PageState>;
 
   return <section className="onboarding-page" aria-labelledby="new-camera-title"><header><p className="eyebrow">Camera registry</p><h1 id="new-camera-title">Register camera</h1><p>Required fields identify the camera and its physical location.</p></header><CameraForm organizationUnits={organizationUnits.data ?? []} sites={sites.data ?? []} onSubmit={async (values) => { await create.mutateAsync(values); }} /></section>;
 }

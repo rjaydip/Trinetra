@@ -29,24 +29,16 @@ export function buildMapRequest(bounds: Bounds, filters: MapFilters): URLSearchP
 }
 
 export function initialBoundsFromCameras(cameras: CameraResponse[]): Bounds | null {
-  const coordinates = cameras.filter((camera) => Number.isFinite(camera.latitude) && Number.isFinite(camera.longitude));
-  if (!coordinates.length) return null;
-
-  const west = Math.min(...coordinates.map((camera) => camera.longitude));
-  const east = Math.max(...coordinates.map((camera) => camera.longitude));
-  const south = Math.min(...coordinates.map((camera) => camera.latitude));
-  const north = Math.max(...coordinates.map((camera) => camera.latitude));
-  const centerLongitude = (west + east) / 2;
-  const centerLatitude = (south + north) / 2;
-  const longitudeSpan = Math.min(Math.max(east - west, 0.02), 1.8);
-  const latitudeSpan = Math.min(Math.max(north - south, 0.02), 1.8);
-
-  return [
-    centerLongitude - longitudeSpan / 2,
-    centerLatitude - latitudeSpan / 2,
-    centerLongitude + longitudeSpan / 2,
-    centerLatitude + latitudeSpan / 2,
-  ];
+  // Target a real record, never the possibly unpopulated midpoint of an estate.
+  const target = cameras.find((camera) => Number.isFinite(camera.latitude) && Number.isFinite(camera.longitude)
+    && Math.abs(camera.latitude) <= 90 && Math.abs(camera.longitude) <= 180);
+  if (!target) return null;
+  const span = 0.02;
+  // Shift the whole interval at the poles/dateline so it stays nonzero, valid,
+  // and contains the target without constructing a wrapping bbox.
+  const west = Math.min(Math.max(target.longitude - span / 2, -180), 180 - span);
+  const south = Math.min(Math.max(target.latitude - span / 2, -90), 90 - span);
+  return [west, south, Math.min(west + span, 180), Math.min(south + span, 90)];
 }
 
 function property(feature: GeoJsonFeature, name: string): string | undefined {

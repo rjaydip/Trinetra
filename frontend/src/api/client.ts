@@ -68,9 +68,10 @@ export function isApiProblem(error: unknown): error is ApiProblem {
 
 export async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   let response: Response;
+  const authorizedInit = withBearerToken(init);
 
   try {
-    response = await fetch(`${apiBaseUrl()}${path}`, withBearerToken(init));
+    response = await fetch(`${apiBaseUrl()}${path}`, authorizedInit);
   } catch {
     throw new ApiProblem({
       status: 0,
@@ -80,7 +81,10 @@ export async function request<T>(path: string, init: RequestInit = {}): Promise<
   }
 
   if (!response.ok) {
-    if (response.status === 401) clearSession();
+    const activeSession = readSession();
+    // An in-flight request from a previous login must not expire a new login.
+    if (response.status === 401 && activeSession
+      && new Headers(authorizedInit.headers).get('authorization') === `Bearer ${activeSession.token}`) clearSession();
     throw await problemFrom(response);
   }
 

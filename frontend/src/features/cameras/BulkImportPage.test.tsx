@@ -6,15 +6,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { App } from '../../App';
 import { AuthProvider } from '../../auth/AuthProvider';
+import { readFileSync } from 'node:fs';
+import { sessionFixture } from '../../test/fixtures';
 
 function renderApp(path: string) {
   return render(<MemoryRouter initialEntries={[path]}><AuthProvider><App /></AuthProvider></MemoryRouter>);
 }
 
 function signIn() {
-  sessionStorage.setItem('trinetra.auth.session', JSON.stringify({
-    token: 'import-token', expiresAt: new Date(Date.now() + 60_000).toISOString(), mustChangePassword: false,
-  }));
+  sessionStorage.setItem('trinetra.auth.session', JSON.stringify(sessionFixture('importer', 'camera.import')));
 }
 
 async function uploadJson(name: string, items: unknown[]) {
@@ -30,6 +30,24 @@ afterEach(() => {
 });
 
 describe('BulkImportPage', () => {
+  it('keeps import preview and server row failures visible with the mobile stylesheet', async () => {
+    signIn();
+    vi.stubGlobal('innerWidth', 375);
+    const stylesheet = document.createElement('style');
+    stylesheet.textContent = readFileSync(`${process.cwd()}/src/styles.css`, 'utf8');
+    document.head.append(stylesheet);
+    vi.stubGlobal('fetch', async () => Response.json({ created: 0, updated: 0, failed: 1,
+      rows: [{ index: 0, cameraCode: 'MOBILE', status: 'error', cameraId: null, error: 'Site is outside your permitted scope.' }],
+    }));
+    try {
+      renderApp('/cameras/import');
+      const user = await uploadJson('cameras.json', [{ cameraCode: 'MOBILE' }]);
+      expect(await screen.findByText('MOBILE')).toBeVisible();
+      await user.click(screen.getByRole('button', { name: /import cameras/i }));
+      expect(await screen.findByText('Site is outside your permitted scope.')).toBeVisible();
+    } finally { stylesheet.remove(); }
+  });
+
   it('shows row errors supplied by the bulk import result', async () => {
     signIn();
     vi.stubGlobal('fetch', async (input: RequestInfo | URL) => {

@@ -17,9 +17,10 @@ function toGeoJson(collection: GeoJsonFeatureCollection) {
   return collection as unknown as GeoJSON.FeatureCollection;
 }
 
-export function CameraMap({ bounds, features, onBoundsChange, onSelect }: {
+export function CameraMap({ bounds, features, dataLoaded, onBoundsChange, onSelect }: {
   bounds: Bounds;
   features: GeoJsonFeatureCollection;
+  dataLoaded: boolean;
   onBoundsChange(bounds: Bounds): void;
   onSelect(cameraId: string): void;
 }) {
@@ -86,13 +87,13 @@ export function CameraMap({ bounds, features, onBoundsChange, onSelect }: {
 
   return <>
     <div className="map-canvas" data-testid="camera-map" ref={container}>
-      <p className="map-canvas__fallback">Interactive camera map. {features.features.length} visible camera{features.features.length === 1 ? '' : 's'}.</p>
+      <p className="map-canvas__fallback">Interactive camera map. {dataLoaded && <>{features.features.length} visible camera{features.features.length === 1 ? '' : 's'}.</>}</p>
     </div>
     <section aria-label="Visible camera selection" className="map-camera-selection">
       <h2>Visible cameras</h2>
-      {selections.length ? <ul>{selections.map(({ cameraId, name }) => <li key={cameraId}>
+      {dataLoaded && (selections.length ? <ul>{selections.map(({ cameraId, name }) => <li key={cameraId}>
         <button type="button" onClick={() => onSelect(cameraId)}>Open camera {name}</button>
-      </li>)}</ul> : <p>No individual cameras are visible at this zoom level.</p>}
+      </li>)}</ul> : <p>No individual cameras are visible at this zoom level.</p>)}
     </section>
   </>;
 }

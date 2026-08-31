@@ -29,14 +29,13 @@ afterEach(() => {
 
 describe('LoginPage', () => {
   it('stores the returned token after a successful login', async () => {
-    vi.stubGlobal('fetch', async () => new Response(JSON.stringify({
-      token: 'signed-in-token',
-      expiresAt: futureExpiry(),
-      mustChangePassword: false,
-    }), {
-      status: 200,
-      headers: { 'content-type': 'application/json' },
-    }));
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL) => {
+      const path = new URL(String(input)).pathname;
+      if (path === '/api/v1/auth/login') return Response.json({ token: 'signed-in-token', expiresAt: futureExpiry(), mustChangePassword: false });
+      if (path === '/api/v1/cameras') return Response.json({ items: [], nextCursor: null });
+      if (path === '/api/v1/overview') return Response.json({ targets: 0, activeTargets: 0, quarantinedTargets: 0, cameras: 0, unreachableCameras: 0 });
+      return new Response(null, { status: 404 });
+    });
 
     const user = userEvent.setup();
     renderApp('/login');
@@ -45,7 +44,7 @@ describe('LoginPage', () => {
     await user.type(screen.getByLabelText(/^password/i), 'valid password');
     await user.click(screen.getByRole('button', { name: /sign in/i }));
 
-    expect(await screen.findByRole('heading', { name: /camera map/i })).toBeVisible();
+    expect(await screen.findByRole('heading', { name: /^camera map$/i })).toBeVisible();
     expect(sessionStorage.getItem('trinetra.auth.session')).toContain('signed-in-token');
   });
 
@@ -96,9 +95,10 @@ describe('LoginPage', () => {
       expiresAt: new Date(Date.now() + 1_000).toISOString(),
       mustChangePassword: false,
     }));
+    vi.stubGlobal('fetch', async () => new Response(null, { status: 503 }));
 
     renderApp('/dashboard');
-    expect(screen.getByRole('heading', { name: /camera map/i })).toBeVisible();
+    expect(screen.getByRole('heading', { name: /^camera map$/i })).toBeVisible();
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1_000);
