@@ -74,8 +74,20 @@ a { color: var(--color-primary); }
 .camera-detail-sections dl div { display: grid; gap: .125rem; }
 .camera-detail-sections dt { color: var(--color-muted); font-weight: 600; }
 .camera-detail-sections dd { margin: 0; }
-.registry-page, .camera-detail-page { display: grid; gap: 1.25rem; }
-.registry-page__header h1, .camera-detail-page h1 { margin: .25rem 0 0; }
+.registry-page, .camera-detail-page, .onboarding-page { display: grid; gap: 1.25rem; }
+.registry-page__header h1, .camera-detail-page h1, .onboarding-page h1 { margin: .25rem 0 0; }
+.registry-page__header, .registry-page__actions { display: flex; align-items: start; justify-content: space-between; gap: .75rem; }
+.registry-page__actions { flex-wrap: wrap; justify-content: end; }
+.registry-page__actions .button { display: inline-flex; align-items: center; text-decoration: none; }
+.camera-form { display: grid; gap: 1rem; }
+.camera-form fieldset, .import-preview, .import-result { display: grid; gap: .75rem; margin: 0; padding: 1rem; border: 1px solid var(--color-border); border-radius: .75rem; background: var(--color-surface); }
+.camera-form legend, .import-preview legend { padding-inline: .25rem; font-weight: 700; }
+.camera-form label, .file-input { display: grid; gap: .375rem; font-size: .875rem; font-weight: 600; }
+.camera-form input, .camera-form select, .file-input input { min-height: 2.75rem; padding: .5rem .625rem; border: 1px solid var(--color-border); border-radius: .375rem; color: var(--color-text); background: var(--color-surface); font: inherit; }
+.import-preview > fieldset { display: flex; flex-wrap: wrap; gap: 1rem; border: 0; padding: 0; }
+.import-preview > fieldset label { display: flex; align-items: center; gap: .5rem; }
+.import-preview > fieldset input { width: 1.25rem; min-height: 1.25rem; }
+.import-preview__table { display: block; }
 .registry-filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); gap: .75rem; padding: 1rem; border: 1px solid var(--color-border); background: var(--color-surface); }
 .registry-filters legend { font-weight: 700; }
 .registry-filters label { display: grid; gap: .375rem; color: var(--color-text); font-size: .875rem; font-weight: 600; }
