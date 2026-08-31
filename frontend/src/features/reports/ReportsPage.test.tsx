@@ -69,4 +69,24 @@ describe('ReportsPage', () => {
     await waitFor(() => expect(fetch.mock.calls.map(([input]) => String(input))).not.toContainEqual(expect.stringContaining('/api/v1/gis/gaps')));
     expect(screen.getAllByText(/estimated planning aid/i)).not.toHaveLength(0);
   });
+
+  it('associates coverage format guidance and validation errors with the bounding-box input', async () => {
+    signIn();
+    vi.stubGlobal('fetch', async () => Response.json({
+      targets: 10, activeTargets: 8, quarantinedTargets: 2, cameras: 12, unreachableCameras: 3,
+    }));
+    const user = userEvent.setup();
+
+    renderApp('/reports');
+
+    const input = await screen.findByLabelText(/coverage bounding box/i);
+    expect(input).toHaveAttribute('aria-describedby', 'coverage-scope-help');
+    expect(input).toHaveAttribute('aria-invalid', 'false');
+
+    await user.click(screen.getByRole('button', { name: /load coverage summary/i }));
+
+    expect(input).toHaveAttribute('aria-describedby', 'coverage-scope-help coverage-scope-error');
+    expect(input).toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getByRole('alert')).toHaveAttribute('id', 'coverage-scope-error');
+  });
 });
