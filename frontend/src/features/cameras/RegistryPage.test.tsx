@@ -1,7 +1,7 @@
 import '@testing-library/jest-dom/vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useNavigate } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { App } from '../../App';
@@ -9,10 +9,15 @@ import { AuthProvider } from '../../auth/AuthProvider';
 
 const cameraId = 'c0a80101-0000-4000-8000-000000000001';
 
-function renderApp(path: string) {
+function HistoryBackButton() {
+  const navigate = useNavigate();
+  return <button onClick={() => navigate(-1)} type="button">Previous route</button>;
+}
+
+function renderApp(path: string | string[], initialIndex?: number) {
   return render(
-    <MemoryRouter initialEntries={[path]}>
-      <AuthProvider><App /></AuthProvider>
+    <MemoryRouter initialEntries={Array.isArray(path) ? path : [path]} initialIndex={initialIndex}>
+      <AuthProvider><HistoryBackButton /><App /></AuthProvider>
     </MemoryRouter>,
   );
 }
@@ -91,5 +96,48 @@ describe('RegistryPage', () => {
       expect(lastCameraRequest?.searchParams.get('q')).toBe('north');
       expect(lastCameraRequest?.searchParams.get('cameraType')).toBe('FIXED');
     });
+  });
+
+  it('uses the active history entry query for the registry request', async () => {
+    signIn();
+    let lastCameraRequest: URL | undefined;
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/api/v1/cameras') {
+        lastCameraRequest = url;
+        return Response.json({ items: [liveCamera()], nextCursor: null });
+      }
+      return new Response(null, { status: 404 });
+    });
+    const user = userEvent.setup();
+
+    renderApp(['/cameras?q=first', '/cameras?q=second'], 1);
+    await waitFor(() => expect(lastCameraRequest?.searchParams.get('q')).toBe('second'));
+    await user.click(screen.getByRole('button', { name: /previous route/i }));
+
+    await waitFor(() => expect(lastCameraRequest?.searchParams.get('q')).toBe('first'));
+  });
+
+  it('blocks next-page navigation until a changed filter is committed without a cursor', async () => {
+    signIn();
+    const cameraRequests: URL[] = [];
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/api/v1/cameras') {
+        cameraRequests.push(url);
+        return Response.json({ items: [liveCamera()], nextCursor: url.searchParams.get('q') ? null : 'next-page-token' });
+      }
+      return new Response(null, { status: 404 });
+    });
+    const user = userEvent.setup();
+
+    renderApp('/cameras');
+    const next = await screen.findByRole('button', { name: /next page/i });
+    await user.type(screen.getByLabelText(/search cameras/i), 'north');
+
+    expect(next).toBeDisabled();
+    await user.click(next);
+    await waitFor(() => expect(cameraRequests.at(-1)?.searchParams.get('q')).toBe('north'));
+    expect(cameraRequests.at(-1)?.searchParams.get('cursor')).toBeNull();
   });
 });
