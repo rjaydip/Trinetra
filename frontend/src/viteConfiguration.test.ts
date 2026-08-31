@@ -1,19 +1,28 @@
 // @vitest-environment node
 
-import { rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { tmpdir } from 'node:os';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const envFile = join(process.cwd(), '.env.test');
+let originalWorkingDirectory: string;
+let testDirectory: string;
+
+beforeEach(async () => {
+  originalWorkingDirectory = process.cwd();
+  testDirectory = await mkdtemp(join(tmpdir(), 'trinetra-vite-config-'));
+  process.chdir(testDirectory);
+});
 
 afterEach(async () => {
-  await rm(envFile, { force: true });
+  process.chdir(originalWorkingDirectory);
+  await rm(testDirectory, { force: true, recursive: true });
   vi.resetModules();
 });
 
 describe('Vite configuration', () => {
   it('uses VITE_API_BASE_URL from the mode environment file for the API proxy', async () => {
-    await writeFile(envFile, 'VITE_API_BASE_URL=https://registry.test.example\n');
+    await writeFile(join(testDirectory, '.env.test'), 'VITE_API_BASE_URL=https://registry.test.example\n');
     vi.resetModules();
 
     const viteConfig = (await import('../vite.config')).default;
