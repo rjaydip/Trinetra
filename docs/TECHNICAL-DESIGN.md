@@ -1,5 +1,11 @@
 # Technical Design --- Integrated Models 1, 2 and 3
 
+> **Scope of this document.** This is the original integration view — the target shape of all
+> three models and the phased order to get there. For what is *actually built* and its real API
+> surface, see `DATA-FLOW.md` (current implementation) and `ARCHITECTURE-MODEL-3.md`
+> (authoritative Model 3 design). Where this document and those disagree, those are correct.
+> The API group list in §5 and the event JSON in §6 are illustrative, not the deployed contract.
+
 ## 1. Architecture Goal
 
 Create a modular platform where CCTV asset information, video-derived
@@ -33,8 +39,12 @@ common APIs and event interfaces.
        +--------------+---------------+
        |              |               |
    PostgreSQL       Search         Object Store
-    + PostGIS       Index           References
+   (no extensions)  Index           References
 ```
+
+> PostgreSQL runs with **no extensions today**. Coordinates are plain `DECIMAL(10,7)` with range
+> checks; `gen_random_uuid()` is core. PostGIS is reserved for the coverage-gap analysis slice
+> (v1.7) as its own decision — see `MODEL-1-API-PLAN.md`.
 
 ## 3. Data Flow
 
@@ -50,7 +60,7 @@ Validation
 Camera Registry
         |
         v
-PostGIS
+Coverage geometry (trigonometry over DECIMAL lat/long; no PostGIS)
         |
         v
 GIS Map / Coverage
@@ -139,38 +149,66 @@ Prototype options:
 ### GIS
 
 A web GIS frontend can render camera points, coverage sectors, routes,
-and gaps using a map library. PostGIS provides the spatial data layer.
+and gaps using a map library. The backend serves GeoJSON from plain
+`DECIMAL` lat/long (`/api/v1/gis/*`); coverage sectors are computed by
+trigonometry in the application. No PostGIS today — it is reserved for
+the coverage-gap slice (v1.7).
 
 ## 5. API Design
 
-Example API groups:
+All routes are versioned under `/api/v1`. The surface built today (see `DATA-FLOW.md` for the
+per-endpoint detail and the RBAC permission each requires):
 
 ``` text
-/api/auth
-/api/departments
-/api/cameras
-/api/cameras/{id}/health
-/api/cameras/{id}/maintenance
-/api/gis
-/api/vms
-/api/connectors
-/api/streams
-/api/analytics
-/api/observations
-/api/events
-/api/alerts
-/api/search
-/api/audit
+# Auth
+/api/v1/auth/login  /auth/token (dev only)  /auth/password
+
+# Model 3 — VMS federation
+/api/v1/vms  /vms/{id}  /vms/{id}/state  /vms/{id}/health  /vms/{id}/capabilities
+/api/v1/vms/{id}/cameras  /vms/{id}/cameras/{nativeCameraId}/status-history
+/api/v1/vms/{id}/credential (PUT)  /vms/{id}/credential/status  /vms/{id}/credential/resolve
+/api/v1/vms/{id}/test          # connection tests
+/api/v1/overview
+/api/v1/events
+/api/v1/worker-health  /worker-health/heartbeat
+
+# Model 1 — registry & GIS
+/api/v1/cameras  /cameras/bulk-import  /cameras/{id}  /cameras/unreconciled
+/api/v1/cameras/{id}/reconcile  /cameras/from-federated
+/api/v1/cameras/{id}/health  /cameras/{id}/health/history  /cameras/{id}/maintenance
+/api/v1/cameras/{id}/coverage
+/api/v1/gis/cameras  /gis/coverage  /gis/gaps
+
+# Model 2 — detections (ingest from ai-worker)
+/api/v1/detections
+/api/v1/watchlist  /watchlist/alerts  /watchlist/alerts/{id}/acknowledge
+
+# Org / geography hierarchy
+/api/v1/organizations  /organizations/{id}/units  /organization-units/{id}/deactivate
+/api/v1/geographic-areas  /geographic-areas/{id}/children  /geographic-areas/{id}/ancestors
+/api/v1/sites
+
+# RBAC administration
+/api/v1/users  /access-groups  /access-groups/{id}/scopes  /access-groups/{id}/members
+/api/v1/roles  /api/v1/permissions  /api/v1/api-keys
 ```
 
+Not built: `/api/v1/search` (person/vehicle search), `/api/v1/audit` (audit-log read API),
+a Kafka-fronted `/observations` stream. Audit rows exist (`config_audit`,
+`credential_access_log`); there is no read endpoint for them yet.
+
 ## 6. Common Event Contract
+
+Conceptual shape. The stored table is `federation.federation_event`; field names there are
+`source_vms_id`, `organization_unit_id`, `occurred_at`, and `latitude`/`longitude` (no nested
+`location`). The natural dedup key is `(source_vms_id, source_event_id)`.
 
 ``` json
 {
   "event_id": "EVT-001",
-  "source": "VMS-A",
+  "source_vms_id": "…",
   "camera_id": "CAM-001",
-  "department_id": "DEPT-001",
+  "organization_unit_id": "…",
   "timestamp": "2026-08-19T10:32:15Z",
   "event_type": "ANPR_DETECTION",
   "object_reference": "GJ05AB1234",

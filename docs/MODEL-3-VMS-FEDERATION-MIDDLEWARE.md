@@ -68,7 +68,7 @@ Vendor-specific events should be mapped into a common schema:
 event_id
 source_vms
 camera_id
-department_id
+organization_unit_id
 event_type
 timestamp
 severity
@@ -194,9 +194,12 @@ partial list. Reconciliation of genuine removals is a separate operation.
 
 ### Registry boundary
 
-There is currently no `POST /api/v1/cameras` endpoint in Model 3. The `federated_camera` table is
-the VMS-discovered inventory, not the authoritative Model 1 camera registry. Its `camera_id`
-column remains `NULL` until a Model 1 registry record is reconciled to the discovered camera.
+Model 3 has no camera-creation endpoint of its own. `federated_camera` is the VMS-discovered
+inventory, keyed by `(target_id, native_camera_id)` — not the authoritative camera registry.
+The registry (`cameras`) and its write side (`POST /api/v1/cameras`, `/bulk-import`,
+`/{id}/reconcile`, `/from-federated`) belong to Model 1 (`db/versions/v1.6.sql`,
+`MODEL-1-REGISTRY-GIS.md`). A `federated_camera` row's `camera_id` stays `NULL` until a
+reconciliation call links it to a registry record.
 
 ``` text
 Model 1 camera registry (authoritative GIS/business record)

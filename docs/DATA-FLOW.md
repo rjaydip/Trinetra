@@ -2,9 +2,12 @@
 
 This document reflects what is actually built today, not the full three-model target
 state. See `CLAUDE.md` for repository status and `docs/ARCHITECTURE-MODEL-3.md` for the
-authoritative design. Model 3 (VMS Federation) is the only model with running code under
-`src/`; the `ai-worker/` (Model 2's capture + inference component) exists standalone and
-is not yet wired to it — its ingest call is written but unverified end-to-end.
+authoritative design. **Model 3** (VMS Federation) is the most complete. **Model 1**
+(Registry & GIS) now has a first slice under `src/` — the `cameras` registry, health and
+maintenance, VMS reconciliation, and an application-computed GIS/coverage surface
+(`db/versions/v1.6.sql`, `docs/MODEL-1-API-PLAN.md`). **Model 2**'s `ai-worker/` (capture +
+inference) exists standalone; its ingest and heartbeat calls are written and the `.NET`
+endpoints exist, but the leg has not been run against a deployed worker end-to-end.
 
 ---
 
@@ -70,10 +73,10 @@ current `src/` tree — today `TargetWorker` writes normalised events directly t
    (`Federation.Storage/Secrets`). The connector worker resolves in-process; Model 2's AI
    worker resolves over HTTP via `GET /api/v1/vms/{id}/credential/resolve` (the one route
    that returns secret material — `credential.resolve`, `DETECTION_WORKER` only, audited).
-2. **Connection test (optional, pre-flight).** `POST /api/v1/connection-tests` exercises
+2. **Connection test (optional, pre-flight).** `POST /api/v1/vms/{id}/test` exercises
    the adapter against the live target without registering a worker, so an operator can
    validate credentials/reachability first; results are polled via
-   `GET /api/v1/connection-tests/{id}`.
+   `GET /api/v1/vms/{id}/test/{testId}` (`GET /api/v1/vms/{id}/test` lists a target's runs).
 3. **Lease acquisition.** `LeaseManager` assigns each `ConnectorTarget` to exactly one
    `Federation.Worker` process/host, so an 80k-camera estate's ~500-2,000 targets are
    sharded across workers without double-polling. Losing a lease cancels that target's
@@ -107,8 +110,10 @@ current `src/` tree — today `TargetWorker` writes normalised events directly t
      Model 2 or the `ai-worker`), matched against watchlists in the same transaction
      (`DetectionEndpoints`).
    - `GET /api/v1/detections` — search ingested detections.
-   - `POST /api/v1/watchlists`, `GET .../alerts`, `POST .../alerts/{id}/acknowledge` —
-     watchlist management and alert workflow (`WatchlistEndpoints`).
+   - `POST /api/v1/watchlist`, `DELETE /api/v1/watchlist/{id}`, `GET /watchlist/alerts`,
+     `POST /watchlist/alerts/{id}/acknowledge` — watchlist management and alert workflow
+     (`WatchlistEndpoints`; `GET /watchlist` and `/alerts` gated by `alert.read`,
+     mutations by `watchlist.manage`, acknowledge by `alert.acknowledge`).
    - `POST /api/v1/worker-health/heartbeat`, `GET /api/v1/worker-health` — connector/
      AI-worker liveness (`WorkerHealthEndpoints`).
    - `GET /api/v1/api-keys`, `POST /api/v1/api-keys`, `DELETE /api/v1/api-keys/{id}` —
@@ -229,7 +234,7 @@ Layer-by-layer:
 5. **Federation.Api → Federation.Worker** *(implemented, control plane)*. The one place
    the API layer reaches toward the worker fleet's *effect* rather than its data: VMS
    registration (`POST /api/v1/vms`), credential writes, and connection tests
-   (`POST /api/v1/connection-tests`) change rows that `LeaseManager`/`TargetWorker` read
+   (`POST /api/v1/vms/{id}/test`) change rows that `LeaseManager`/`TargetWorker` read
    on their own polling cadence — there is no synchronous API-to-worker call; the worker
    picks up target/credential changes the next time it polls its lease and target state.
 

@@ -217,7 +217,7 @@ versioned envelope so schema evolution never requires a coordinated stop:
 
 ```text
 envelope: schema_version, event_id, produced_at, producer, trace_id
-payload:  the common event schema (source_vms, camera_id, department_id,
+payload:  the common event schema (source_vms, camera_id, organization_unit_id,
           event_type, timestamp, severity, location, object_reference,
           confidence, source_event_id, raw_reference)
 ```
@@ -335,7 +335,7 @@ Two invariants the implementation must hold, both from the specs:
 
 | Control | Implementation |
 |---|---|
-| Credentials | Never in the registry or events. `credential_reference` resolves against a secret store (Vault; fallback pgcrypto with a KMS-wrapped DEK) |
+| Credentials | Never in the registry or events. `credential_reference` resolves against a secret store. The architecture calls for Vault; the implemented fallback is application-side **AES-256-GCM** — the `secret` table holds only `ciphertext`/`nonce`/`tag`/`key_id`, and the key never reaches PostgreSQL (`SecretEncryption`, `PostgresCredentialResolver`). No `pgcrypto` |
 | Transport | mTLS between platform services; TLS to VMS where the vendor supports it, explicitly flagged per target where it does not |
 | Authorisation | RBAC, scoped by organization **and** geography as independent dimensions. Enforced in SQL and at the repository layer, not in the API handler alone. See `AUTHORIZATION.md` |
 | Audit | Every configuration change is audit-logged **in the same transaction as the change** (§11). Every credential resolution is logged to `credential_access_log` — accessor, target, outcome — including failures |
@@ -360,33 +360,40 @@ every other platform-internal call — it carries a plaintext camera password.
 
 ## 10. Schema lifecycle
 
-**No running service applies migrations.** The API and the workers verify the schema at startup
-and refuse to run against one that is missing or older than the build. Preparing the schema is an
-operator action: someone applies `db/versions/vN.sql` with psql.
+**Nothing in the running system touches the schema.** There is no migration tool, no
+`schema_version` table, and no startup check. The API and the workers assume the schema is
+present and current; they do not create it, alter it, or verify it. Preparing the schema is an
+operator action: someone applies `db/versions/vN.sql` with psql, in order, before the matching
+binaries are deployed.
 
 The reason is what happens at scale. Several API instances and a worker fleet restart together;
-if each migrates on start, the schema moves underneath instances that have already begun serving.
-An advisory lock serialises them but does not fix that — requests are still answered against a
-schema mid-change, at a moment nobody chose.
+if each migrated on start, the schema would move underneath instances that had already begun
+serving, and requests would be answered against a schema mid-change at a moment nobody chose. A
+startup gate was considered and rejected too: it adds a failure mode (every host down because
+one DDL step was missed) without removing the need for the operator to sequence the rollout.
 
 ```text
    psql -U trinetra -d trinetra -f db/versions/v1.sql          one controlled run
         |
         v
-   schema at version N
+   schema at version N       (db/objects/ mirrors it, one file per object, for review)
         |
         v
-   start binaries         each verifies N, or refuses and names the gap
+   deploy binaries built for N
 ```
 
-The trade is explicit: deployment order now matters, and schema precedes binaries every time. A
-host started against an older schema refuses rather than degrades, because a partially-migrated
-schema fails *unpredictably* — some queries work, others reference columns that do not exist yet
-— which presents as intermittent application bugs rather than as an ordering mistake.
+The trade is explicit, and the cost is stated in `OPERATIONS.md` §1: a binary pointed at a
+stale or unprepared database **starts healthy and fails at request time** with
+`relation ... does not exist`, which reads as a code fault rather than a missed setup step.
+Nothing warns. Deployment ordering — schema first, every time — is operational discipline, not
+something the system enforces.
 
-Migrations are embedded in the Storage assembly, ordered by filename, applied exactly once, and
-checksummed. An applied migration is never edited: installs that ran the old text would silently
-diverge from those that ran the new one.
+`db/versions/v1.sql` builds a complete database; each later file (`v1.1.sql`, `v1.2.sql`, …)
+holds only what that version adds. **A version file is never edited once applied anywhere** —
+installs that ran the old text would silently diverge from those that ran the new one.
+Corrections go in the next version. Changing a SQL function's signature means `DROP` then
+`CREATE`, never `CREATE OR REPLACE` (which creates an overload and leaves stale call sites
+bound to the old function with a green build).
 
 ---
 

@@ -72,3 +72,21 @@ ai-worker/evidence/
 # Local onboarding / operational scripts — hold admin credentials or
 # environment-specific values inline.
 scripts/
+
+# ---------------------------------------------------------------------------
+# frontend (React)
+# ---------------------------------------------------------------------------
+frontend/node_modules/
+frontend/dist/
+frontend/build/
+frontend/.vite/
+frontend/coverage/
+frontend/.eslintcache
+frontend/*.local
+frontend/.env
+frontend/.env.*
+!frontend/.env.example
+frontend/npm-debug.log*
+frontend/yarn-debug.log*
+frontend/yarn-error.log*
+frontend/pnpm-debug.log*
