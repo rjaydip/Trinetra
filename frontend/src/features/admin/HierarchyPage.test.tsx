@@ -102,6 +102,22 @@ describe('HierarchyPage deactivation conflicts', () => {
     expect(JSON.parse(String((firstDeactivate?.[1] as RequestInit).body))).toEqual({});
   });
 
+  it('cannot repeat an unstrategized deactivation after a conflict', async () => {
+    const fetch = hierarchyFetch({ areaConflict: true });
+    vi.stubGlobal('fetch', fetch);
+    const user = userEvent.setup();
+    renderHierarchy(['geography.manage']);
+
+    const deactivateArea = await screen.findByRole('button', { name: /deactivate area north zone/i });
+    await user.click(deactivateArea);
+    await screen.findByText(/choose cascade or reparent/i);
+
+    expect(deactivateArea).toBeDisabled();
+    await user.click(deactivateArea);
+    const calls = fetch.mock.calls.filter(([input, init]) => String(input).includes(`/geographic-areas/${areaId}/deactivate`) && (init as RequestInit | undefined)?.method === 'POST');
+    expect(calls).toHaveLength(1);
+  });
+
   it('requires and sends a new parent when reparent is chosen', async () => {
     const fetch = hierarchyFetch({ areaConflict: true });
     vi.stubGlobal('fetch', fetch);
