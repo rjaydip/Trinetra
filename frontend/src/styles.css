@@ -75,6 +75,44 @@ a { color: var(--color-primary); }
 .camera-detail-sections dt { color: var(--color-muted); font-weight: 600; }
 .camera-detail-sections dd { margin: 0; }
 .registry-page, .camera-detail-page, .onboarding-page { display: grid; gap: 1.25rem; }
+.vms-page, .vms-detail-page { display: grid; gap: 1.25rem; }
+.vms-page > header, .vms-detail-page > header, .credential-panel > header, .vms-registration > header { display: flex; align-items: start; justify-content: space-between; gap: 1rem; }
+.vms-page > header h1, .vms-detail-page > header h1, .vms-registration h2, .credential-panel h2 { margin: .25rem 0 0; }
+.vms-page > header > p, .vms-registration > header > p, .credential-panel > p { max-width: 45rem; margin: 0; color: var(--color-muted); }
+.vms-list, .vms-registration, .credential-panel { padding: 1rem; border: 1px solid var(--color-border); border-radius: .75rem; background: var(--color-surface); }
+.vms-list h2 { margin-top: 0; }
+.vms-list ul { display: grid; gap: .75rem; margin: 0; padding: 0; list-style: none; }
+.vms-list li { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding-top: .75rem; border-top: 1px solid var(--color-border); }
+.vms-list li:first-child { padding-top: 0; border-top: 0; }
+.vms-list li a { font-weight: 750; }
+.vms-list li p { margin: .25rem 0 0; color: var(--color-muted); }
+.vms-form, .credential-form { display: grid; gap: .75rem; margin-top: 1rem; }
+.vms-form fieldset { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem; margin: 0; padding: 1rem; border: 1px solid var(--color-border); border-radius: .75rem; }
+.vms-form legend { padding-inline: .25rem; font-weight: 700; }
+.vms-form label, .credential-form label { display: grid; gap: .375rem; font-size: .875rem; font-weight: 650; }
+.vms-form input, .vms-form select, .credential-form input { min-height: 2.75rem; padding: .5rem .625rem; color: var(--color-text); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: .375rem; font: inherit; }
+.vms-form .checkbox-label { display: flex; align-items: center; gap: .5rem; }
+.vms-form .checkbox-label input { min-height: 1.25rem; width: 1.25rem; }
+.vms-form > .button { width: fit-content; }
+.field-help { grid-column: 1 / -1; margin: 0; color: var(--color-muted); font-size: .875rem; }
+.selector-status { grid-column: 1 / -1; padding: .625rem .75rem; color: var(--color-muted); background: var(--color-canvas); border-left: .25rem solid var(--color-border); }
+.selector-status p { margin: 0; }
+.selector-status .button { margin-top: .5rem; }
+.save-confirmation { padding: .75rem; color: var(--color-success); background: #f0fdf4; border-left: .25rem solid var(--color-success); }
+.vms-detail-page > header { padding-bottom: 1rem; border-bottom: 1px solid var(--color-border); }
+.vms-detail-page > header p:last-child { margin-bottom: 0; color: var(--color-muted); }
+.credential-panel { display: grid; gap: 1rem; }
+.credential-form { grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 0; }
+.credential-form .form-error, .credential-form .save-confirmation, .credential-form .button { grid-column: 1 / -1; }
+.credential-form .button { width: fit-content; }
+.connection-test { display: grid; grid-template-columns: 1fr auto; align-items: start; gap: .75rem; padding-top: 1rem; border-top: 1px solid var(--color-border); }
+.connection-test h3, .connection-test p { margin: 0; }
+.connection-test > p, .connection-result { grid-column: 1 / -1; }
+.connection-test > div:first-child p { margin-top: .25rem; color: var(--color-muted); }
+.connection-result { display: grid; gap: .75rem; padding: .875rem; background: var(--color-canvas); border-radius: .5rem; }
+.connection-result dl { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: .75rem; margin: 0; }
+.connection-result dt { color: var(--color-muted); font-size: .75rem; font-weight: 700; text-transform: uppercase; }
+.connection-result dd { margin: .25rem 0 0; font-weight: 700; }
 .registry-page__header h1, .camera-detail-page h1, .onboarding-page h1 { margin: .25rem 0 0; }
 .registry-page__header, .registry-page__actions { display: flex; align-items: start; justify-content: space-between; gap: .75rem; }
 .registry-page__actions { flex-wrap: wrap; justify-content: end; }
@@ -167,6 +205,10 @@ a { color: var(--color-primary); }
   .map-page__header { display: grid; }
   .camera-card dl, .detail-panel dl { grid-template-columns: 1fr; }
   .registry-pagination { align-items: stretch; flex-direction: column; }
+  .vms-page > header, .vms-detail-page > header, .credential-panel > header, .vms-registration > header { display: grid; }
+  .vms-form fieldset, .credential-form { grid-template-columns: 1fr; }
+  .connection-test { grid-template-columns: 1fr; }
+  .connection-test > p, .connection-result { grid-column: auto; }
 }
 
 @media (min-width: 43rem) {
