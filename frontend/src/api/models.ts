@@ -270,6 +270,72 @@ export interface VmsResponse {
   expectedCameraCount: number | null;
 }
 
+export interface ConnectorTargetRequest {
+  code: string;
+  organizationUnitId: string;
+  displayName: string;
+  vendor: string;
+  endpoint: string;
+  credentialReference: string;
+  siteId?: string | null;
+  verifyTls?: boolean;
+  runtimeClass?: string | null;
+  rateLimitPerSecond?: number | null;
+  rateLimitBurst?: number | null;
+  inventoryPollSeconds?: number | null;
+  statusPollSeconds?: number | null;
+  eventPollSeconds?: number | null;
+  maxConcurrentRequests?: number | null;
+  expectedCameraCount?: number | null;
+}
+
+export interface CredentialRequest {
+  username?: string | null;
+  password?: string | null;
+  token?: string | null;
+  description?: string | null;
+}
+
+export interface CredentialResponse {
+  credentialReference: string;
+  updatedAt: string;
+}
+
+export interface CredentialExistsResponse {
+  reference: string;
+  exists: boolean;
+}
+
+export interface FederatedCameraResponse {
+  nativeCameraId: string;
+  cameraId: string | null;
+  name: string | null;
+  vendorModel: string | null;
+  firmware: string | null;
+  isEnabled: boolean;
+  isRecording: boolean | null;
+  health: string;
+  lastSeen: string | null;
+  streamReferences: string[];
+  statusChangedAt: string | null;
+}
+
+export interface ConnectionTestAccepted {
+  testId: string;
+  status: string;
+  statusUrl: string;
+}
+
+export interface ConnectionTestResult {
+  testId: string;
+  targetId: string;
+  status: string;
+  requestedAt: string;
+  completedAt: string | null;
+  failureReason: string | null;
+  result: unknown | null;
+}
+
 export interface GeographicAreaResponse {
   id: string;
   parentAreaId: string | null;
