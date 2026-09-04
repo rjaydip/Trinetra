@@ -53,7 +53,9 @@ describe('CameraForm', () => {
     const submit = vi.fn().mockResolvedValue(undefined);
     render(<CameraForm {...emptySelectors} onSubmit={submit} organizationUnits={[]} sites={[]} initialValues={validForm()} />);
 
-    await user.type(screen.getByLabelText(/^Azimuth/i), '45.125');
+    const azimuth = screen.getByLabelText(/^Azimuth/i);
+    await user.type(azimuth, '45.125');
+    expect(azimuth).toHaveValue(45.125);
     await user.click(screen.getByRole('button', { name: /register camera/i }));
 
     expect(submit).toHaveBeenCalledWith(expect.objectContaining({ azimuth: 45.125 }));

@@ -36,7 +36,8 @@ function toGeoJson(collection: GeoJsonFeatureCollection) {
 }
 
 function roundedAzimuth(value: number) {
-  return Number((((value % 360) + 360) % 360).toFixed(3));
+  const rounded = Number((((value % 360) + 360) % 360).toFixed(3));
+  return rounded === 360 ? 0 : rounded;
 }
 
 function azimuthFromDelta(dx: number, dy: number) {
@@ -56,6 +57,7 @@ export function LocationPicker({
   const map = useRef<MapLibreMap | null>(null);
   const marker = useRef<MapLibreMarker | null>(null);
   const markerElement = useRef<HTMLDivElement | null>(null);
+  const locationRef = useRef({ latitude, longitude });
   const featuresRef = useRef(features);
   const azimuthRef = useRef(azimuth);
   const onLocationChangeRef = useRef(onLocationChange);
@@ -64,6 +66,7 @@ export function LocationPicker({
   onAzimuthChangeRef.current = onAzimuthChange;
   featuresRef.current = features;
   azimuthRef.current = azimuth;
+  locationRef.current = { latitude, longitude };
 
   useEffect(() => {
     if (!container.current || map.current || import.meta.env.MODE === 'test') return undefined;
@@ -75,11 +78,12 @@ export function LocationPicker({
 
     void import('maplibre-gl').then(({ default: maplibregl }) => {
       if (cancelled || !container.current) return;
-      const hasLocation = validLocation(latitude, longitude);
+      const initialLocation = locationRef.current;
+      const hasLocation = validLocation(initialLocation.latitude, initialLocation.longitude);
       instance = new maplibregl.Map({
         container: container.current,
         style: MAP_STYLE,
-        center: hasLocation ? [longitude!, latitude] : [0, 0],
+        center: hasLocation ? [initialLocation.longitude!, initialLocation.latitude!] : [0, 0],
         zoom: hasLocation ? 15 : 1,
         maxBounds: [[-180, -90], [180, 90]],
       });
@@ -120,7 +124,7 @@ export function LocationPicker({
 
       pin = new maplibregl.Marker({ element, draggable: true });
       marker.current = pin;
-      if (hasLocation) pin.setLngLat([longitude!, latitude]).addTo(instance);
+      if (hasLocation) pin.setLngLat([initialLocation.longitude!, initialLocation.latitude!]).addTo(instance);
       pin.on('dragend', () => {
         const next = pin!.getLngLat();
         onLocationChangeRef.current(roundCoordinate(next.lat), roundCoordinate(next.lng));
@@ -182,6 +186,7 @@ export function LocationPicker({
       {import.meta.env.MODE === 'test' && <>
         <button type="button" onClick={() => onLocationChange(roundCoordinate(19.076012345), roundCoordinate(72.8777))}>Set location to 19.076012345, 72.8777</button>
         <button type="button" onClick={() => onAzimuthChange(azimuthFromDelta(1, 0))}>Point azimuth east</button>
+        <button type="button" onClick={() => onAzimuthChange(azimuthFromDelta(Math.tan(-0.0004 * Math.PI / 180), -1))}>Point azimuth just west of north</button>
       </>}
     </div>
     <label className="location-picker__azimuth-input">Azimuth
