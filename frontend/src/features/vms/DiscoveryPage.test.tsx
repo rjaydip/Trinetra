@@ -54,12 +54,12 @@ function apiHandler(requests: Array<{ path: string; method: string; body?: unkno
   updated: 0,
   failed: 1,
   rows: [{ index: 0, cameraCode: 'NVR-001-CAM-07', status: 'error', cameraId: null, error: 'Site is outside your authorized scope.' }],
-}, bulkStatus = 200) {
+}, bulkStatus = 200, target = vms) {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input));
     const method = init?.method ?? 'GET';
     requests.push({ path: `${url.pathname}${url.search}`, method, body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined });
-    if (url.pathname === `/api/v1/vms/${vmsId}`) return Response.json(vms);
+    if (url.pathname === `/api/v1/vms/${vmsId}`) return Response.json(target);
     if (url.pathname === `/api/v1/vms/${vmsId}/cameras`) return Response.json(cameras);
     if (url.pathname === '/api/v1/organizations') return Response.json([organization]);
     if (url.pathname === `/api/v1/organizations/${organizationId}/units`) return Response.json([organizationUnit]);
@@ -70,9 +70,9 @@ function apiHandler(requests: Array<{ path: string; method: string; body?: unkno
   });
 }
 
-function renderDiscoveryPage(requests: Array<{ path: string; method: string; body?: unknown }>, result?: object, bulkStatus?: number) {
+function renderDiscoveryPage(requests: Array<{ path: string; method: string; body?: unknown }>, result?: object, bulkStatus?: number, target = vms) {
   saveSession(sessionFixture('discovery-user', ['vms.read', 'camera.import']));
-  vi.stubGlobal('fetch', apiHandler(requests, result, bulkStatus));
+  vi.stubGlobal('fetch', apiHandler(requests, result, bulkStatus, target));
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <MemoryRouter initialEntries={[`/vms/${vmsId}/discovery`]}>
@@ -177,6 +177,39 @@ describe('DiscoveryPage', () => {
 
     expect(requests.some(({ path }) => path === '/api/v1/cameras/bulk-import')).toBe(false);
     expect(await screen.findByText('Horizontal field of view must be between 0.001 and 360.')).toBeVisible();
+  });
+
+  it('shows an inline error when the proposed generated camera code exceeds 100 characters', async () => {
+    const requests: Array<{ path: string; method: string; body?: unknown }> = [];
+    const user = userEvent.setup();
+    renderDiscoveryPage(requests, undefined, undefined, { ...vms, code: 'N'.repeat(94) });
+
+    await user.click(await screen.findByRole('checkbox', { name: /gate 7/i }));
+    await completeGate7(user);
+    await user.click(screen.getByRole('button', { name: /import selected/i }));
+
+    expect(requests.some(({ path }) => path === '/api/v1/cameras/bulk-import')).toBe(false);
+    expect(await screen.findByText('Camera code must be at most 100 characters.')).toBeVisible();
+    expect(screen.getByLabelText(/^camera code for gate 7$/i)).toHaveAttribute('aria-invalid', 'true');
+  });
+
+  it('shows an accessible inline error when an edited name exceeds 255 characters', async () => {
+    const requests: Array<{ path: string; method: string; body?: unknown }> = [];
+    const user = userEvent.setup();
+    renderDiscoveryPage(requests);
+
+    await user.click(await screen.findByRole('checkbox', { name: /gate 7/i }));
+    await completeGate7(user);
+    const name = screen.getByLabelText(/^name for gate 7$/i);
+    await user.clear(name);
+    await user.type(name, 'N'.repeat(256));
+    await user.click(screen.getByRole('button', { name: /import selected/i }));
+
+    const error = await screen.findByText('Name must be at most 255 characters.');
+    expect(requests.some(({ path }) => path === '/api/v1/cameras/bulk-import')).toBe(false);
+    expect(error).toBeVisible();
+    expect(name).toHaveAttribute('aria-invalid', 'true');
+    expect(name).toHaveAttribute('aria-describedby', error.id);
   });
 
   it('keeps one enrichment panel expanded at a time', async () => {
