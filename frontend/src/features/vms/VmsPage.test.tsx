@@ -2,7 +2,7 @@ import '@testing-library/jest-dom/vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { App } from '../../App';
@@ -16,6 +16,8 @@ const organizationId = '11111111-1111-4111-8111-111111111111';
 const organizationUnitId = '22222222-2222-4222-8222-222222222222';
 const siteId = '33333333-3333-4333-8333-333333333333';
 const vmsId = '44444444-4444-4444-8444-444444444444';
+const secondVmsId = '77777777-7777-4777-8777-777777777777';
+const connectionTestId = '66666666-6666-4666-8666-666666666666';
 
 const organization = { id: organizationId, code: 'OPS', name: 'Operations', organizationType: 'PUBLIC', description: null, status: 'ACTIVE' };
 const organizationUnit = { id: organizationUnitId, organizationId, parentUnitId: null, code: 'NORTH', name: 'North Unit', unitType: 'REGION', status: 'ACTIVE' };
@@ -34,6 +36,11 @@ const vms = {
   state: 'Active',
   expectedCameraCount: 24,
 };
+
+function RouteSwitcher() {
+  const navigate = useNavigate();
+  return <button type="button" onClick={() => navigate(`/vms/${secondVmsId}`)}>Open second VMS</button>;
+}
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -159,5 +166,55 @@ describe('VmsPage', () => {
       expectedCameraCount: 24,
     }));
     expect(await screen.findByRole('link', { name: /continue to credentials/i })).toHaveAttribute('href', `/vms/${vmsId}`);
+  });
+
+  it('clears target-local secrets and status when the detail route changes', async () => {
+    let firstTargetPolls = 0;
+    const secondVms = { ...vms, id: secondVmsId, code: 'SOUTH-NVR', displayName: 'South NVR', credentialReference: 'vms/south-nvr' };
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = new URL(String(input)).pathname;
+      if (path === `/api/v1/vms/${vmsId}`) return Response.json(vms);
+      if (path === `/api/v1/vms/${secondVmsId}`) return Response.json(secondVms);
+      if (path === `/api/v1/vms/${vmsId}/credential/status`) return Response.json({ reference: 'vms/north-nvr', exists: false });
+      if (path === `/api/v1/vms/${secondVmsId}/credential/status`) return Response.json({ reference: 'vms/south-nvr', exists: false });
+      if (path === `/api/v1/vms/${vmsId}/credential` && init?.method === 'PUT') {
+        return Response.json({ credentialReference: 'vms/north-nvr', updatedAt: '2026-09-04T10:30:00Z' });
+      }
+      if (path === `/api/v1/vms/${vmsId}/test` && init?.method === 'POST') {
+        return Response.json({ testId: connectionTestId, status: 'pending', statusUrl: `${path}/${connectionTestId}` }, { status: 202 });
+      }
+      if (path === `/api/v1/vms/${vmsId}/test/${connectionTestId}`) {
+        firstTargetPolls += 1;
+        return Response.json({ testId: connectionTestId, targetId: vmsId, status: 'pending', requestedAt: '2026-09-04T10:30:00Z', completedAt: null, failureReason: null, result: null });
+      }
+      if (path === `/api/v1/vms/${secondVmsId}/test/${connectionTestId}`) {
+        return Response.json({ testId: connectionTestId, targetId: secondVmsId, status: 'pending', requestedAt: '2026-09-04T10:30:00Z', completedAt: null, failureReason: null, result: null });
+      }
+      return new Response(null, { status: 404 });
+    }));
+    saveSession(sessionFixture('vms-route-user', ['vms.read', 'credential.write', 'integration.manage']));
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    queryClient.setQueryData(['vms', vmsId], vms);
+    queryClient.setQueryData(['vms', secondVmsId], secondVms);
+    const user = userEvent.setup();
+
+    render(<MemoryRouter initialEntries={[`/vms/${vmsId}`]}><RouteSwitcher /><AuthProvider><QueryClientProvider client={queryClient}><Routes><Route path="/vms/:vmsId" element={<VmsPage />} /></Routes></QueryClientProvider></AuthProvider></MemoryRouter>);
+
+    await user.type(await screen.findByLabelText(/^password/i), 'first-target-secret');
+    await user.click(screen.getByRole('button', { name: /save credential/i }));
+    expect(await screen.findByText(/^credential set$/i)).toBeVisible();
+    expect(screen.getByText(/credential updated/i)).toBeVisible();
+    await user.type(screen.getByLabelText(/^password/i), 'unsaved-first-target-secret');
+    await user.click(screen.getByRole('button', { name: /test connection/i }));
+    await waitFor(() => expect(firstTargetPolls).toBe(1));
+
+    await user.click(screen.getByRole('button', { name: /open second vms/i }));
+
+    expect(await screen.findByRole('heading', { name: 'South NVR' })).toBeVisible();
+    expect(await screen.findByText(/^credential not set$/i)).toBeVisible();
+    expect(screen.getByLabelText(/^password/i)).toHaveValue('');
+    expect(screen.queryByText(/credential updated/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/connection test pending/i)).not.toBeInTheDocument();
+    expect(vi.mocked(fetch).mock.calls.some(([input]) => new URL(String(input)).pathname === `/api/v1/vms/${secondVmsId}/test/${connectionTestId}`)).toBe(false);
   });
 });

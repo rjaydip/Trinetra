@@ -50,7 +50,7 @@ function VmsDetail({ vmsId }: { vmsId: string }) {
         <div><dt>Expected cameras</dt><dd>{target.data.expectedCameraCount ?? 'Not set'}</dd></div>
       </dl>
     </section>
-    <CredentialPanel permissions={permissions} vmsId={vmsId} />
+    <CredentialPanel key={vmsId} permissions={permissions} vmsId={vmsId} />
   </section>;
 }
 
