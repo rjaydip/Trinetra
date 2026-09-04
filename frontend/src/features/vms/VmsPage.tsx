@@ -33,6 +33,7 @@ function VmsDetail({ vmsId }: { vmsId: string }) {
   const { session } = useAuth();
   const target = useQuery({ queryKey: ['vms', vmsId], queryFn: () => api.vms.get(vmsId) });
   const permissions = ['vms.read', 'credential.write', 'integration.manage'].filter((permission) => hasPermission(session, permission));
+  const canImportCameras = hasPermission(session, 'camera.import');
 
   if (target.isPending) return <PageState title="Loading VMS">Retrieving the selected integration…</PageState>;
   if (target.isError) return <><PageState title="Couldn&apos;t load VMS">{errorDetail(target.error, 'The selected VMS could not be loaded.')}</PageState><button className="button" type="button" onClick={() => target.refetch()}>Try again</button></>;
@@ -49,6 +50,7 @@ function VmsDetail({ vmsId }: { vmsId: string }) {
         <div><dt>TLS verification</dt><dd>{target.data.verifyTls ? 'Required' : 'Disabled'}</dd></div>
         <div><dt>Expected cameras</dt><dd>{target.data.expectedCameraCount ?? 'Not set'}</dd></div>
       </dl>
+      {canImportCameras && <p><Link className="button button--secondary" to={`/vms/${vmsId}/discovery`}>Discover cameras</Link></p>}
     </section>
     <CredentialPanel key={vmsId} permissions={permissions} vmsId={vmsId} />
   </section>;

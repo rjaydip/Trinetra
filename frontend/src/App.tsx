@@ -14,6 +14,7 @@ import { NewCameraPage } from './features/cameras/NewCameraPage';
 import { RegistryPage } from './features/cameras/RegistryPage';
 import { MapPage } from './features/map/MapPage';
 import { ReportsPage } from './features/reports/ReportsPage';
+import { DiscoveryPage } from './features/vms/DiscoveryPage';
 import { VmsPage } from './features/vms/VmsPage';
 
 export function App() {
@@ -47,6 +48,7 @@ function SessionApplication() {
           <Route path="/cameras/:cameraId" element={<CameraDetailPage />} />
           <Route path="/vms" element={<RequirePermission permission="vms.read"><VmsPage /></RequirePermission>} />
           <Route path="/vms/:vmsId" element={<RequirePermission permission="vms.read"><VmsPage /></RequirePermission>} />
+          <Route path="/vms/:vmsId/discovery" element={<RequirePermission permission="vms.read"><RequirePermission permission="camera.import"><DiscoveryPage /></RequirePermission></RequirePermission>} />
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Route>
       </Routes>
