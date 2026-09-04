@@ -33,7 +33,7 @@ The dashboard first requests a small live camera page to establish an initial, v
 
 ## API Contract
 
-All authenticated API requests target `VITE_API_BASE_URL`, defaulting to `http://192.168.1.16:5261`.
+All authenticated API requests target `VITE_API_BASE_URL`, defaulting to `http://localhost:5261`.
 
 | UI need | Existing API |
 |---|---|
@@ -75,7 +75,7 @@ Desktop uses persistent navigation and a side detail panel; tablet converts filt
 
 The remote API must be reachable from the browser and configured with the deployed frontend origin in `Auth:AllowedOrigins`; the API intentionally disallows wildcard credentialed origins. During local development the Vite server may proxy `/api` to `VITE_API_BASE_URL` to avoid local CORS friction, but real deployment still requires the explicit allowlist.
 
-Live acceptance testing must be performed with `http://192.168.1.16:5261` reachable and valid existing user credentials. The implementation must provide a clear, non-secret-revealing unavailable state if it is not.
+Live acceptance testing must be performed with `http://localhost:5261` reachable and valid existing user credentials. The implementation must provide a clear, non-secret-revealing unavailable state if it is not.
 
 ## Verification
 

@@ -180,7 +180,7 @@ The reports aggregate only authorized active cameras. Ageing excludes cameras wi
 3. Import camera data through the batch API or the documented template.
 4. Add area/site boundaries where actual gap analysis is required.
 
-The implementation must not modify `http://192.168.1.16:5261` or any LAN database automatically. A deployment operator applies the migration and deploys the new binary deliberately.
+The implementation must not modify `http://localhost:5261` or any LAN database automatically. A deployment operator applies the migration and deploys the new binary deliberately.
 
 ## Explicitly Excluded
 

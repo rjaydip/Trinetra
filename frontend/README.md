@@ -13,7 +13,7 @@ cp .env.example .env.local
 ```
 
 `VITE_API_BASE_URL` is the API origin used by authenticated requests. If it is
-unset, the frontend uses `http://192.168.1.16:5261`. Do not put credentials or
+unset, the frontend uses `http://localhost:5261`. Do not put credentials or
 other secrets in Vite environment files; values prefixed with `VITE_` are
 available to the browser.
 
@@ -46,7 +46,7 @@ data.
 First check the configured backend directly:
 
 ```bash
-curl --connect-timeout 3 http://192.168.1.16:5261/health
+curl --connect-timeout 3 http://localhost:5261/health
 ```
 
 When that check succeeds, open the frontend in a browser and use valid

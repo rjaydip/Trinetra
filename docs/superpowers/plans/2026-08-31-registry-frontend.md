@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Target `VITE_API_BASE_URL`, defaulting to `http://192.168.1.16:5261`; never add mock camera data.
+- Target `VITE_API_BASE_URL`, defaulting to `http://localhost:5261`; never add mock camera data.
 - Authenticate with the existing JSON `/api/v1/auth/login` bearer-token contract and route `mustChangePassword` users to `/password`.
 - Use only documented Model 1 APIs and fields; do not manufacture gap/ageing/audit/export capabilities.
 - GIS requests require a bounded `bbox` at most 2° by 2°; coverage sectors are estimates and must be labelled as such.
@@ -366,7 +366,7 @@ Expected: application starts and shows its sign-in screen.
 
 - [ ] **Step 3: Perform live verification when the backend is reachable**
 
-Run: `curl --connect-timeout 3 http://192.168.1.16:5261/health`
+Run: `curl --connect-timeout 3 http://localhost:5261/health`
 
 Expected: successful health response, then validate login, seeded map markers, registry row/details, and coverage summary in the browser using valid credentials. If unavailable, capture the connection error in the final handoff without substituting mock data.
 
