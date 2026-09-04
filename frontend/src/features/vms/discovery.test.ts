@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
 import type { FederatedCameraResponse } from '../../api/models';
-import { createDiscoveredCameraEnrichment, toDiscoveredCameraWriteRequest, validateDiscoveredCameraEnrichment, type DiscoveredCameraEnrichment } from './discovery';
+import {
+  createDiscoveredCameraEnrichment,
+  toDiscoveredCameraWriteRequest,
+  validateDiscoveredCameraEnrichment,
+  validateDiscoveredCameraSelectionCount,
+  type DiscoveredCameraEnrichment,
+} from './discovery';
 
 const discovered: FederatedCameraResponse = {
   nativeCameraId: 'CAM-07',
@@ -36,6 +42,11 @@ const enrichment: DiscoveredCameraEnrichment = {
 };
 
 describe('toDiscoveredCameraWriteRequest', () => {
+  it('accepts exactly 500 selected cameras and rejects 501', () => {
+    expect(validateDiscoveredCameraSelectionCount(500)).toBeUndefined();
+    expect(validateDiscoveredCameraSelectionCount(501)).toBe('Select no more than 500 cameras per import. 501 are selected.');
+  });
+
   it('maps a selected discovered camera to an upsert-ready write request', () => {
     expect(toDiscoveredCameraWriteRequest(discovered, enrichment)).toEqual({
       cameraCode: 'NVR-001-CAM-07',

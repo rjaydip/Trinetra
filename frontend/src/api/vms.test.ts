@@ -95,16 +95,15 @@ describe('VMS API client', () => {
     );
   });
 
-  it('polls the selected VMS connection-test result', async () => {
+  it('polls the exact status URL returned for a connection test', async () => {
     respondWithJson();
+    const statusUrl = `/api/v1/connection-test-results/${testId}?representation=safe`;
 
-    await api.connectionTests.get(vmsId, testId);
+    await api.connectionTests.get(statusUrl);
 
-    expect(fetch).toHaveBeenCalledWith(
-      expect.stringContaining(`/api/v1/vms/${vmsId}/test/${testId}`),
-      expect.anything(),
-    );
-    expect(vi.mocked(fetch).mock.calls[0][1]?.method).toBeUndefined();
+    const [input, init] = vi.mocked(fetch).mock.calls[0];
+    expect(String(input)).toBe(`http://localhost:5261${statusUrl}`);
+    expect(init?.method).toBeUndefined();
   });
 
   it('applies the existing bearer authorization to VMS requests', async () => {

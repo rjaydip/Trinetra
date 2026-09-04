@@ -93,7 +93,7 @@ export const api = {
   },
   connectionTests: {
     create: (vmsId: string) => request<ConnectionTestAccepted>(`/api/v1/vms/${vmsId}/test`, { method: 'POST' }),
-    get: (vmsId: string, testId: string) => request<ConnectionTestResult>(`/api/v1/vms/${vmsId}/test/${testId}`),
+    get: (statusUrl: string) => request<ConnectionTestResult>(statusUrl),
   },
   overview: () => request<OverviewResponse>('/api/v1/overview'),
 };
