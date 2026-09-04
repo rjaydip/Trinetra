@@ -2,7 +2,7 @@ import { clearSession, readSession } from '../auth/session';
 
 import type { ApiProblemShape } from './models';
 
-const DEFAULT_BASE_URL = 'http://192.168.1.16:5261';
+const DEFAULT_BASE_URL = 'http://localhost:5261';
 const SAFE_FAILURE_DETAIL = 'The service could not complete this request. Please try again.';
 
 export class ApiProblem extends Error {

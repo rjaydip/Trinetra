@@ -100,7 +100,7 @@ In the Development environment, the interactive Scalar API Reference is availabl
 
 The Model 1 registry frontend lives in [`frontend/`](frontend/README.md). From that directory,
 copy `.env.example`, run `npm install`, and start it with `npm run dev -- --host 0.0.0.0`. It uses
-the deployed API (default `http://192.168.1.16:5261`); configure the API's explicit
+the deployed API (default `http://localhost:5261`); configure the API's explicit
 `Auth:AllowedOrigins` entry for the frontend origin before signing in.
 
 Nothing in the running system creates, changes or checks the schema — that is entirely yours.
