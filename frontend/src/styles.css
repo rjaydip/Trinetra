@@ -84,6 +84,18 @@ a { color: var(--color-primary); }
 .camera-form legend, .import-preview legend { padding-inline: .25rem; font-weight: 700; }
 .camera-form label, .file-input { display: grid; gap: .375rem; font-size: .875rem; font-weight: 600; }
 .camera-form input, .camera-form select, .file-input input { min-height: 2.75rem; padding: .5rem .625rem; border: 1px solid var(--color-border); border-radius: .375rem; color: var(--color-text); background: var(--color-surface); font: inherit; }
+.location-picker { display: grid; gap: .75rem; padding-top: .25rem; }
+.location-picker h3, .location-picker p { margin: 0; }
+.location-picker > div:first-child p { margin-top: .25rem; color: var(--color-muted); font-size: .875rem; }
+.location-picker__canvas { min-height: 20rem; overflow: hidden; border: 1px solid var(--color-border); border-radius: .625rem; background: #dbeafe; }
+.location-picker__marker { position: relative; width: 1.75rem; height: 1.75rem; }
+.location-picker__pin { position: absolute; z-index: 1; inset: 0; border: .1875rem solid white; border-radius: 50% 50% 50% 0; background: var(--color-danger); box-shadow: 0 .125rem .375rem rgb(15 23 42 / 35%); transform: rotate(-45deg); }
+.location-picker__azimuth-arm { position: absolute; z-index: 0; left: 50%; bottom: 50%; width: .125rem; height: 3.5rem; background: var(--color-primary); transform-origin: bottom center; }
+.location-picker__azimuth-handle { position: absolute; top: -1.375rem; left: 50%; width: 2.75rem; height: 2.75rem; border-radius: 50%; cursor: grab; touch-action: none; transform: translateX(-50%); }
+.location-picker__azimuth-handle::before { position: absolute; inset: .75rem; border: .1875rem solid white; border-radius: 50%; background: var(--color-primary); box-shadow: 0 .125rem .375rem rgb(15 23 42 / 30%); content: ''; }
+.location-picker__azimuth-handle:active { cursor: grabbing; }
+.location-picker__azimuth-handle:active::before { background: var(--color-primary-hover); }
+.location-picker__azimuth-input { max-width: 16rem; }
 .import-preview > fieldset { display: flex; flex-wrap: wrap; gap: 1rem; border: 0; padding: 0; }
 .import-preview > fieldset label { display: flex; align-items: center; gap: .5rem; }
 .import-preview > fieldset input { width: 1.25rem; min-height: 1.25rem; }

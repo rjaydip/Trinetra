@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { isApiProblem } from '../../api/client';
@@ -11,6 +11,7 @@ export function NewCameraPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [organizationId, setOrganizationId] = useState('');
+  const [coordinates, setCoordinates] = useState<{ latitude: number; longitude: number } | null>(null);
   const organizations = useQuery({ queryKey: ['reference', 'organizations'], queryFn: api.reference.organizations });
   const sites = useQuery({ queryKey: ['reference', 'sites'], queryFn: () => api.reference.sites() });
   const vms = useQuery({ queryKey: ['vms'], queryFn: api.vms.list });
@@ -19,6 +20,25 @@ export function NewCameraPage() {
     enabled: Boolean(organizationId),
     queryFn: () => api.reference.organizationUnits(organizationId),
   });
+  const mapBbox = useMemo(() => {
+    if (!coordinates) return null;
+    const span = 0.01;
+    const west = Math.min(Math.max(coordinates.longitude - span / 2, -180), 180 - span);
+    const south = Math.min(Math.max(coordinates.latitude - span / 2, -90), 90 - span);
+    return `${west},${south},${west + span},${south + span}`;
+  }, [coordinates]);
+  const mapContext = useQuery({
+    queryKey: ['gis-cameras', 'camera-picker', mapBbox],
+    queryFn: () => api.gis.cameras({ bbox: mapBbox! }),
+    enabled: mapBbox !== null,
+  });
+  const handleCoordinatesChange = useCallback((latitude: number | null, longitude: number | null) => {
+    setCoordinates((current) => {
+      if (latitude === null || longitude === null) return null;
+      if (current?.latitude === latitude && current.longitude === longitude) return current;
+      return { latitude, longitude };
+    });
+  }, []);
   const create = useMutation({
     mutationFn: api.cameras.create,
     onSuccess: async () => {
@@ -47,5 +67,5 @@ export function NewCameraPage() {
   </section>;
   if (organizations.isPending || sites.isPending || vms.isPending) return <PageState title="Loading onboarding options">Retrieving the organization, site, and VMS options you can use…</PageState>;
 
-  return <section className="onboarding-page" aria-labelledby="new-camera-title"><header><p className="eyebrow">Camera registry</p><h1 id="new-camera-title">Register camera</h1><p>Required fields identify the camera and its physical location.</p></header><CameraForm organizations={organizations.data ?? []} organizationUnits={organizationUnits.data ?? []} sites={sites.data ?? []} vms={vms.data ?? []} onOrganizationChange={setOrganizationId} onSubmit={async (values) => { await create.mutateAsync(values); }} /></section>;
+  return <section className="onboarding-page" aria-labelledby="new-camera-title"><header><p className="eyebrow">Camera registry</p><h1 id="new-camera-title">Register camera</h1><p>Required fields identify the camera and its physical location.</p></header><CameraForm organizations={organizations.data ?? []} organizationUnits={organizationUnits.data ?? []} sites={sites.data ?? []} vms={vms.data ?? []} mapFeatures={mapContext.data} onCoordinatesChange={handleCoordinatesChange} onOrganizationChange={setOrganizationId} onSubmit={async (values) => { await create.mutateAsync(values); }} /></section>;
 }
