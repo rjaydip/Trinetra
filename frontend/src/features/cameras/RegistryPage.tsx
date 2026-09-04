@@ -93,7 +93,7 @@ export function RegistryPage() {
       </div>
       <nav className="registry-pagination" aria-label="Camera registry pagination">
         <span aria-live="polite">{registry.isSuccess ? registry.data.nextCursor ? 'More camera records are available.' : 'End of available camera records.' : 'Camera results are unavailable.'}</span>
-        <button className="button" disabled={filtersPending || !registry.isSuccess || !registry.data?.nextCursor} onClick={nextPage} type="button">Next</button>
+        <button className="button" disabled={filtersPending || registry.isFetching || !registry.isSuccess || !registry.data?.nextCursor} onClick={nextPage} type="button">Next</button>
       </nav>
     </section>
   );

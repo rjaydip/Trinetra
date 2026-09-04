@@ -1,5 +1,5 @@
 import '@testing-library/jest-dom/vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, useNavigate } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -105,6 +105,25 @@ describe('RegistryPage', () => {
     renderApp('/cameras');
 
     expect(await screen.findByRole('button', { name: /^next$/i })).toBeDisabled();
+  });
+
+  it('disables Next while a refetch retains a next cursor', async () => {
+    signIn();
+    let resolveRefetch: ((response: Response) => void) | undefined;
+    let cameraRequests = 0;
+    vi.stubGlobal('fetch', () => {
+      cameraRequests += 1;
+      if (cameraRequests === 1) return Promise.resolve(Response.json({ items: [liveCamera()], nextCursor: 'opaque-next-cursor' }));
+      return new Promise<Response>((resolve) => { resolveRefetch = resolve; });
+    });
+
+    renderApp('/cameras');
+    const next = await screen.findByRole('button', { name: /^next$/i });
+    fireEvent(window, new Event('visibilitychange'));
+
+    await waitFor(() => expect(resolveRefetch).toBeDefined());
+    expect(next).toBeDisabled();
+    resolveRefetch!(Response.json({ items: [liveCamera()], nextCursor: 'opaque-next-cursor' }));
   });
 
   it('reflects supported filters in the registry URL query and API request', async () => {
