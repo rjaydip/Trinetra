@@ -218,7 +218,12 @@ public sealed class FederationQueryRepository
         return [.. rows];
     }
 
-    /// <summary>Estate counts, scoped to the caller.</summary>
+    /// <summary>
+    /// Estate counts, scoped to the caller on <b>both</b> dimensions (invariant 12) — the same
+    /// organization + geography predicate <see cref="ConnectorTargetRepository"/> applies to the
+    /// target list, so the counters here can never exceed what <c>GET /vms</c> shows the same
+    /// caller. A target with no site is not geo-constrained.
+    /// </summary>
     public async Task<EstateOverviewRow> OverviewAsync(CallerContext caller, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(caller);
@@ -230,11 +235,17 @@ public sealed class FederationQueryRepository
             WITH scoped AS (
                 SELECT t.id, t.state
                 FROM federation.connector_target t
-                WHERE @Unscoped OR t.organization_unit_id IN (
-                    SELECT organization_unit_id
-                    FROM federation.authorized_org_units(
-                             p_user_id => @UserId, p_api_key_id => @ApiKeyId,
-                             p_permission => 'vms.read'))
+                WHERE (@UnscopedOrg OR t.organization_unit_id IN (
+                          SELECT organization_unit_id
+                          FROM federation.authorized_org_units(
+                                   p_user_id => @UserId, p_api_key_id => @ApiKeyId,
+                                   p_permission => 'vms.read')))
+                  AND (@UnscopedGeo OR t.site_id IS NULL OR (
+                          SELECT s.geographic_area_id FROM federation.sites s WHERE s.id = t.site_id) IN (
+                          SELECT geographic_area_id
+                          FROM federation.authorized_geographic_areas(
+                                   p_user_id => @UserId, p_api_key_id => @ApiKeyId,
+                                   p_permission => 'vms.read')))
             )
             SELECT
                 (SELECT count(*) FROM scoped) AS targets,
@@ -247,7 +258,9 @@ public sealed class FederationQueryRepository
                     AND fc.health = 'Unreachable') AS unreachable_cameras;
             """, new
         {
-            caller.UserId, caller.ApiKeyId, Unscoped = caller.IsUnscopedFor("vms.read"),
+            caller.UserId, caller.ApiKeyId,
+            UnscopedOrg = caller.IsUnscopedFor("vms.read"),
+            UnscopedGeo = caller.IsUnscopedForGeography("vms.read"),
         }, cancellationToken: ct));
     }
 }

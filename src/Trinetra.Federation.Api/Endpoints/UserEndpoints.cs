@@ -352,7 +352,7 @@ public static class UserEndpoints
         {
             return TypedResults.Problem(
                 title: "Unknown group", detail: "No such access group.",
-                statusCode: StatusCodes.Status400BadRequest);
+                statusCode: StatusCodes.Status404NotFound);
         }
 
         // THE escalation chokepoint. A membership and a minted API key confer the same grant,

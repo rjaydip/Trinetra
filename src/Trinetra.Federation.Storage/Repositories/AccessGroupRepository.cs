@@ -352,6 +352,58 @@ public sealed class AccessGroupRepository
             """, new { groupId }, cancellationToken: ct));
     }
 
+    /// <summary>Whether a group declares any geographic scope at all.</summary>
+    /// <remarks>
+    /// The geographic-dimension counterpart of <see cref="HasOrganizationScopeAsync"/>. A group
+    /// without one reaches every area; only a caller already unscoped for geography on the
+    /// permission may hand it out.
+    /// </remarks>
+    public async Task<bool> HasGeographyScopeAsync(Guid groupId, CancellationToken ct)
+    {
+        await using var c = await _dataSource.OpenConnectionAsync(ct);
+
+        return await c.ExecuteScalarAsync<bool>(new CommandDefinition("""
+            SELECT EXISTS (
+                SELECT 1 FROM federation.group_scopes gs
+                JOIN federation.scopes s ON s.id = gs.scope_id
+                WHERE gs.group_id = @groupId AND s.scope_type = 'GEOGRAPHY');
+            """, new { groupId }, cancellationToken: ct));
+    }
+
+    /// <summary>
+    /// Whether every geographic scope on a group falls inside what the caller administers — the
+    /// geographic-dimension counterpart of <see cref="GroupScopesWithinReachAsync"/>.
+    /// </summary>
+    /// <remarks>
+    /// Same rule and same NULL-over-no-rows hazard: a group with no geographic scope is
+    /// unrestricted, so an empty result is refused rather than read as trivially satisfied.
+    /// </remarks>
+    public async Task<bool> GroupGeographyScopesWithinReachAsync(
+        Guid groupId, CallerContext caller, string permission, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(caller);
+
+        if (caller.UserId is null && caller.ApiKeyId is null)
+        {
+            return false;
+        }
+
+        await using var c = await _dataSource.OpenConnectionAsync(ct);
+
+        return await c.ExecuteScalarAsync<bool>(new CommandDefinition("""
+            SELECT COALESCE(bool_and(
+                       s.geographic_area_id = ANY (
+                           SELECT geographic_area_id
+                           FROM federation.authorized_geographic_areas(
+                                    p_user_id => @UserId, p_api_key_id => @ApiKeyId,
+                                    p_permission => @permission))),
+                   FALSE)
+            FROM federation.group_scopes gs
+            JOIN federation.scopes s ON s.id = gs.scope_id
+            WHERE gs.group_id = @groupId AND s.scope_type = 'GEOGRAPHY';
+            """, new { groupId, caller.UserId, caller.ApiKeyId, permission }, cancellationToken: ct));
+    }
+
     /// <summary>
     /// How many active users would still hold a permission if one membership were revoked.
     /// </summary>

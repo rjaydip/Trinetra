@@ -78,18 +78,42 @@ public sealed class DetectionRepository
         ArgumentNullException.ThrowIfNull(work);
         caller.Require("observation.write");
 
-        // A caller must be able to reach the camera's own organization, or a key scoped to one
-        // department could ingest detections into another's — CLAUDE.md #12: organization and
-        // geography scope are independent dimensions, never assumed from the permission alone.
-        if (!caller.IsUnscopedFor("observation.write"))
+        // A caller must be able to reach the camera's own organization AND the geography of its
+        // site — a key scoped to one department, or one district, must not be able to ingest
+        // detections into another's. CLAUDE.md #12: the two dimensions are independent, ANDed,
+        // and each is skipped only by its own unscoped flag. A camera with no site has no
+        // geography to check.
+        var orgOk = caller.IsUnscopedFor("observation.write");
+        var geoOk = siteId is null || caller.IsUnscopedForGeography("observation.write");
+
+        if (!orgOk || !geoOk)
         {
+            // Each dimension checked against its OWN authorized_* set, never has_permission():
+            // that function requires every dimension a group constrains to be supplied, so a
+            // group scoped on BOTH organization and geography would fail an org-only call
+            // simply because no geography was passed — a false denial, not a real one.
             var permitted = await work.Connection.ExecuteScalarAsync<bool>(new CommandDefinition(
                 """
-                SELECT federation.has_permission(
-                    p_user_id => @UserId, p_api_key_id => @ApiKeyId,
-                    p_permission => 'observation.write', p_organization_unit_id => @OrgUnit);
+                SELECT
+                    (@OrgOk OR EXISTS (
+                        SELECT 1 FROM federation.authorized_org_units(
+                            p_user_id => @UserId, p_api_key_id => @ApiKeyId,
+                            p_permission => 'observation.write')
+                        WHERE organization_unit_id = @OrgUnit))
+                    AND
+                    (@GeoOk OR @SiteId::uuid IS NULL OR EXISTS (
+                        SELECT 1 FROM federation.authorized_geographic_areas(
+                            p_user_id => @UserId, p_api_key_id => @ApiKeyId,
+                            p_permission => 'observation.write')
+                        WHERE geographic_area_id =
+                            (SELECT s.geographic_area_id FROM federation.sites s WHERE s.id = @SiteId)));
                 """,
-                new { caller.UserId, caller.ApiKeyId, OrgUnit = organizationUnitId },
+                new
+                {
+                    caller.UserId, caller.ApiKeyId,
+                    OrgOk = orgOk, GeoOk = geoOk,
+                    OrgUnit = organizationUnitId, SiteId = siteId,
+                },
                 work.Transaction, cancellationToken: ct));
 
             if (!permitted)
@@ -127,7 +151,17 @@ public sealed class DetectionRepository
         return affected > 0;
     }
 
-    /// <summary>Search over recent detections, scoped to the caller's organization reach.</summary>
+    /// <summary>
+    /// Search over recent detections, scoped to the caller's organization AND geography reach
+    /// (invariant 12) — each dimension bypassed only by its own unscoped flag. A detection whose
+    /// camera has no site is not geo-constrained.
+    /// </summary>
+    /// <remarks>
+    /// The caller's reachable org units and geographic areas are resolved to arrays before the
+    /// query, matching <see cref="EventQueryRepository"/>: the planner cannot see inside the
+    /// <c>authorized_*</c> set-returning functions, so a join against them scans and discards
+    /// out-of-scope rows, while an <c>= ANY(array)</c> lets it use the ordinary indexes.
+    /// </remarks>
     public async Task<IReadOnlyList<DetectionEventRow>> SearchAsync(
         string? plateNumberNormalized, Guid? targetId, DateTimeOffset from, DateTimeOffset to,
         int limit, CallerContext caller, CancellationToken ct)
@@ -135,25 +169,40 @@ public sealed class DetectionRepository
         ArgumentNullException.ThrowIfNull(caller);
         caller.Require("observation.read");
 
+        var unscopedOrg = caller.IsUnscopedFor("observation.read");
+        var unscopedGeo = caller.IsUnscopedForGeography("observation.read");
+
+        await using var c = await _dataSource.OpenConnectionAsync(ct);
+
+        Guid[] units = unscopedOrg ? [] : await AuthorizedOrgUnitsAsync(c, caller, ct);
+        Guid[] areas = unscopedGeo ? [] : await AuthorizedAreasAsync(c, caller, ct);
+
+        if ((!unscopedOrg && units.Length == 0) || (!unscopedGeo && areas.Length == 0))
+        {
+            // Reaches nothing on one dimension. `= ANY(empty)` is valid SQL that matches nothing
+            // but still costs a scan, so short-circuit.
+            return [];
+        }
+
         var sql = $"""
-            SELECT event_id, occurred_at, target_id, native_camera_id, camera_id,
-                   event_type, confidence, vehicle_type, plate_number_raw,
-                   plate_number_normalized, snapshot_reference
-            FROM federation.detection_event
-            WHERE occurred_at >= @from AND occurred_at < @to
+            SELECT d.event_id, d.occurred_at, d.target_id, d.native_camera_id, d.camera_id,
+                   d.event_type, d.confidence, d.vehicle_type, d.plate_number_raw,
+                   d.plate_number_normalized, d.snapshot_reference
+            FROM federation.detection_event d
+            WHERE d.occurred_at >= @from AND d.occurred_at < @to
               AND (@PlateNumberNormalized::text IS NULL
-                   OR plate_number_normalized = @PlateNumberNormalized)
-              AND (@TargetId::uuid IS NULL OR target_id = @TargetId)
-              AND (@Unscoped OR organization_unit_id IN (
-                       SELECT organization_unit_id
-                       FROM federation.authorized_org_units(
-                                p_user_id => @UserId, p_api_key_id => @ApiKeyId,
-                                p_permission => 'observation.read')))
-            ORDER BY occurred_at DESC
+                   OR d.plate_number_normalized = @PlateNumberNormalized)
+              AND (@TargetId::uuid IS NULL OR d.target_id = @TargetId)
+              {(unscopedOrg ? "" : "AND d.organization_unit_id = ANY (@units)")}
+              {(unscopedGeo ? "" : """
+              AND (d.site_id IS NULL OR EXISTS (
+                       SELECT 1 FROM federation.sites s
+                       WHERE s.id = d.site_id AND s.geographic_area_id = ANY (@areas)))
+              """)}
+            ORDER BY d.occurred_at DESC
             LIMIT @limit;
             """;
 
-        await using var c = await _dataSource.OpenConnectionAsync(ct);
         var rows = await c.QueryAsync<DetectionEventRow>(new CommandDefinition(sql, new
         {
             from,
@@ -161,10 +210,33 @@ public sealed class DetectionRepository
             PlateNumberNormalized = plateNumberNormalized,
             TargetId = targetId,
             limit = Math.Clamp(limit, 1, 500),
-            caller.UserId,
-            caller.ApiKeyId,
-            Unscoped = caller.IsUnscopedFor("observation.read"),
+            units,
+            areas,
         }, cancellationToken: ct));
+
+        return [.. rows];
+    }
+
+    /// <summary>The organization units this caller may read detections for.</summary>
+    private static async Task<Guid[]> AuthorizedOrgUnitsAsync(
+        NpgsqlConnection c, CallerContext caller, CancellationToken ct)
+    {
+        var rows = await c.QueryAsync<Guid>(new CommandDefinition("""
+            SELECT organization_unit_id FROM federation.authorized_org_units(
+                p_user_id => @UserId, p_api_key_id => @ApiKeyId, p_permission => 'observation.read');
+            """, new { caller.UserId, caller.ApiKeyId }, cancellationToken: ct));
+
+        return [.. rows];
+    }
+
+    /// <summary>The geographic areas this caller may read detections for.</summary>
+    private static async Task<Guid[]> AuthorizedAreasAsync(
+        NpgsqlConnection c, CallerContext caller, CancellationToken ct)
+    {
+        var rows = await c.QueryAsync<Guid>(new CommandDefinition("""
+            SELECT geographic_area_id FROM federation.authorized_geographic_areas(
+                p_user_id => @UserId, p_api_key_id => @ApiKeyId, p_permission => 'observation.read');
+            """, new { caller.UserId, caller.ApiKeyId }, cancellationToken: ct));
 
         return [.. rows];
     }

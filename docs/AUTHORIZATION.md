@@ -73,6 +73,24 @@ Empty and unscoped are kept explicitly distinct, because an empty scope list is 
 means either "reaches nothing" or "reaches everything", and confusing those either locks out the
 administrator or exposes the whole estate.
 
+**A row with no site is not geographically constrained.** `connector_target.site_id`,
+`detection_event.site_id` and `federation_event.site_id` are all nullable — a VMS target
+registered before a site is assigned, or a detection/event from a camera that has not been
+reconciled into the registry yet, carries no geographic key. The organization dimension still
+applies; the geography dimension cannot, because there is nothing to check it against. A caller
+confined to one district therefore still sees every site-less row in their organization,
+regardless of district. This is deliberate — it matches the camera registry's own placement rule
+(`CameraRepository.RequirePlacementAsync`) rather than failing closed — but it means geographic
+confinement is only as complete as the estate's site data. A department rolling out geo-scoped
+administrators should assign sites to its targets and reconcile its cameras before relying on
+district-level containment.
+
+**The standalone AI worker's key must stay geography-unscoped for `observation.write`**, unless
+its access group's geographic scope is deliberately widened to cover every district it processes.
+`DetectionRepository.IngestAsync` enforces geography like everything else; a worker key bound to a
+geo-restricted group will get `403` on any camera outside that geography, which reads as a silent
+partial outage rather than a configuration error. Check this before a multi-district rollout.
+
 ---
 
 ## 3. Where enforcement happens
@@ -200,10 +218,13 @@ The first is a choice; the two after it are gaps.
   the trade being made. The consequence is that a new query which omits its scope predicate
   returns everything rather than nothing, so the compile-time `CallerContext` requirement is
   load-bearing rather than a convenience — see §3.
-- **Event geographic scoping is incomplete.** Events carry organization scope only. The camera
-  registry now exists (`v1.6`) and camera reads/writes are scoped on organization **and**
-  geography, but the event pipeline is not yet joined to a camera's site, so events remain
-  organization-scoped until that link is added. Organization scope works fully.
+- **Event, detection and VMS-target geographic scoping was incomplete; now fixed.** Until the
+  "geography-scope wave" fix, `federation_event`, `detection_event` and `connector_target` were
+  scoped on organization only — worse, one read path (`ConnectorTargetRepository.GetAsync`) let
+  the *organization* unscoped flag bypass the geography check entirely, so it looked enforced but
+  was not. All three now AND both dimensions, each with its own unscoped flag, matching the
+  camera registry. See §2 for the one remaining limitation: a row with no site is not
+  geographically constrained.
 - **The audit `before` snapshot is read outside the transaction.** If another writer changes the
   row in that window, the recorded `before` is stale. Rare, but it is the remaining inaccuracy in
   the trail.

@@ -60,13 +60,20 @@ public sealed class EventQueryRepository
 
         await using var c = await _dataSource.OpenConnectionAsync(ct);
 
-        var unscoped = caller.IsUnscopedFor("event.read");
-        Guid[] units = unscoped ? [] : await ScopeAsync(c, caller, ct).ConfigureAwait(false);
+        // Organization and geography are independent scope dimensions, ANDed, each bypassed only
+        // by its own unscoped flag (invariant 12). Both are resolved to a concrete array before
+        // the query for the same planner reason the org dimension always was — see ScopeAsync.
+        var unscopedOrg = caller.IsUnscopedFor("event.read");
+        var unscopedGeo = caller.IsUnscopedForGeography("event.read");
 
-        if (!unscoped && units.Length == 0)
+        Guid[] units = unscopedOrg ? [] : await AuthorizedOrgUnitsAsync(c, caller, ct).ConfigureAwait(false);
+        Guid[] areas = unscopedGeo ? [] : await AuthorizedAreasAsync(c, caller, ct).ConfigureAwait(false);
+
+        if ((!unscopedOrg && units.Length == 0) || (!unscopedGeo && areas.Length == 0))
         {
-            // Reaches nothing. Returning early is not only an optimisation: `= ANY(empty array)`
-            // is valid SQL that matches nothing, but running it still costs a scan per page.
+            // Reaches nothing on one of the dimensions. Returning early is not only an
+            // optimisation: `= ANY(empty array)` is valid SQL that matches nothing, but running
+            // it still costs a scan per page.
             return [];
         }
 
@@ -83,7 +90,12 @@ public sealed class EventQueryRepository
                    e.occurred_at, e.severity, e.object_reference, e.confidence
             FROM federation.federation_event e
             WHERE e.occurred_at >= @From AND e.occurred_at < @To
-              {(unscoped ? "" : "AND e.organization_unit_id = ANY (@units)")}
+              {(unscopedOrg ? "" : "AND e.organization_unit_id = ANY (@units)")}
+              {(unscopedGeo ? "" : """
+              AND (e.site_id IS NULL OR EXISTS (
+                       SELECT 1 FROM federation.sites s
+                       WHERE s.id = e.site_id AND s.geographic_area_id = ANY (@areas)))
+              """)}
               AND (@CameraId::text IS NULL OR e.camera_id = @CameraId)
               AND (@EventType::text IS NULL OR e.event_type = @EventType)
               AND (@ObjectReference::text IS NULL OR e.object_reference = @ObjectReference)
@@ -95,7 +107,7 @@ public sealed class EventQueryRepository
         var rows = await c.QueryAsync<EventRow>(new CommandDefinition(sql, new
         {
             query.From, query.To, query.CameraId, query.EventType, query.ObjectReference,
-            query.CursorTime, query.CursorId, query.PageSize, units,
+            query.CursorTime, query.CursorId, query.PageSize, units, areas,
         }, cancellationToken: ct));
 
         return [.. rows];
@@ -110,7 +122,7 @@ public sealed class EventQueryRepository
     /// as a subquery, 1.6ms / 372 buffers as an array, because the array lets it use
     /// ix_event_org_time and read only rows already in scope.
     /// </remarks>
-    private static async Task<Guid[]> ScopeAsync(
+    private static async Task<Guid[]> AuthorizedOrgUnitsAsync(
         NpgsqlConnection c, CallerContext caller, CancellationToken ct)
     {
         var units = await c.QueryAsync<Guid>(new CommandDefinition("""
@@ -119,5 +131,22 @@ public sealed class EventQueryRepository
             """, new { caller.UserId, caller.ApiKeyId }, cancellationToken: ct));
 
         return [.. units];
+    }
+
+    /// <summary>
+    /// The geographic areas this caller may read events for — resolved to an array for the same
+    /// planner reason as <see cref="AuthorizedOrgUnitsAsync"/>. Used as a secondary filter over
+    /// the (already time- and org-narrowed) page rather than the primary access path, so a
+    /// subquery against <c>sites</c> in the main query is cheap.
+    /// </summary>
+    private static async Task<Guid[]> AuthorizedAreasAsync(
+        NpgsqlConnection c, CallerContext caller, CancellationToken ct)
+    {
+        var areas = await c.QueryAsync<Guid>(new CommandDefinition("""
+            SELECT geographic_area_id FROM federation.authorized_geographic_areas(
+                p_user_id => @UserId, p_api_key_id => @ApiKeyId, p_permission => 'event.read');
+            """, new { caller.UserId, caller.ApiKeyId }, cancellationToken: ct));
+
+        return [.. areas];
     }
 }

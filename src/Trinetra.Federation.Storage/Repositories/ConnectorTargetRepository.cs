@@ -8,9 +8,18 @@ namespace Trinetra.Federation.Storage.Repositories;
 /// Connector targets, scoped to what the caller may reach.
 /// </summary>
 /// <remarks>
-/// Every read joins against <c>authorized_org_units</c> so the <b>database</b> returns only
-/// permitted rows — <c>RBAC-LOGICAL-FLOW.md</c> §20's requirement. Filtering after the fact
-/// would mean one forgotten check exposes another department's estate, and nothing would report it.
+/// <para>
+/// Every read and write is constrained on <b>both</b> scope dimensions, ANDed and each with its
+/// own unscoped flag (<c>CLAUDE.md</c> invariant 12): the organization dimension against
+/// <c>connector_target.organization_unit_id</c>, the geographic dimension against the target's
+/// site's area. A target's <c>site_id</c> is nullable, so a target with no site has no
+/// geographic key and the geo dimension cannot constrain it — matching
+/// <c>CameraRepository.RequirePlacementAsync</c>. The organization dimension always applies.
+/// </para>
+/// <para>
+/// The scope predicate is the <b>database's</b>, not a filter applied after the fact — one
+/// forgotten check would otherwise expose another department's estate with nothing to report it.
+/// </para>
 /// </remarks>
 // CA1822 fires on the write methods now that they take their connection from the UnitOfWork
 // rather than the data source. That is the point of the change, not a defect: they stay instance
@@ -31,6 +40,32 @@ public sealed class ConnectorTargetRepository
         t.max_concurrent_requests, t.expected_camera_count
         """;
 
+    // The dual-dimension scope predicate, parameterised by the permission the caller exercises.
+    // Both dimensions are ANDed; each is bypassed only by ITS OWN unscoped flag (invariant 12).
+    // A target with no site (site_id IS NULL) has no geographic key, so the geo dimension does
+    // not apply to it — the organization dimension still does. `alias` is the table reference the
+    // predicate hangs off (`t` in a SELECT, `connector_target` in an UPDATE/DELETE).
+    private static string Scope(string alias, string permission) => $"""
+        (@UnscopedOrg OR {alias}.organization_unit_id IN (
+            SELECT organization_unit_id FROM federation.authorized_org_units(
+                p_user_id => @UserId, p_api_key_id => @ApiKeyId, p_permission => @Perm)))
+        AND (@UnscopedGeo OR {alias}.site_id IS NULL OR (
+                SELECT s.geographic_area_id FROM federation.sites s WHERE s.id = {alias}.site_id) IN (
+            SELECT geographic_area_id FROM federation.authorized_geographic_areas(
+                p_user_id => @UserId, p_api_key_id => @ApiKeyId, p_permission => @Perm)))
+        """;
+
+    private static DynamicParameters ScopeArgs(CallerContext caller, string permission)
+    {
+        var p = new DynamicParameters();
+        p.Add("UserId", caller.UserId);
+        p.Add("ApiKeyId", caller.ApiKeyId);
+        p.Add("Perm", permission);
+        p.Add("UnscopedOrg", caller.IsUnscopedFor(permission));
+        p.Add("UnscopedGeo", caller.IsUnscopedForGeography(permission));
+        return p;
+    }
+
     private readonly NpgsqlDataSource _dataSource;
 
     public ConnectorTargetRepository(NpgsqlDataSource dataSource) => _dataSource = dataSource;
@@ -41,24 +76,20 @@ public sealed class ConnectorTargetRepository
         ArgumentNullException.ThrowIfNull(caller);
         caller.Require("vms.read");
 
-        // The unscoped branch is explicit rather than an empty-set special case: an empty
-        // authorized set means "reaches nothing", and silently treating it as "reaches
-        // everything" is how an administrator check becomes an estate-wide leak.
-        var sql = caller.IsUnscopedFor("vms.read")
-            ? $"SELECT {Columns} FROM federation.connector_target t ORDER BY t.code;"
-            : $"""
-               SELECT {Columns} FROM federation.connector_target t
-               WHERE t.organization_unit_id IN (
-                   SELECT organization_unit_id
-                   FROM federation.authorized_org_units(
-                            p_user_id => @UserId, p_api_key_id => @ApiKeyId,
-                            p_permission => 'vms.read'))
-               ORDER BY t.code;
-               """;
+        // One SQL shape, deliberately. For an unscoped caller both flags are true, so each
+        // dimension's `@Unscoped OR <set membership>` short-circuits to TRUE per row and the
+        // `authorized_*` functions are never evaluated — no plan-folding hazard, just a
+        // constant-time check on the same scan. For a scoped caller an empty authorized set
+        // matches nothing, which is the safe reading: "reaches nothing", never "reaches
+        // everything" (that inversion is how an admin check becomes an estate-wide leak).
+        var args = ScopeArgs(caller, "vms.read");
 
         await using var c = await _dataSource.OpenConnectionAsync(ct);
-        var rows = await c.QueryAsync<TargetRow>(new CommandDefinition(
-            sql, new { caller.UserId, caller.ApiKeyId }, cancellationToken: ct));
+        var rows = await c.QueryAsync<TargetRow>(new CommandDefinition($"""
+            SELECT {Columns} FROM federation.connector_target t
+            WHERE ({Scope("t", "vms.read")})
+            ORDER BY t.code;
+            """, args, cancellationToken: ct));
 
         return rows.Select(r => r.ToDomain()).ToList();
     }
@@ -69,21 +100,16 @@ public sealed class ConnectorTargetRepository
         ArgumentNullException.ThrowIfNull(caller);
         caller.Require("vms.read");
 
+        var args = ScopeArgs(caller, "vms.read");
+        args.Add("id", id);
+
         await using var c = await _dataSource.OpenConnectionAsync(ct);
 
         var row = await c.QuerySingleOrDefaultAsync<TargetRow>(new CommandDefinition($"""
             SELECT {Columns} FROM federation.connector_target t
             WHERE t.id = @id
-              AND (@Unscoped OR federation.has_permission(
-                       p_user_id => @UserId, p_api_key_id => @ApiKeyId,
-                       p_permission => 'vms.read',
-                       p_organization_unit_id => t.organization_unit_id,
-                       p_geographic_area_id =>
-                           (SELECT s.geographic_area_id FROM federation.sites s WHERE s.id = t.site_id)));
-            """, new
-        {
-            id, caller.UserId, caller.ApiKeyId, Unscoped = caller.IsUnscopedFor("vms.read"),
-        }, cancellationToken: ct));
+              AND ({Scope("t", "vms.read")});
+            """, args, cancellationToken: ct));
 
         // A target the caller cannot reach returns null, not a 403. Distinguishing "does not
         // exist" from "exists but is not yours" tells an unauthorised caller which target ids
@@ -101,29 +127,49 @@ public sealed class ConnectorTargetRepository
 
         var c = work.Connection;
 
-        // A caller must be able to reach the organization unit they are assigning the target to,
-        // or they could park a target in another department and read its events.
+        // A caller must be able to reach BOTH the organization unit and the site's geography
+        // they are assigning the target to — otherwise they could park a target in another
+        // department, or another district, and read its events. Each dimension is skipped only
+        // by its own unscoped flag; a target with no site has no geography to check.
         var writePermission = target.Id == Guid.Empty ? "vms.create" : "vms.update";
+        var orgOk = caller.IsUnscopedFor(writePermission);
+        var geoOk = target.SiteId is null || caller.IsUnscopedForGeography(writePermission);
 
-        if (!caller.IsUnscopedFor(writePermission))
+        if (!orgOk || !geoOk)
         {
+            // Each dimension checked against its OWN authorized_* set, never has_permission():
+            // that function requires every dimension a group constrains to be supplied, so a
+            // group scoped on BOTH organization and geography would fail an org-only call
+            // simply because no geography was passed — a false denial, not a real one.
             var permitted = await c.ExecuteScalarAsync<bool>(new CommandDefinition(
                 """
-                SELECT federation.has_permission(
-                    p_user_id => @UserId, p_api_key_id => @ApiKeyId,
-                    p_permission => @Permission, p_organization_unit_id => @OrgUnit);
+                SELECT
+                    (@OrgOk OR EXISTS (
+                        SELECT 1 FROM federation.authorized_org_units(
+                            p_user_id => @UserId, p_api_key_id => @ApiKeyId, p_permission => @Permission)
+                        WHERE organization_unit_id = @OrgUnit))
+                    AND
+                    (@GeoOk OR @SiteId::uuid IS NULL OR EXISTS (
+                        SELECT 1 FROM federation.authorized_geographic_areas(
+                            p_user_id => @UserId, p_api_key_id => @ApiKeyId,
+                            p_permission => @Permission)
+                        WHERE geographic_area_id =
+                            (SELECT s.geographic_area_id FROM federation.sites s WHERE s.id = @SiteId)));
                 """,
                 new
                 {
                     caller.UserId,
                     caller.ApiKeyId,
                     Permission = writePermission,
+                    OrgOk = orgOk,
+                    GeoOk = geoOk,
                     OrgUnit = target.OrganizationUnitId,
+                    target.SiteId,
                 }, work.Transaction, cancellationToken: ct));
 
             if (!permitted)
             {
-                throw new ForbiddenException("vms.update");
+                throw new ForbiddenException(writePermission);
             }
         }
 
@@ -189,22 +235,20 @@ public sealed class ConnectorTargetRepository
         ArgumentNullException.ThrowIfNull(work);
         caller.Require("vms.update");
 
+        var args = ScopeArgs(caller, "vms.update");
+        args.Add("id", id);
+        args.Add("State", state.ToString());
+        args.Add("ActorId", caller.UserId);
+
         var c = work.Connection;
-        var affected = await c.ExecuteAsync(new CommandDefinition("""
+        var affected = await c.ExecuteAsync(new CommandDefinition($"""
             UPDATE federation.connector_target
             SET state = @State::federation.target_state,
                 leased_by = NULL, lease_expires_at = NULL,
                 updated_by = @ActorId, updated_at = now()
             WHERE id = @id
-              AND (@Unscoped OR federation.has_permission(
-                       p_user_id => @UserId, p_api_key_id => @ApiKeyId,
-                       p_permission => 'vms.update',
-                       p_organization_unit_id => organization_unit_id));
-            """, new
-        {
-            id, State = state.ToString(), ActorId = caller.UserId,
-            caller.UserId, caller.ApiKeyId, Unscoped = caller.IsUnscopedFor("vms.update"),
-        }, work.Transaction, cancellationToken: ct));
+              AND ({Scope("connector_target", "vms.update")});
+            """, args, work.Transaction, cancellationToken: ct));
 
         return affected > 0;
     }
@@ -216,18 +260,15 @@ public sealed class ConnectorTargetRepository
         ArgumentNullException.ThrowIfNull(work);
         caller.Require("vms.update");
 
+        var args = ScopeArgs(caller, "vms.update");
+        args.Add("id", id);
+
         var c = work.Connection;
-        var affected = await c.ExecuteAsync(new CommandDefinition("""
+        var affected = await c.ExecuteAsync(new CommandDefinition($"""
             DELETE FROM federation.connector_target
             WHERE id = @id
-              AND (@Unscoped OR federation.has_permission(
-                       p_user_id => @UserId, p_api_key_id => @ApiKeyId,
-                       p_permission => 'vms.update',
-                       p_organization_unit_id => organization_unit_id));
-            """, new
-        {
-            id, caller.UserId, caller.ApiKeyId, Unscoped = caller.IsUnscopedFor("vms.update"),
-        }, work.Transaction, cancellationToken: ct));
+              AND ({Scope("connector_target", "vms.update")});
+            """, args, work.Transaction, cancellationToken: ct));
 
         return affected > 0;
     }

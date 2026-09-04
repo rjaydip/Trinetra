@@ -131,8 +131,8 @@ rule does not bite — still prefer new `v1.7+` files over editing `v1.sql`. Bra
 
 | PR | Contents | Schema |
 |----|----------|--------|
-| PR1  | **P0**: 8-C1 + 15-H1 — ✅ implemented (not committed) | — |
-| PR2  | **Geography-scope wave**: 9-H1, 13-H1, 15-M1, verify 14-M1 / 16-L2 (`CameraRepository` pattern) | — |
+| PR1  | **P0**: 8-C1 + 15-H1 — ✅ done, commit `d86c6ee` | — |
+| PR2  | **Geography-scope wave**: 9-H1, 13-H1, 15-M1, 14-M1 — ✅ implemented + BA/dotnet-expert reviewed, 13 integration tests added (not committed); 16-L2 verified n/a | — |
 | PR3  | **VMS lifecycle**: 9-NEW-H, 9-H2, 9-H3, 9-M1, 9-M2 | `vms.delete` |
 | PR4  | **Token revocation**: 4-C1 + `POST /auth/logout` + `ChangePasswordAsync` status re-check | `token_version` |
 | PR5  | **Unscoped reads**: 6-H1, 8-H1, 8-H2 | — |
@@ -699,11 +699,11 @@ AES-256-GCM app-side sealing.
 ### HIGH
 
 - **13-H1** All three routes (`WriteAsync`/`ResolveAsync`/`StatusAsync`) scope via
-  `ConnectorTargetRepository.GetAsync(id, caller)` — which inherits the **9-H1 geography bypass**
-  (its geo predicate is short-circuited by the *organization* unscoped flag). So an org-unscoped,
-  geo-scoped caller with `credential.write` can **overwrite the device password** of a target
+  `ConnectorTargetRepository.GetAsync(id, caller)` — which inherited the **9-H1 geography bypass**
+  (its geo predicate was short-circuited by the *organization* unscoped flag). So an org-unscoped,
+  geo-scoped caller with `credential.write` could **overwrite the device password** of a target
   outside their geography — the doc itself calls this "the highest-privilege action in the
-  system". Fixing 9-H1 fixes this; until then this is the worst consequence of it.
+  system". **FIXED transitively by PR2's 9-H1 fix** — `GetAsync` now ANDs an independent geo flag.
 - **13-H2** Blast radius of 8-C1: SUPER_ADMIN holds every permission incl. `credential.resolve`
   (v1.5.sql backfill). 8-C1 (mint a key in PLATFORM-ADMINS) → `credential.resolve` estate-wide →
   `GET /vms/{id}/credential/resolve` for every target → **exfiltrate every device credential in
@@ -828,8 +828,11 @@ Review 2026-09-04.
 - **16-L1** Permission taxonomy: `GET /watchlist` (entries) is gated `alert.read`; there is no
   `watchlist.read`. Read = `alert.read`, write = `watchlist.manage`. Functional but odd.
 - **16-L2** Watchlist matching at ingest is `FindActiveMatchAsync(organizationUnitId, ...)` — org
-  unit only, geography not consulted. A plate on the org's watchlist detected by any camera in
-  that org (any district) alerts. Likely intended (the org owns the list) — note.
+  unit only, geography not consulted. **VERIFIED (PR2): `watchlist_entry` has no `site_id` /
+  `geographic_area_id` column — there is no geographic dimension on the entity, so org-only is
+  correct by design. No change.** (Separately: `WatchlistRepository.DeactivateAsync` has NO scope
+  check at all — `WHERE id = @id` — any `watchlist.manage` holder can deactivate any entry
+  estate-wide. Tracked for the watchlist PR, not PR2.)
 - **16-L3** `CreateWatchlistEntryRequest.Severity` / `Reason` unvalidated (severity vocab? reason
   length/required?).
 - **16-L4** `ListAsync` (entries) / `ListAlertsAsync` — verify both AND geography or confirm
