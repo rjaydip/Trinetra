@@ -164,6 +164,7 @@ interface CameraFormProps {
   organizationUnits: OrganizationUnitResponse[];
   sites: SiteResponse[];
   vms: VmsResponse[];
+  selectorStates?: CameraSelectorStates;
   mapFeatures?: GeoJsonFeatureCollection;
   initialValues?: CameraFormValues;
   onOrganizationChange(organizationId: string): void;
@@ -171,8 +172,48 @@ interface CameraFormProps {
   onSubmit(values: CameraWriteRequest): Promise<void>;
 }
 
+export interface SelectorState {
+  state: 'idle' | 'loading' | 'ready' | 'empty' | 'error';
+  message?: string;
+  retry?(): void;
+}
+
+export interface CameraSelectorStates {
+  organizations: SelectorState;
+  organizationUnits: SelectorState;
+  sites: SelectorState;
+  vms: SelectorState;
+}
+
+const readySelectorStates: CameraSelectorStates = {
+  organizations: { state: 'ready' },
+  organizationUnits: { state: 'ready' },
+  sites: { state: 'ready' },
+  vms: { state: 'ready' },
+};
+
 function FieldError({ id, message }: { id: string; message?: string }) {
   return message ? <p className="form-error" id={id} role="alert">{message}</p> : null;
+}
+
+function SelectorStatus({ id, label, selector, emptyMessage, idleMessage }: {
+  id: string;
+  label: string;
+  selector: SelectorState;
+  emptyMessage: string;
+  idleMessage?: string;
+}) {
+  if (selector.state === 'ready') return null;
+
+  const message = selector.state === 'idle' ? idleMessage
+    : selector.state === 'loading' ? `Loading ${label.toLowerCase()}…`
+      : selector.state === 'empty' ? emptyMessage
+        : selector.message ?? `${label} could not be loaded. Please try again.`;
+
+  return <div className="selector-status" id={id} role="status" aria-live="polite">
+    <p>{message}</p>
+    {selector.state === 'error' && selector.retry && <button className="button button--secondary" type="button" onClick={selector.retry}>Retry {label.toLowerCase()}</button>}
+  </div>;
 }
 
 function coordinate(value: string, minimum: number, maximum: number) {
@@ -185,7 +226,7 @@ function optionalNumericValue(value: string) {
   return value.trim() && Number.isFinite(number) ? number : null;
 }
 
-export function CameraForm({ organizations, organizationUnits, sites, vms, mapFeatures, initialValues, onOrganizationChange, onCoordinatesChange, onSubmit }: CameraFormProps) {
+export function CameraForm({ organizations, organizationUnits, sites, vms, selectorStates = readySelectorStates, mapFeatures, initialValues, onOrganizationChange, onCoordinatesChange, onSubmit }: CameraFormProps) {
   const form = useForm<CameraFormValues>({ defaultValues: initialValues ?? defaults, resolver: zodResolver(cameraFormSchema) });
   const [detailsOpen, setDetailsOpen] = useState(false);
   const { register, formState: { errors, isSubmitting } } = form;
@@ -196,9 +237,10 @@ export function CameraForm({ organizations, organizationUnits, sites, vms, mapFe
   const selectedOrganizationId = form.watch('organizationId');
   const selectedVmsId = form.watch('vmsId');
   const organizationRegistration = register('organizationId');
-  const validationProps = (name: keyof CameraFormValues) => errors[name]
-    ? { 'aria-describedby': `${name}-error`, 'aria-invalid': true }
-    : { 'aria-invalid': false };
+  const validationProps = (name: keyof CameraFormValues, statusId?: string) => {
+    const describedBy = [errors[name] ? `${name}-error` : undefined, statusId].filter(Boolean).join(' ') || undefined;
+    return { 'aria-describedby': describedBy, 'aria-invalid': Boolean(errors[name]) };
+  };
   const numericFields: Array<{ name: NumericField; label: string; step?: string }> = [
     { name: 'altitude', label: 'Altitude', step: 'any' }, { name: 'mountingHeight', label: 'Mounting height', step: 'any' },
     { name: 'tilt', label: 'Tilt', step: 'any' },
@@ -222,14 +264,17 @@ export function CameraForm({ organizations, organizationUnits, sites, vms, mapFe
       <fieldset><legend>Identity and location <span aria-hidden="true">* Required</span></legend>
         <label>Camera code<span aria-hidden="true"> *</span><input aria-required="true" {...register('cameraCode')} {...validationProps('cameraCode')} /></label><FieldError id="cameraCode-error" message={errors.cameraCode?.message} />
         <label>Name<span aria-hidden="true"> *</span><input aria-required="true" {...register('name')} {...validationProps('name')} /></label><FieldError id="name-error" message={errors.name?.message} />
-        <label>Organization<select {...organizationRegistration} onChange={(event) => {
+        <label>Organization<select aria-describedby={selectorStates.organizations.state === 'ready' ? undefined : 'organizations-status'} disabled={selectorStates.organizations.state !== 'ready'} {...organizationRegistration} onChange={(event) => {
           organizationRegistration.onChange(event);
           form.setValue('organizationUnitId', '');
           form.clearErrors('organizationUnitId');
           onOrganizationChange(event.target.value);
         }}><option value="">Select an organization</option>{organizations.map((organization) => <option key={organization.id} value={organization.id}>{organization.name} ({organization.code})</option>)}</select></label>
-        <label>Organization unit<span aria-hidden="true"> *</span><select aria-required="true" disabled={!selectedOrganizationId || organizationUnits.length === 0} {...register('organizationUnitId')} {...validationProps('organizationUnitId')}><option value="">Select an organization unit</option>{organizationUnits.map((unit) => <option key={unit.id} value={unit.id}>{unit.name} ({unit.code})</option>)}</select></label><FieldError id="organizationUnitId-error" message={errors.organizationUnitId?.message} />
-        <label>Site<span aria-hidden="true"> *</span><select aria-required="true" disabled={sites.length === 0} {...register('siteId')} {...validationProps('siteId')}><option value="">Select a site</option>{sites.map((site) => <option key={site.id} value={site.id}>{site.name} ({site.code})</option>)}</select></label><FieldError id="siteId-error" message={errors.siteId?.message} />
+        <SelectorStatus id="organizations-status" label="Organizations" selector={selectorStates.organizations} emptyMessage="No organizations are available. Ask an administrator to create an organization before registering a camera." />
+        <label>Organization unit<span aria-hidden="true"> *</span><select aria-required="true" disabled={!selectedOrganizationId || selectorStates.organizationUnits.state !== 'ready'} {...register('organizationUnitId')} {...validationProps('organizationUnitId', selectorStates.organizationUnits.state === 'ready' ? undefined : 'organization-units-status')}><option value="">Select an organization unit</option>{organizationUnits.map((unit) => <option key={unit.id} value={unit.id}>{unit.name} ({unit.code})</option>)}</select></label><FieldError id="organizationUnitId-error" message={errors.organizationUnitId?.message} />
+        <SelectorStatus id="organization-units-status" label="Organization units" selector={selectorStates.organizationUnits} idleMessage="Select an organization to load its organization units." emptyMessage="No organization units are available for this organization. Choose another organization or ask an administrator to create an organization unit." />
+        <label>Site<span aria-hidden="true"> *</span><select aria-required="true" disabled={selectorStates.sites.state !== 'ready'} {...register('siteId')} {...validationProps('siteId', selectorStates.sites.state === 'ready' ? undefined : 'sites-status')}><option value="">Select a site</option>{sites.map((site) => <option key={site.id} value={site.id}>{site.name} ({site.code})</option>)}</select></label><FieldError id="siteId-error" message={errors.siteId?.message} />
+        <SelectorStatus id="sites-status" label="Sites" selector={selectorStates.sites} emptyMessage="No sites are available. Ask an administrator to create a site before registering a camera." />
         <label>Camera type<span aria-hidden="true"> *</span><select aria-required="true" {...register('cameraType')} {...validationProps('cameraType')}><option value="">Select a camera type</option>{cameraTypes.map((type) => <option key={type} value={type}>{type}</option>)}</select></label><FieldError id="cameraType-error" message={errors.cameraType?.message} />
         <label>Latitude<span aria-hidden="true"> *</span><input aria-required="true" inputMode="decimal" {...register('latitude')} {...validationProps('latitude')} /></label><FieldError id="latitude-error" message={errors.latitude?.message} />
         <label>Longitude<span aria-hidden="true"> *</span><input aria-required="true" inputMode="decimal" {...register('longitude')} {...validationProps('longitude')} /></label><FieldError id="longitude-error" message={errors.longitude?.message} />
@@ -256,7 +301,9 @@ export function CameraForm({ organizations, organizationUnits, sites, vms, mapFe
         />
         <fieldset><legend>Optional device details</legend>
           <label>Model<input {...register('model')} {...validationProps('model')} /></label><label>Serial number<input {...register('serialNumber')} {...validationProps('serialNumber')} /></label>
-          <label>VMS<select disabled={vms.length === 0} {...register('vmsId')} {...validationProps('vmsId')}><option value="">Manual registration</option>{vms.map((vmsTarget) => <option key={vmsTarget.id} value={vmsTarget.id}>{vmsTarget.displayName} ({vmsTarget.code})</option>)}</select></label><FieldError id="vmsId-error" message={errors.vmsId?.message} /><label>Stream reference<input {...register('streamReference')} {...validationProps('streamReference')} /></label>
+          <label>VMS<select disabled={selectorStates.vms.state !== 'ready'} {...register('vmsId')} {...validationProps('vmsId', selectorStates.vms.state === 'ready' ? undefined : 'vms-status')}><option value="">Manual registration</option>{vms.map((vmsTarget) => <option key={vmsTarget.id} value={vmsTarget.id}>{vmsTarget.displayName} ({vmsTarget.code})</option>)}</select></label><FieldError id="vmsId-error" message={errors.vmsId?.message} />
+          <SelectorStatus id="vms-status" label="VMS records" selector={selectorStates.vms} emptyMessage="No VMS records are available. Continue with manual registration, or ask an administrator to create a VMS record." />
+          <label>Stream reference<input {...register('streamReference')} {...validationProps('streamReference')} /></label>
         </fieldset>
         <fieldset><legend>Position, optics, and status</legend>
           {numericFields.map(({ name, label, step }) => <div key={name}><label>{label}<input type="number" step={step} {...register(name)} {...validationProps(name)} /></label><FieldError id={`${name}-error`} message={errors[name]?.message} /></div>)}

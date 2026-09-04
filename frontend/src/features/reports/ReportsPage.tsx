@@ -32,8 +32,8 @@ export function ReportsPage() {
 
   function submitCoverage(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!organizationUnitId && !geographicAreaId) {
-      setScopeError('Select an organization unit or geographic area before loading the coverage summary.');
+    if (!geographicAreaId) {
+      setScopeError('Select a geographic area before loading the coverage summary.');
       return;
     }
     setScopeError(null);
@@ -62,12 +62,12 @@ export function ReportsPage() {
       <section className="report-panel" aria-labelledby="coverage-summary-title">
         <div className="report-panel__header"><div><h2 id="coverage-summary-title">Coverage summary</h2><p>Estimated planning aid only; terrain and obstructions are not modelled.</p></div><StatusBadge tone="warning">Estimated</StatusBadge></div>
         <form className="coverage-scope-form" onSubmit={submitCoverage}>
-          <fieldset><legend>Organization-unit scope</legend>
-            <p>Choose an organization to load its organization-unit options.</p>
+          <label>Coverage geographic area (required)<select aria-describedby={scopeError ? 'coverage-scope-error' : undefined} aria-invalid={Boolean(scopeError)} aria-required="true" value={geographicAreaId} onChange={(event) => setGeographicAreaId(event.target.value)}><option value="">Choose a geographic area</option>{(geographicAreas.data ?? []).map((area) => <option key={area.id} value={area.id}>{area.name} ({area.code})</option>)}</select></label>
+          <fieldset><legend>Optional organization-unit narrowing</legend>
+            <p>Choose an organization and unit only to narrow the selected geographic area. An organization unit does not define a coverage boundary.</p>
             <label>Organization<select value={organizationId} onChange={(event) => { setOrganizationId(event.target.value); setOrganizationUnitId(''); }}><option value="">Choose an organization</option>{(organizations.data ?? []).map((organization) => <option key={organization.id} value={organization.id}>{organization.name} ({organization.code})</option>)}</select></label>
-            <label>Coverage organization unit<select aria-describedby={scopeError ? 'coverage-scope-error' : undefined} aria-invalid={Boolean(scopeError)} disabled={!organizationId} value={organizationUnitId} onChange={(event) => setOrganizationUnitId(event.target.value)}><option value="">Choose an organization unit</option>{(organizationUnits.data ?? []).map((unit) => <option key={unit.id} value={unit.id}>{unit.name} ({unit.code})</option>)}</select></label>
+            <label>Coverage organization unit<select disabled={!organizationId} value={organizationUnitId} onChange={(event) => setOrganizationUnitId(event.target.value)}><option value="">Do not narrow by organization unit</option>{(organizationUnits.data ?? []).map((unit) => <option key={unit.id} value={unit.id}>{unit.name} ({unit.code})</option>)}</select></label>
           </fieldset>
-          <label>Coverage geographic area<select aria-describedby={scopeError ? 'coverage-scope-error' : undefined} aria-invalid={Boolean(scopeError)} value={geographicAreaId} onChange={(event) => setGeographicAreaId(event.target.value)}><option value="">All geographic areas</option>{(geographicAreas.data ?? []).map((area) => <option key={area.id} value={area.id}>{area.name} ({area.code})</option>)}</select></label>
           {scopeError && <p className="form-error" id="coverage-scope-error" role="alert">{scopeError}</p>}
           <button className="button" type="submit">Load coverage summary</button>
         </form>
