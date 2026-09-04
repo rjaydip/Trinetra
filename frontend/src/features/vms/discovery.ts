@@ -30,6 +30,17 @@ function required(value: string, label: string, errors: DiscoveryEnrichmentError
   if (!value.trim()) errors[field] = `${label} is required.`;
 }
 
+function requiredText(value: string, label: string, maximum: number,
+  errors: DiscoveryEnrichmentErrors, field: 'cameraCode' | 'name') {
+  const trimmed = value.trim();
+  if (!trimmed) errors[field] = `${label} is required.`;
+  else if (trimmed.length > maximum) errors[field] = `${label} must be at most ${maximum} characters.`;
+}
+
+function mappedName(row: FederatedCameraResponse | undefined, enrichment: DiscoveredCameraEnrichment) {
+  return enrichment.name.trim() || row?.name?.trim() || row?.nativeCameraId.trim() || '';
+}
+
 function validateCoordinate(value: string, label: string, minimum: number, maximum: number,
   errors: DiscoveryEnrichmentErrors, field: 'latitude' | 'longitude') {
   if (!value.trim()) {
@@ -51,9 +62,13 @@ function validateOptionalNumber(value: string, label: string, minimum: number, m
   }
 }
 
-export function validateDiscoveredCameraEnrichment(enrichment: DiscoveredCameraEnrichment): DiscoveryEnrichmentErrors {
+export function validateDiscoveredCameraEnrichment(
+  enrichment: DiscoveredCameraEnrichment,
+  row?: FederatedCameraResponse,
+): DiscoveryEnrichmentErrors {
   const errors: DiscoveryEnrichmentErrors = {};
-  required(enrichment.cameraCode, 'Camera code', errors, 'cameraCode');
+  requiredText(enrichment.cameraCode, 'Camera code', 100, errors, 'cameraCode');
+  requiredText(mappedName(row, enrichment), 'Name', 255, errors, 'name');
   required(enrichment.organizationUnitId, 'Organization unit', errors, 'organizationUnitId');
   required(enrichment.siteId, 'Site', errors, 'siteId');
   if (!cameraTypes.includes(enrichment.cameraType as (typeof cameraTypes)[number])) errors.cameraType = 'Camera type is required.';
@@ -97,13 +112,13 @@ export function toDiscoveredCameraWriteRequest(
   row: FederatedCameraResponse,
   enrichment: DiscoveredCameraEnrichment,
 ): CameraWriteRequest {
-  const errors = validateDiscoveredCameraEnrichment(enrichment);
+  const errors = validateDiscoveredCameraEnrichment(enrichment, row);
   const firstError = Object.values(errors)[0];
   if (firstError) throw new Error(firstError);
 
   const request: CameraWriteRequest = {
     cameraCode: enrichment.cameraCode.trim(),
-    name: enrichment.name.trim() || row.name?.trim() || row.nativeCameraId,
+    name: mappedName(row, enrichment),
     organizationUnitId: enrichment.organizationUnitId,
     siteId: enrichment.siteId,
     cameraType: enrichment.cameraType,

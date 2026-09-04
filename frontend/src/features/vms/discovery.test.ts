@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { FederatedCameraResponse } from '../../api/models';
-import { toDiscoveredCameraWriteRequest, validateDiscoveredCameraEnrichment, type DiscoveredCameraEnrichment } from './discovery';
+import { createDiscoveredCameraEnrichment, toDiscoveredCameraWriteRequest, validateDiscoveredCameraEnrichment, type DiscoveredCameraEnrichment } from './discovery';
 
 const discovered: FederatedCameraResponse = {
   nativeCameraId: 'CAM-07',
@@ -65,6 +65,30 @@ describe('toDiscoveredCameraWriteRequest', () => {
   it('rejects invalid optional coverage values before mapping them into the request', () => {
     expect(validateDiscoveredCameraEnrichment({ ...enrichment, azimuth: '360' })).toEqual(expect.objectContaining({
       azimuth: 'Azimuth must be between 0 and 359.999.',
+    }));
+  });
+
+  it('rejects an overlong generated camera code before mapping', () => {
+    const generated = createDiscoveredCameraEnrichment(discovered, enrichment.vmsId, 'N'.repeat(94));
+    const completed = { ...generated, organizationUnitId: enrichment.organizationUnitId, siteId: enrichment.siteId, cameraType: 'FIXED', latitude: '19', longitude: '72' };
+
+    expect(() => toDiscoveredCameraWriteRequest(discovered, completed)).toThrow('Camera code must be at most 100 characters.');
+  });
+
+  it('rejects overlong edited camera code and name values', () => {
+    expect(validateDiscoveredCameraEnrichment({ ...enrichment, cameraCode: 'C'.repeat(101), name: 'N'.repeat(256) })).toEqual(expect.objectContaining({
+      cameraCode: 'Camera code must be at most 100 characters.',
+      name: 'Name must be at most 255 characters.',
+    }));
+  });
+
+  it('rejects an empty final camera code and name', () => {
+    expect(validateDiscoveredCameraEnrichment(
+      { ...enrichment, cameraCode: ' ', name: ' ' },
+      { ...discovered, nativeCameraId: ' ', name: null },
+    )).toEqual(expect.objectContaining({
+      cameraCode: 'Camera code is required.',
+      name: 'Name is required.',
     }));
   });
 });

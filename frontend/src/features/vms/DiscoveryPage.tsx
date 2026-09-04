@@ -128,7 +128,7 @@ function DiscoveryRow({
       <section id={`${row.nativeCameraId}-enrichment`} className="camera-form discovery-enrichment" aria-label={`Onboarding details for ${name}`}>
         <fieldset><legend>Required registry placement</legend>
           <label>{label('Camera code')}<input aria-required="true" value={enrichment.cameraCode} onChange={(event) => update('cameraCode', event.target.value)} {...errorProps('cameraCode')} /></label><FieldError id={`${row.nativeCameraId}-cameraCode-error`} message={errors.cameraCode} />
-          <label>{label('Name')}<input value={enrichment.name} onChange={(event) => update('name', event.target.value)} /></label>
+          <label>{label('Name')}<input aria-required="true" value={enrichment.name} onChange={(event) => update('name', event.target.value)} {...errorProps('name')} /></label><FieldError id={`${row.nativeCameraId}-name-error`} message={errors.name} />
           <label>{label('Organization')}<select disabled={!organizationsReady} value={organizationId} onChange={(event) => onOrganizationChange(event.target.value)}><option value="">Select an organization</option>{organizations.map((organization) => <option key={organization.id} value={organization.id}>{organization.name} ({organization.code})</option>)}</select></label>
           <label>{label('Organization unit')}<select aria-required="true" disabled={!organizationId || organizationUnits.isPending || organizationUnits.isError} value={enrichment.organizationUnitId} onChange={(event) => update('organizationUnitId', event.target.value)} {...errorProps('organizationUnitId')}><option value="">Select an organization unit</option>{(organizationUnits.data ?? []).map((unit: OrganizationUnitResponse) => <option key={unit.id} value={unit.id}>{unit.name} ({unit.code})</option>)}</select></label><FieldError id={`${row.nativeCameraId}-organizationUnitId-error`} message={errors.organizationUnitId} />
           {organizationUnits.isError && <ReferenceError retry={() => { void organizationUnits.refetch(); }}>{errorDetail(organizationUnits.error, 'Organization units could not be loaded. Please try again.')}</ReferenceError>}
@@ -229,7 +229,7 @@ function DiscoveryWorkspace({ vmsId }: { vmsId: string }) {
     selected.forEach((nativeCameraId) => {
       const row = rowsById.get(nativeCameraId);
       if (!row) return;
-      const rowErrors = validateDiscoveredCameraEnrichment(enrichmentFor(row));
+      const rowErrors = validateDiscoveredCameraEnrichment(enrichmentFor(row), row);
       if (Object.keys(rowErrors).length) nextErrors[nativeCameraId] = rowErrors;
     });
     setErrors(nextErrors);
