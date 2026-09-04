@@ -224,6 +224,14 @@ export interface CoverageSummaryResponse {
   buckets: Record<string, Record<string, number>>;
 }
 
+export interface OrganizationRequest {
+  code: string;
+  name: string;
+  organizationType: string;
+  description?: string | null;
+  status?: string | null;
+}
+
 export interface OrganizationResponse {
   id: string;
   code: string;
@@ -231,6 +239,15 @@ export interface OrganizationResponse {
   organizationType: string;
   description: string | null;
   status: string;
+}
+
+export interface OrganizationUnitRequest {
+  organizationId: string;
+  code: string;
+  name: string;
+  unitType: string;
+  parentUnitId?: string | null;
+  status?: string | null;
 }
 
 export interface OrganizationUnitResponse {
@@ -241,6 +258,31 @@ export interface OrganizationUnitResponse {
   name: string;
   unitType: string;
   status: string;
+}
+
+export interface GeographicAreaRequest {
+  code: string;
+  name: string;
+  areaType: string;
+  parentAreaId?: string | null;
+  status?: string | null;
+}
+
+export interface AreaTypeResponse {
+  code: string;
+  name: string;
+  levelOrder: number;
+}
+
+export interface SiteRequest {
+  code: string;
+  name: string;
+  geographicAreaId: string;
+  siteType?: string | null;
+  address?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  status?: string | null;
 }
 
 export interface SiteResponse {
@@ -343,6 +385,127 @@ export interface GeographicAreaResponse {
   name: string;
   areaType: string;
   status: string;
+}
+
+/** No hierarchy child strategy is implied when both fields are omitted. */
+export interface DeactivateRequest {
+  childStrategy?: 'cascade' | 'reparent';
+  newParentId?: string;
+}
+
+export interface CreateGroupRequest {
+  code: string;
+  name: string;
+  roleId: string;
+  description?: string | null;
+  status?: string | null;
+}
+
+export interface AddScopeRequest {
+  scopeType: string;
+  organizationUnitId?: string | null;
+  geographicAreaId?: string | null;
+  resourceType?: string | null;
+  resourceId?: string | null;
+  description?: string | null;
+}
+
+export interface ScopeResponse {
+  id: string;
+  scopeType: string;
+  organizationUnitId: string | null;
+  geographicAreaId: string | null;
+  resourceType: string | null;
+  resourceId: string | null;
+  description: string | null;
+}
+
+export interface AccessGroupResponse {
+  id: string;
+  code: string;
+  name: string;
+  description: string | null;
+  status: string;
+  roleCode: string;
+  permissions: string[];
+  scopes: ScopeResponse[];
+  memberCount: number;
+}
+
+export interface GroupMemberResponse {
+  userId: string;
+  username: string;
+  expiresAt: string | null;
+}
+
+export interface RoleResponse {
+  id: string;
+  code: string;
+  name: string;
+  description: string | null;
+  isSystem: boolean;
+}
+
+export interface PermissionResponse {
+  code: string;
+  name: string;
+  category: string;
+  description: string | null;
+}
+
+export interface CreateWatchlistEntryRequest {
+  organizationUnitId: string;
+  plateNumber: string;
+  reason?: string | null;
+  severity?: string;
+}
+
+export interface WatchlistEntryResponse {
+  id: string;
+  organizationUnitId: string;
+  plateNumberNormalized: string;
+  reason: string | null;
+  severity: string;
+  isActive: boolean;
+  createdAt: string;
+}
+
+export interface WatchlistAlertResponse {
+  id: string;
+  watchlistEntryId: string;
+  plateNumberNormalized: string;
+  reason: string | null;
+  severity: string;
+  detectionEventId: string;
+  detectionOccurredAt: string;
+  raisedAt: string;
+  acknowledgedAt: string | null;
+}
+
+export interface CreateApiKeyRequest {
+  displayName: string;
+  groupId: string;
+  expiresAt?: string | null;
+}
+
+/** The only API-key response carrying secret material; returned once on creation. */
+export interface ApiKeyCreatedResponse {
+  id: string;
+  keyId: string;
+  rawKey: string;
+}
+
+/** Persisted API-key metadata. Raw key material is deliberately absent. */
+export interface ApiKeyResponse {
+  id: string;
+  keyId: string;
+  displayName: string;
+  groupId: string;
+  groupCode: string;
+  createdAt: string;
+  expiresAt: string | null;
+  lastUsedAt: string | null;
+  revokedAt: string | null;
 }
 
 export interface OverviewResponse {
