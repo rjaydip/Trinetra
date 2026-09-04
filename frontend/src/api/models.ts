@@ -255,6 +255,21 @@ export interface SiteResponse {
   status: string;
 }
 
+export interface VmsResponse {
+  id: string;
+  code: string;
+  organizationUnitId: string;
+  siteId: string | null;
+  displayName: string;
+  vendor: string;
+  runtimeClass: string;
+  endpoint: string;
+  credentialReference: string;
+  verifyTls: boolean;
+  state: string;
+  expectedCameraCount: number | null;
+}
+
 export interface GeographicAreaResponse {
   id: string;
   parentAreaId: string | null;

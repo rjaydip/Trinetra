@@ -25,6 +25,7 @@ import type {
   OrganizationUnitResponse,
   OverviewResponse,
   SiteResponse,
+  VmsResponse,
 } from './models';
 
 type QueryValue = string | number | boolean | null | undefined;
@@ -72,6 +73,9 @@ export const api = {
     organizationUnits: (organizationId: string) => request<OrganizationUnitResponse[]>(`/api/v1/organizations/${organizationId}/units`),
     sites: (areaId?: string) => request<SiteResponse[]>(withQuery('/api/v1/sites', { areaId })),
     geographicAreas: (query: { rootsOnly?: boolean; parentId?: string } = {}) => request<GeographicAreaResponse[]>(withQuery('/api/v1/geographic-areas', query)),
+  },
+  vms: {
+    list: () => request<VmsResponse[]>('/api/v1/vms'),
   },
   overview: () => request<OverviewResponse>('/api/v1/overview'),
 };

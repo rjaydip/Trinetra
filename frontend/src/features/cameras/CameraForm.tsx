@@ -3,14 +3,17 @@ import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 
 import { isApiProblem } from '../../api/client';
-import type { CameraWriteRequest, OrganizationUnitResponse, SiteResponse } from '../../api/models';
+import type { CameraWriteRequest, OrganizationResponse, OrganizationUnitResponse, SiteResponse, VmsResponse } from '../../api/models';
 import { Button } from '../../components/ui';
+import {
+  cameraTypes,
+  connectivityStatuses,
+  maintenanceStatuses,
+  operationalStatuses,
+  protocols,
+  roundCoordinate,
+} from './cameraVocabulary';
 
-const cameraTypes = ['FIXED', 'PTZ', 'DOME', 'BULLET', 'ANPR', 'THERMAL', 'MULTISENSOR', 'OTHER'] as const;
-const protocols = ['RTSP', 'RTSPS', 'ONVIF', 'HTTP', 'HTTPS', 'RTMP', 'SRT', 'OTHER'] as const;
-const operationalStatuses = ['ONLINE', 'OFFLINE', 'DEGRADED', 'UNKNOWN'] as const;
-const connectivityStatuses = ['CONNECTED', 'DISCONNECTED', 'UNKNOWN'] as const;
-const maintenanceStatuses = ['NORMAL', 'REQUIRED', 'UNDER_MAINTENANCE'] as const;
 const uuidSchema = z.guid();
 
 type NumericField = 'altitude' | 'mountingHeight' | 'azimuth' | 'tilt' | 'horizontalFov' | 'verticalFov' | 'effectiveRange' | 'port';
@@ -18,6 +21,7 @@ type NumericField = 'altitude' | 'mountingHeight' | 'azimuth' | 'tilt' | 'horizo
 export interface CameraFormValues {
   cameraCode: string;
   name: string;
+  organizationId: string;
   organizationUnitId: string;
   siteId: string;
   cameraType: string;
@@ -45,7 +49,7 @@ export interface CameraFormValues {
 }
 
 const defaults: CameraFormValues = {
-  cameraCode: '', name: '', organizationUnitId: '', siteId: '', cameraType: '', latitude: '', longitude: '',
+  cameraCode: '', name: '', organizationId: '', organizationUnitId: '', siteId: '', cameraType: '', latitude: '', longitude: '',
   manufacturer: '', model: '', serialNumber: '', altitude: '', mountingHeight: '', azimuth: '', tilt: '',
   horizontalFov: '', verticalFov: '', effectiveRange: '', ipAddress: '', port: '', protocol: '', vmsId: '',
   streamReference: '', installationDate: '', operationalStatus: '', connectivityStatus: '', maintenanceStatus: '',
@@ -82,6 +86,7 @@ function optionalUuid(label: string) {
 const cameraFormSchema = z.object({
   cameraCode: requiredText('Camera code', 100),
   name: requiredText('Name', 255),
+  organizationId: z.string(),
   organizationUnitId: z.string().trim().min(1, 'Organization unit is required.'),
   siteId: z.string().trim().min(1, 'Site is required.'),
   cameraType: choice(cameraTypes, 'Camera type is required.', true),
@@ -104,6 +109,20 @@ const cameraFormSchema = z.object({
   operationalStatus: choice(operationalStatuses, `Operational status must be one of: ${operationalStatuses.join(', ')}.`),
   connectivityStatus: choice(connectivityStatuses, `Connectivity status must be one of: ${connectivityStatuses.join(', ')}.`),
   maintenanceStatus: choice(maintenanceStatuses, `Maintenance status must be one of: ${maintenanceStatuses.join(', ')}.`),
+}).superRefine((values, context) => {
+  if (values.vmsId) return;
+
+  const manualFields: Array<[keyof Pick<CameraFormValues, 'manufacturer' | 'ipAddress' | 'port' | 'protocol'>, string]> = [
+    ['manufacturer', 'Manufacturer'],
+    ['ipAddress', 'IP address'],
+    ['port', 'Port'],
+    ['protocol', 'Protocol'],
+  ];
+  manualFields.forEach(([field, label]) => {
+    if (!values[field].trim()) {
+      context.addIssue({ code: 'custom', path: [field], message: `${label} is required for manual registration.` });
+    }
+  });
 });
 
 function optionalText(value: string) {
@@ -119,7 +138,8 @@ function optionalNumber(value: string) {
 export function toCameraWriteRequest(values: CameraFormValues): CameraWriteRequest {
   const request: CameraWriteRequest = {
     cameraCode: values.cameraCode.trim(), name: values.name.trim(), organizationUnitId: values.organizationUnitId,
-    siteId: values.siteId, cameraType: values.cameraType, latitude: Number(values.latitude), longitude: Number(values.longitude),
+    siteId: values.siteId, cameraType: values.cameraType,
+    latitude: roundCoordinate(Number(values.latitude)), longitude: roundCoordinate(Number(values.longitude)),
   };
   const optionalStrings: Array<keyof Pick<CameraWriteRequest, 'manufacturer' | 'model' | 'serialNumber' | 'ipAddress' | 'protocol' | 'vmsId' | 'streamReference' | 'installationDate' | 'operationalStatus' | 'connectivityStatus' | 'maintenanceStatus'>> = [
     'manufacturer', 'model', 'serialNumber', 'ipAddress', 'protocol', 'vmsId', 'streamReference', 'installationDate',
@@ -138,9 +158,12 @@ export function toCameraWriteRequest(values: CameraFormValues): CameraWriteReque
 }
 
 interface CameraFormProps {
+  organizations: OrganizationResponse[];
   organizationUnits: OrganizationUnitResponse[];
   sites: SiteResponse[];
+  vms: VmsResponse[];
   initialValues?: CameraFormValues;
+  onOrganizationChange(organizationId: string): void;
   onSubmit(values: CameraWriteRequest): Promise<void>;
 }
 
@@ -148,9 +171,12 @@ function FieldError({ id, message }: { id: string; message?: string }) {
   return message ? <p className="form-error" id={id} role="alert">{message}</p> : null;
 }
 
-export function CameraForm({ organizationUnits, sites, initialValues, onSubmit }: CameraFormProps) {
+export function CameraForm({ organizations, organizationUnits, sites, vms, initialValues, onOrganizationChange, onSubmit }: CameraFormProps) {
   const form = useForm<CameraFormValues>({ defaultValues: initialValues ?? defaults, resolver: zodResolver(cameraFormSchema) });
   const { register, formState: { errors, isSubmitting } } = form;
+  const selectedOrganizationId = form.watch('organizationId');
+  const selectedVmsId = form.watch('vmsId');
+  const organizationRegistration = register('organizationId');
   const validationProps = (name: keyof CameraFormValues) => errors[name]
     ? { 'aria-describedby': `${name}-error`, 'aria-invalid': true }
     : { 'aria-invalid': false };
@@ -171,22 +197,28 @@ export function CameraForm({ organizationUnits, sites, initialValues, onSubmit }
       }
     })}>
       <fieldset><legend>Identity and location</legend>
-        <label>Camera code<input {...register('cameraCode')} {...validationProps('cameraCode')} /></label><FieldError id="cameraCode-error" message={errors.cameraCode?.message} />
-        <label>Name<input {...register('name')} {...validationProps('name')} /></label><FieldError id="name-error" message={errors.name?.message} />
-        <label>Organization unit<select {...register('organizationUnitId')} {...validationProps('organizationUnitId')}><option value="">Select an organization unit</option>{organizationUnits.map((unit) => <option key={unit.id} value={unit.id}>{unit.name} ({unit.code})</option>)}</select></label><FieldError id="organizationUnitId-error" message={errors.organizationUnitId?.message} />
-        <label>Site<select {...register('siteId')} {...validationProps('siteId')}><option value="">Select a site</option>{sites.map((site) => <option key={site.id} value={site.id}>{site.name} ({site.code})</option>)}</select></label><FieldError id="siteId-error" message={errors.siteId?.message} />
-        <label>Camera type<select {...register('cameraType')} {...validationProps('cameraType')}><option value="">Select a camera type</option>{cameraTypes.map((type) => <option key={type} value={type}>{type}</option>)}</select></label><FieldError id="cameraType-error" message={errors.cameraType?.message} />
-        <label>Latitude<input inputMode="decimal" {...register('latitude')} {...validationProps('latitude')} /></label><FieldError id="latitude-error" message={errors.latitude?.message} />
-        <label>Longitude<input inputMode="decimal" {...register('longitude')} {...validationProps('longitude')} /></label><FieldError id="longitude-error" message={errors.longitude?.message} />
+        <label>Camera code<span aria-hidden="true"> (required)</span><input aria-required="true" {...register('cameraCode')} {...validationProps('cameraCode')} /></label><FieldError id="cameraCode-error" message={errors.cameraCode?.message} />
+        <label>Name<span aria-hidden="true"> (required)</span><input aria-required="true" {...register('name')} {...validationProps('name')} /></label><FieldError id="name-error" message={errors.name?.message} />
+        <label>Organization<select {...organizationRegistration} onChange={(event) => {
+          organizationRegistration.onChange(event);
+          form.setValue('organizationUnitId', '');
+          form.clearErrors('organizationUnitId');
+          onOrganizationChange(event.target.value);
+        }}><option value="">Select an organization</option>{organizations.map((organization) => <option key={organization.id} value={organization.id}>{organization.name} ({organization.code})</option>)}</select></label>
+        <label>Organization unit<span aria-hidden="true"> (required)</span><select aria-required="true" disabled={!selectedOrganizationId || organizationUnits.length === 0} {...register('organizationUnitId')} {...validationProps('organizationUnitId')}><option value="">Select an organization unit</option>{organizationUnits.map((unit) => <option key={unit.id} value={unit.id}>{unit.name} ({unit.code})</option>)}</select></label><FieldError id="organizationUnitId-error" message={errors.organizationUnitId?.message} />
+        <label>Site<span aria-hidden="true"> (required)</span><select aria-required="true" disabled={sites.length === 0} {...register('siteId')} {...validationProps('siteId')}><option value="">Select a site</option>{sites.map((site) => <option key={site.id} value={site.id}>{site.name} ({site.code})</option>)}</select></label><FieldError id="siteId-error" message={errors.siteId?.message} />
+        <label>Camera type<span aria-hidden="true"> (required)</span><select aria-required="true" {...register('cameraType')} {...validationProps('cameraType')}><option value="">Select a camera type</option>{cameraTypes.map((type) => <option key={type} value={type}>{type}</option>)}</select></label><FieldError id="cameraType-error" message={errors.cameraType?.message} />
+        <label>Latitude<span aria-hidden="true"> (required)</span><input aria-required="true" inputMode="decimal" {...register('latitude')} {...validationProps('latitude')} /></label><FieldError id="latitude-error" message={errors.latitude?.message} />
+        <label>Longitude<span aria-hidden="true"> (required)</span><input aria-required="true" inputMode="decimal" {...register('longitude')} {...validationProps('longitude')} /></label><FieldError id="longitude-error" message={errors.longitude?.message} />
       </fieldset>
       <fieldset><legend>Device and network</legend>
-        <label>Manufacturer<input {...register('manufacturer')} {...validationProps('manufacturer')} /></label><label>Model<input {...register('model')} {...validationProps('model')} /></label><label>Serial number<input {...register('serialNumber')} {...validationProps('serialNumber')} /></label>
-        <label>IP address<input {...register('ipAddress')} {...validationProps('ipAddress')} /></label>
-        <label>Protocol<select {...register('protocol')} {...validationProps('protocol')}><option value="">Not recorded</option>{protocols.map((protocol) => <option key={protocol} value={protocol}>{protocol}</option>)}</select></label><FieldError id="protocol-error" message={errors.protocol?.message} />
-        <label>VMS ID<input {...register('vmsId')} {...validationProps('vmsId')} /></label><FieldError id="vmsId-error" message={errors.vmsId?.message} /><label>Stream reference<input {...register('streamReference')} {...validationProps('streamReference')} /></label>
+        <label>Manufacturer<input aria-required={!selectedVmsId} {...register('manufacturer')} {...validationProps('manufacturer')} /></label><FieldError id="manufacturer-error" message={errors.manufacturer?.message} /><label>Model<input {...register('model')} {...validationProps('model')} /></label><label>Serial number<input {...register('serialNumber')} {...validationProps('serialNumber')} /></label>
+        <label>IP address<input aria-required={!selectedVmsId} {...register('ipAddress')} {...validationProps('ipAddress')} /></label><FieldError id="ipAddress-error" message={errors.ipAddress?.message} />
+        <label>Protocol<select aria-required={!selectedVmsId} {...register('protocol')} {...validationProps('protocol')}><option value="">Not recorded</option>{protocols.map((protocol) => <option key={protocol} value={protocol}>{protocol}</option>)}</select></label><FieldError id="protocol-error" message={errors.protocol?.message} />
+        <label>VMS<select disabled={vms.length === 0} {...register('vmsId')} {...validationProps('vmsId')}><option value="">Manual registration</option>{vms.map((vmsTarget) => <option key={vmsTarget.id} value={vmsTarget.id}>{vmsTarget.displayName} ({vmsTarget.code})</option>)}</select></label><FieldError id="vmsId-error" message={errors.vmsId?.message} /><label>Stream reference<input {...register('streamReference')} {...validationProps('streamReference')} /></label>
       </fieldset>
       <fieldset><legend>Position, optics, and status</legend>
-        {numericFields.map(({ name, label, step }) => <div key={name}><label>{label}<input type="number" step={step} {...register(name)} {...validationProps(name)} /></label><FieldError id={`${name}-error`} message={errors[name]?.message} /></div>)}
+        {numericFields.map(({ name, label, step }) => <div key={name}><label>{label}<input aria-required={name === 'port' && !selectedVmsId} type="number" step={step} {...register(name)} {...validationProps(name)} /></label><FieldError id={`${name}-error`} message={errors[name]?.message} /></div>)}
         <label>Installation date<input type="date" {...register('installationDate')} {...validationProps('installationDate')} /></label>
         <label>Operational status<select {...register('operationalStatus')} {...validationProps('operationalStatus')}><option value="">Use server default</option>{operationalStatuses.map((status) => <option key={status} value={status}>{status}</option>)}</select></label><FieldError id="operationalStatus-error" message={errors.operationalStatus?.message} />
         <label>Connectivity status<select {...register('connectivityStatus')} {...validationProps('connectivityStatus')}><option value="">Use server default</option>{connectivityStatuses.map((status) => <option key={status} value={status}>{status}</option>)}</select></label><FieldError id="connectivityStatus-error" message={errors.connectivityStatus?.message} />
