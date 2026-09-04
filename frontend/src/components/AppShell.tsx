@@ -1,4 +1,6 @@
 import { NavLink, Outlet } from 'react-router-dom';
+import { useAuth } from '../auth/AuthProvider';
+import { hasPermission } from '../auth/permissions';
 
 const navigation = [
   { to: '/dashboard', label: 'Dashboard' },
@@ -7,6 +9,7 @@ const navigation = [
 ];
 
 export function AppShell() {
+  const { session } = useAuth();
   return (
     <div className="app-shell">
       <header className="app-header">
@@ -18,6 +21,7 @@ export function AppShell() {
                 <NavLink to={item.to}>{item.label}</NavLink>
               </li>
             ))}
+            {hasPermission(session, 'vms.read') && <li><NavLink to="/vms">VMS</NavLink></li>}
           </ul>
         </nav>
       </header>

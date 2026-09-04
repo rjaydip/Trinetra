@@ -14,6 +14,7 @@ import { NewCameraPage } from './features/cameras/NewCameraPage';
 import { RegistryPage } from './features/cameras/RegistryPage';
 import { MapPage } from './features/map/MapPage';
 import { ReportsPage } from './features/reports/ReportsPage';
+import { VmsPage } from './features/vms/VmsPage';
 
 export function App() {
   const { session } = useAuth();
@@ -44,6 +45,8 @@ function SessionApplication() {
           <Route path="/cameras/new" element={<RequirePermission permission="camera.create"><NewCameraPage /></RequirePermission>} />
           <Route path="/cameras/import" element={<RequirePermission permission="camera.import"><BulkImportPage /></RequirePermission>} />
           <Route path="/cameras/:cameraId" element={<CameraDetailPage />} />
+          <Route path="/vms" element={<RequirePermission permission="vms.read"><VmsPage /></RequirePermission>} />
+          <Route path="/vms/:vmsId" element={<RequirePermission permission="vms.read"><VmsPage /></RequirePermission>} />
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Route>
       </Routes>
