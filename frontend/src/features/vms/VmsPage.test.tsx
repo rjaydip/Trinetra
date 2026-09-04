@@ -102,6 +102,22 @@ describe('VMS navigation and routing', () => {
 });
 
 describe('VmsPage', () => {
+  it('shows discovery onboarding only to users who can import cameras', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = new URL(String(input)).pathname;
+      if (path === `/api/v1/vms/${vmsId}`) return Response.json(vms);
+      if (path === `/api/v1/vms/${vmsId}/credential/status`) return Response.json({ reference: 'vms/north-nvr', exists: false });
+      return new Response(null, { status: 404 });
+    }));
+    saveSession(sessionFixture('vms-import-user', ['vms.read', 'camera.import']));
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    queryClient.setQueryData(['vms', vmsId], vms);
+
+    render(<MemoryRouter initialEntries={[`/vms/${vmsId}`]}><AuthProvider><QueryClientProvider client={queryClient}><Routes><Route path="/vms/:vmsId" element={<VmsPage />} /></Routes></QueryClientProvider></AuthProvider></MemoryRouter>);
+
+    expect(await screen.findByRole('link', { name: /discover cameras/i })).toHaveAttribute('href', `/vms/${vmsId}/discovery`);
+  });
+
   it('lists live VMS records as selectable links without exposing credential values', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const path = new URL(String(input)).pathname;
