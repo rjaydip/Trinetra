@@ -55,7 +55,7 @@ function DeactivationControl({
   const confirmDisabled = mutation.isPending || !strategy || (strategy === 'reparent' && !newParentId);
 
   return <div className="deactivation-control">
-    <button className="admin-action-link" disabled={mutation.isPending} type="button" onClick={() => {
+    <button className="admin-action-link" disabled={mutation.isPending || Boolean(conflict)} type="button" onClick={() => {
       setConflict('');
       setStrategy('');
       setNewParentId('');
