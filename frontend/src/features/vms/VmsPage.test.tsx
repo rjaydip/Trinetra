@@ -1,6 +1,6 @@
 import '@testing-library/jest-dom/vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -10,6 +10,7 @@ import { AuthProvider } from '../../auth/AuthProvider';
 import { saveSession } from '../../auth/session';
 import { AppShell } from '../../components/AppShell';
 import { sessionFixture } from '../../test/fixtures';
+import { VmsForm } from './VmsForm';
 import { VmsPage } from './VmsPage';
 
 const organizationId = '11111111-1111-4111-8111-111111111111';
@@ -76,6 +77,38 @@ function renderPage(permissions: string[]) {
   );
 }
 
+function renderVmsForm() {
+  const onSubmit = vi.fn(async () => undefined);
+  render(<VmsForm
+    organizations={[organization]}
+    organizationUnits={[organizationUnit]}
+    sites={[site]}
+    selectorStates={{ organizations: { state: 'ready' }, organizationUnits: { state: 'ready' }, sites: { state: 'ready' } }}
+    onOrganizationChange={() => undefined}
+    onSubmit={onSubmit}
+  />);
+  return onSubmit;
+}
+
+async function fillBoundedVmsForm(user: ReturnType<typeof userEvent.setup>, values: {
+  code: string;
+  displayName: string;
+  inventoryPollSeconds: string;
+  statusPollSeconds: string;
+}) {
+  fireEvent.change(screen.getByLabelText(/vms code/i), { target: { value: values.code } });
+  fireEvent.change(screen.getByLabelText(/display name/i), { target: { value: values.displayName } });
+  await user.selectOptions(screen.getByLabelText(/^organization$/i), organizationId);
+  await user.selectOptions(screen.getByLabelText(/organization unit/i), organizationUnitId);
+  await user.selectOptions(screen.getByLabelText(/^vendor/i), 'DahuaCgi');
+  fireEvent.change(screen.getByLabelText(/^endpoint/i), { target: { value: 'https://nvr.example.test' } });
+  fireEvent.change(screen.getByLabelText(/credential reference/i), { target: { value: 'vms/north-nvr' } });
+  await user.click(screen.getByRole('button', { name: /connection tuning/i }));
+  fireEvent.change(screen.getByLabelText(/inventory poll seconds/i), { target: { value: values.inventoryPollSeconds } });
+  fireEvent.change(screen.getByLabelText(/status poll seconds/i), { target: { value: values.statusPollSeconds } });
+  await user.click(screen.getByRole('button', { name: /register vms/i }));
+}
+
 describe('VMS navigation and routing', () => {
   it('does not render VMS navigation for a user without vms.read', () => {
     renderShell([]);
@@ -102,6 +135,58 @@ describe('VMS navigation and routing', () => {
 });
 
 describe('VmsPage', () => {
+  it('exposes the exact persisted VMS identity and poll interval bounds on its controls', async () => {
+    const user = userEvent.setup();
+    renderVmsForm();
+
+    expect(screen.getByLabelText(/vms code/i)).toHaveAttribute('maxlength', '100');
+    expect(screen.getByLabelText(/display name/i)).toHaveAttribute('maxlength', '255');
+    await user.click(screen.getByRole('button', { name: /connection tuning/i }));
+    expect(screen.getByLabelText(/inventory poll seconds/i)).toHaveAttribute('min', '30');
+    expect(screen.getByLabelText(/status poll seconds/i)).toHaveAttribute('min', '5');
+  });
+
+  it('submits values at the exact persisted VMS identity and poll interval bounds', async () => {
+    const user = userEvent.setup();
+    const onSubmit = renderVmsForm();
+
+    await fillBoundedVmsForm(user, {
+      code: 'C'.repeat(100),
+      displayName: 'N'.repeat(255),
+      inventoryPollSeconds: '30',
+      statusPollSeconds: '5',
+    });
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({
+      code: 'C'.repeat(100),
+      displayName: 'N'.repeat(255),
+      inventoryPollSeconds: 30,
+      statusPollSeconds: 5,
+    })));
+  });
+
+  it.each([
+    { field: 'code', value: 'C'.repeat(101), error: 'VMS code must be at most 100 characters.' },
+    { field: 'displayName', value: 'N'.repeat(256), error: 'Display name must be at most 255 characters.' },
+    { field: 'inventoryPollSeconds', value: '29', error: 'Inventory poll seconds must be 30 or more.' },
+    { field: 'statusPollSeconds', value: '4', error: 'Status poll seconds must be 5 or more.' },
+  ])('rejects an out-of-range persisted VMS $field value locally', async ({ field, value, error }) => {
+    const user = userEvent.setup();
+    const onSubmit = renderVmsForm();
+    const values = {
+      code: 'VMS-1',
+      displayName: 'North NVR',
+      inventoryPollSeconds: '30',
+      statusPollSeconds: '5',
+      [field]: value,
+    };
+
+    await fillBoundedVmsForm(user, values);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(error);
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
   it('shows discovery onboarding only to users who can import cameras', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const path = new URL(String(input)).pathname;

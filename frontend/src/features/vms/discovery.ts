@@ -26,6 +26,14 @@ const optionalNumberFields: Array<keyof Pick<DiscoveredCameraEnrichment,
     'altitude', 'mountingHeight', 'azimuth', 'tilt', 'horizontalFov', 'verticalFov', 'effectiveRange',
   ];
 
+const MAX_DISCOVERED_CAMERA_IMPORT = 500;
+
+export function validateDiscoveredCameraSelectionCount(count: number): string | undefined {
+  return count > MAX_DISCOVERED_CAMERA_IMPORT
+    ? `Select no more than ${MAX_DISCOVERED_CAMERA_IMPORT} cameras per import. ${count} are selected.`
+    : undefined;
+}
+
 function required(value: string, label: string, errors: DiscoveryEnrichmentErrors, field: keyof DiscoveredCameraEnrichment) {
   if (!value.trim()) errors[field] = `${label} is required.`;
 }

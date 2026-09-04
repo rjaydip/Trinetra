@@ -19,6 +19,7 @@ import {
   createDiscoveredCameraEnrichment,
   toDiscoveredCameraWriteRequest,
   validateDiscoveredCameraEnrichment,
+  validateDiscoveredCameraSelectionCount,
   type DiscoveredCameraEnrichment,
   type DiscoveryEnrichmentErrors,
 } from './discovery';
@@ -86,6 +87,7 @@ function DiscoveryRow({
   onToggleSelected,
 }: DiscoveryRowProps) {
   const name = displayName(row);
+  const linked = row.cameraId !== null;
   const organizationUnits = useQuery({
     queryKey: ['reference', 'organization-units', organizationId],
     queryFn: () => api.reference.organizationUnits(organizationId),
@@ -117,12 +119,12 @@ function DiscoveryRow({
 
   return <>
     <tr>
-      <td><input aria-label={`Select ${name}`} checked={selected} onChange={onToggleSelected} type="checkbox" /></td>
+      <td><input aria-label={`Select ${name}`} checked={selected} disabled={linked} onChange={onToggleSelected} type="checkbox" /></td>
       <td><strong>{name}</strong><div>{row.nativeCameraId}</div></td>
       <td>{row.vendorModel ?? 'Not reported'}<div>Firmware: {row.firmware ?? 'Not reported'}</div></td>
       <td><StatusBadge tone={row.health.toLowerCase() === 'online' ? 'success' : 'warning'}>{row.health}</StatusBadge><div>{row.isEnabled ? 'Enabled' : 'Disabled'} · {row.isRecording === null ? 'Recording unknown' : row.isRecording ? 'Recording' : 'Not recording'}</div></td>
-      <td>{row.cameraId ? 'Linked' : 'Not linked'}</td>
-      <td><button aria-controls={`${row.nativeCameraId}-enrichment`} aria-expanded={expanded} className="button button--secondary" onClick={onToggleExpanded} type="button">{expanded ? 'Hide' : 'Edit'} onboarding details for {name}</button></td>
+      <td>{linked ? <span id={`${row.nativeCameraId}-linked-help`}>Already linked; this camera cannot be imported again.</span> : 'Not linked'}</td>
+      <td><button aria-controls={`${row.nativeCameraId}-enrichment`} aria-expanded={expanded} className="button button--secondary" disabled={linked} onClick={onToggleExpanded} type="button">{expanded ? 'Hide' : 'Edit'} onboarding details for {name}</button></td>
     </tr>
     {expanded && <tr className="discovery-enrichment-row"><td colSpan={6}>
       <section id={`${row.nativeCameraId}-enrichment`} className="camera-form discovery-enrichment" aria-label={`Onboarding details for ${name}`}>
@@ -192,6 +194,7 @@ function DiscoveryWorkspace({ vmsId }: { vmsId: string }) {
     },
   });
   const rowsById = useMemo(() => new Map((cameras.data ?? []).map((row) => [row.nativeCameraId, row])), [cameras.data]);
+  const importableIds = useMemo(() => (cameras.data ?? []).filter((row) => row.cameraId === null).map((row) => row.nativeCameraId), [cameras.data]);
 
   if (target.isPending || cameras.isPending) return <PageState title="Loading discovered cameras">Retrieving the VMS inventory…</PageState>;
   if (target.isError) return <><PageState title="Couldn’t load VMS">{errorDetail(target.error, 'The selected VMS could not be loaded.')}</PageState><button className="button" type="button" onClick={() => target.refetch()}>Try again</button></>;
@@ -207,6 +210,7 @@ function DiscoveryWorkspace({ vmsId }: { vmsId: string }) {
     setResult(null);
   };
   const toggleSelected = (row: FederatedCameraResponse) => {
+    if (row.cameraId !== null) return;
     setSelected((current) => {
       const next = new Set(current);
       if (next.has(row.nativeCameraId)) next.delete(row.nativeCameraId);
@@ -223,6 +227,15 @@ function DiscoveryWorkspace({ vmsId }: { vmsId: string }) {
     setResult(null);
     if (selected.size === 0) {
       setSelectionError('Select at least one discovered camera to import.');
+      return;
+    }
+    const selectionLimitError = validateDiscoveredCameraSelectionCount(selected.size);
+    if (selectionLimitError) {
+      setSelectionError(selectionLimitError);
+      return;
+    }
+    if ([...selected].some((nativeCameraId) => rowsById.get(nativeCameraId)?.cameraId !== null)) {
+      setSelectionError('Already linked cameras cannot be imported again. Refresh the selection and try again.');
       return;
     }
     const nextErrors: Record<string, DiscoveryEnrichmentErrors> = {};
@@ -254,6 +267,21 @@ function DiscoveryWorkspace({ vmsId }: { vmsId: string }) {
     {organizations.isError && <ReferenceError retry={() => { void organizations.refetch(); }}>{errorDetail(organizations.error, 'Organizations could not be loaded. Please try again.')}</ReferenceError>}
     {sites.isError && <ReferenceError retry={() => { void sites.refetch(); }}>{errorDetail(sites.error, 'Sites could not be loaded. Please try again.')}</ReferenceError>}
     {cameras.data.length === 0 ? <PageState title="No discovered cameras">This VMS has not reported any cameras yet.</PageState> : <form className="discovery-form" onSubmit={(event) => { void submit(event); }}>
+      <label className="checkbox-label"><input
+        aria-label="Select all importable cameras"
+        checked={importableIds.length > 0 && importableIds.every((nativeCameraId) => selected.has(nativeCameraId))}
+        onChange={(event) => {
+          setSelected((current) => {
+            if (event.target.checked) return new Set(importableIds);
+            const next = new Set(current);
+            importableIds.forEach((nativeCameraId) => next.delete(nativeCameraId));
+            return next;
+          });
+          setSelectionError('');
+          setResult(null);
+        }}
+        type="checkbox"
+      /> Select all importable cameras</label>
       <div className="camera-table-wrap"><table className="camera-table discovery-table"><caption>{cameras.data.length} camera{cameras.data.length === 1 ? '' : 's'} reported by {target.data.displayName}</caption><thead><tr><th scope="col">Select</th><th scope="col">Camera</th><th scope="col">Vendor facts</th><th scope="col">State</th><th scope="col">Registry</th><th scope="col">Onboarding</th></tr></thead><tbody>{cameras.data.map((row) => <DiscoveryRow
         key={row.nativeCameraId}
         row={row}

@@ -127,6 +127,47 @@ describe('CredentialPanel', () => {
     expect(polls).toBe(2);
   });
 
+  it('retries the returned status URL after the first result request fails without starting another test', async () => {
+    const statusUrl = `/api/v1/connection-test-results/${testId}?representation=safe`;
+    let posts = 0;
+    let resultGets = 0;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      const path = `${url.pathname}${url.search}`;
+      if (url.pathname.endsWith('/credential/status')) return Response.json({ reference: 'vms/north-nvr', exists: true });
+      if (url.pathname.endsWith('/test') && init?.method === 'POST') {
+        posts += 1;
+        return Response.json({ testId, status: 'pending', statusUrl }, { status: 202 });
+      }
+      if (path === statusUrl) {
+        resultGets += 1;
+        if (resultGets === 1) return Response.json({ title: 'Unavailable', detail: 'The result store is temporarily unavailable.' }, { status: 503 });
+        return Response.json({
+          testId,
+          targetId: vmsId,
+          status: 'completed',
+          requestedAt: '2026-09-04T10:30:00Z',
+          completedAt: '2026-09-04T10:30:01Z',
+          failureReason: null,
+          result: { reachable: true },
+        });
+      }
+      return new Response(null, { status: 404 });
+    }));
+    const user = userEvent.setup();
+
+    renderCredentialPanel();
+    await user.click(await screen.findByRole('button', { name: /test connection/i }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('The result store is temporarily unavailable.');
+    expect(screen.getByRole('button', { name: /test connection/i })).toBeDisabled();
+
+    await user.click(screen.getByRole('button', { name: /retry connection test result/i }));
+
+    expect(await screen.findByText(/connection test completed/i)).toBeVisible();
+    expect(posts).toBe(1);
+    expect(resultGets).toBe(2);
+  });
+
   it('allowlists cached connection-test fields when the server returns unexpected secret-like properties', async () => {
     const leakedPassword = 'unexpected-top-level-password';
     const leakedToken = 'unexpected-top-level-token';

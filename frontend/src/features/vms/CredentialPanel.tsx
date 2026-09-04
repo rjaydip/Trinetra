@@ -89,6 +89,7 @@ export function CredentialPanel({ vmsId, permissions }: { vmsId: string; permiss
   const [updatedAt, setUpdatedAt] = useState('');
   const [confirmedExists, setConfirmedExists] = useState(false);
   const [testId, setTestId] = useState('');
+  const [testStatusUrl, setTestStatusUrl] = useState('');
   const [testStarting, setTestStarting] = useState(false);
   const [testError, setTestError] = useState('');
 
@@ -98,8 +99,9 @@ export function CredentialPanel({ vmsId, permissions }: { vmsId: string; permiss
   });
   const connectionTest = useQuery({
     queryKey: ['vms', vmsId, 'connection-test', testId],
-    enabled: Boolean(testId),
-    queryFn: async () => sanitizeTestResult(await api.connectionTests.get(vmsId, testId)),
+    enabled: Boolean(testStatusUrl),
+    queryFn: async () => sanitizeTestResult(await api.connectionTests.get(testStatusUrl)),
+    retry: false,
     refetchInterval: (query) => testInProgress(query.state.data?.status) ? 1_000 : false,
   });
 
@@ -139,16 +141,21 @@ export function CredentialPanel({ vmsId, permissions }: { vmsId: string; permiss
   async function startConnectionTest() {
     setTestError('');
     setTestId('');
+    setTestStatusUrl('');
     setTestStarting(true);
     try {
       const accepted = await api.connectionTests.create(vmsId);
       setTestId(accepted.testId);
+      setTestStatusUrl(accepted.statusUrl);
     } catch (error) {
       setTestError(messageFrom(error, 'Unable to start the connection test. Please try again.'));
     } finally {
       setTestStarting(false);
     }
   }
+
+  const attachedTestInProgress = Boolean(testStatusUrl)
+    && (connectionTest.isPending || connectionTest.isFetching || connectionTest.isError || testInProgress(connectionTest.data?.status));
 
   return <section className="credential-panel" aria-labelledby="credential-title">
     <header>
@@ -169,9 +176,9 @@ export function CredentialPanel({ vmsId, permissions }: { vmsId: string; permiss
     </form>}
     {canTest && <div className="connection-test">
       <div><h3>Connection test</h3><p>Uses the stored credential to contact the live device. It may take up to one minute.</p></div>
-      <button className="button button--secondary" disabled={testStarting || testInProgress(connectionTest.data?.status)} type="button" onClick={startConnectionTest}>{testStarting ? 'Starting test…' : 'Test connection'}</button>
-      {testId && (!connectionTest.data || testInProgress(connectionTest.data.status)) && <p role="status">Connection test {connectionTest.data?.status ?? 'pending'}…</p>}
-      {connectionTest.isError && <p className="form-error" role="alert">{messageFrom(connectionTest.error, 'The connection test result could not be loaded.')}</p>}
+      <button className="button button--secondary" disabled={testStarting || attachedTestInProgress} type="button" onClick={startConnectionTest}>{testStarting ? 'Starting test…' : 'Test connection'}</button>
+      {testId && !connectionTest.isError && (!connectionTest.data || testInProgress(connectionTest.data.status)) && <p role="status">Connection test {connectionTest.data?.status ?? 'pending'}…</p>}
+      {connectionTest.isError && <><p className="form-error" role="alert">{messageFrom(connectionTest.error, 'The connection test result could not be loaded.')}</p><button className="button button--secondary" disabled={connectionTest.isFetching} type="button" onClick={() => { void connectionTest.refetch(); }}>Retry connection test result</button></>}
       {testError && <p className="form-error" role="alert">{testError}</p>}
       {connectionTest.data && !testInProgress(connectionTest.data.status) && <ConnectionResult test={connectionTest.data} />}
     </div>}

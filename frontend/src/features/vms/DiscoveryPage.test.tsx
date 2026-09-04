@@ -1,11 +1,12 @@
 import '@testing-library/jest-dom/vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { App } from '../../App';
+import type { FederatedCameraResponse } from '../../api/models';
 import { AuthProvider } from '../../auth/AuthProvider';
 import { saveSession } from '../../auth/session';
 import { sessionFixture } from '../../test/fixtures';
@@ -34,7 +35,7 @@ const vms = {
   state: 'Active',
   expectedCameraCount: 24,
 };
-const cameras = [{
+const cameras: FederatedCameraResponse[] = [{
   nativeCameraId: 'CAM-07', cameraId: null, name: 'Gate 7', vendorModel: 'IPC-HFW1230S', firmware: '2.8',
   isEnabled: true, isRecording: true, health: 'ONLINE', lastSeen: '2026-09-04T10:00:00Z',
   streamReferences: ['rtsp://stream/7'], statusChangedAt: '2026-09-04T09:30:00Z',
@@ -54,13 +55,13 @@ function apiHandler(requests: Array<{ path: string; method: string; body?: unkno
   updated: 0,
   failed: 1,
   rows: [{ index: 0, cameraCode: 'NVR-001-CAM-07', status: 'error', cameraId: null, error: 'Site is outside your authorized scope.' }],
-}, bulkStatus = 200, target = vms) {
+}, bulkStatus = 200, target = vms, discoveredCameras = cameras) {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input));
     const method = init?.method ?? 'GET';
     requests.push({ path: `${url.pathname}${url.search}`, method, body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined });
     if (url.pathname === `/api/v1/vms/${vmsId}`) return Response.json(target);
-    if (url.pathname === `/api/v1/vms/${vmsId}/cameras`) return Response.json(cameras);
+    if (url.pathname === `/api/v1/vms/${vmsId}/cameras`) return Response.json(discoveredCameras);
     if (url.pathname === '/api/v1/organizations') return Response.json([organization]);
     if (url.pathname === `/api/v1/organizations/${organizationId}/units`) return Response.json([organizationUnit]);
     if (url.pathname === '/api/v1/sites') return Response.json([site]);
@@ -70,9 +71,9 @@ function apiHandler(requests: Array<{ path: string; method: string; body?: unkno
   });
 }
 
-function renderDiscoveryPage(requests: Array<{ path: string; method: string; body?: unknown }>, result?: object, bulkStatus?: number, target = vms) {
+function renderDiscoveryPage(requests: Array<{ path: string; method: string; body?: unknown }>, result?: object, bulkStatus?: number, target = vms, discoveredCameras = cameras) {
   saveSession(sessionFixture('discovery-user', ['vms.read', 'camera.import']));
-  vi.stubGlobal('fetch', apiHandler(requests, result, bulkStatus, target));
+  vi.stubGlobal('fetch', apiHandler(requests, result, bulkStatus, target, discoveredCameras));
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <MemoryRouter initialEntries={[`/vms/${vmsId}/discovery`]}>
@@ -101,6 +102,41 @@ async function completeGate7(user: ReturnType<typeof userEvent.setup>) {
 }
 
 describe('DiscoveryPage', () => {
+  it('rejects 501 selected cameras locally before validating rows or sending a request', async () => {
+    const requests: Array<{ path: string; method: string; body?: unknown }> = [];
+    const inventory = Array.from({ length: 501 }, (_, index) => ({
+      ...cameras[0],
+      nativeCameraId: `CAM-${index + 1}`,
+      name: `Camera ${index + 1}`,
+      streamReferences: [`rtsp://stream/${index + 1}`],
+    }));
+    const { container } = renderDiscoveryPage(requests, undefined, undefined, vms, inventory);
+
+    await waitFor(() => expect(container.querySelector('input[aria-label="Select all importable cameras"]')).not.toBeNull());
+    fireEvent.click(container.querySelector('input[aria-label="Select all importable cameras"]')!);
+    fireEvent.click(container.querySelector('button[type="submit"]')!);
+
+    await waitFor(() => expect(container.querySelector('[role="alert"]')).toHaveTextContent('Select no more than 500 cameras per import. 501 are selected.'));
+    expect(requests.some(({ path }) => path === '/api/v1/cameras/bulk-import')).toBe(false);
+  });
+
+  it('does not allow an already linked discovered camera to be selected or imported again', async () => {
+    const requests: Array<{ path: string; method: string; body?: unknown }> = [];
+    const linkedCameraId = '88888888-8888-4888-8888-888888888888';
+    const user = userEvent.setup();
+    renderDiscoveryPage(requests, undefined, undefined, vms, [{ ...cameras[0], cameraId: linkedCameraId }]);
+
+    const linkedSelection = await screen.findByRole('checkbox', { name: /gate 7/i });
+    expect(linkedSelection).toBeDisabled();
+    expect(screen.getByText(/already linked.*cannot be imported again/i)).toBeVisible();
+    await user.click(linkedSelection);
+    await user.click(screen.getByRole('button', { name: /import selected/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Select at least one discovered camera to import.');
+    expect(linkedSelection).not.toBeChecked();
+    expect(requests.some(({ path }) => path === '/api/v1/cameras/bulk-import')).toBe(false);
+  });
+
   it('rejects an incomplete selected row before calling bulk import', async () => {
     const requests: Array<{ path: string; method: string; body?: unknown }> = [];
     const user = userEvent.setup();

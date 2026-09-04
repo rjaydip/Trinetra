@@ -53,7 +53,10 @@ const defaults: VmsFormValues = {
   expectedCameraCount: '',
 };
 
-const requiredText = (label: string) => z.string().trim().min(1, `${label} is required.`);
+function requiredText(label: string, maximum?: number) {
+  const schema = z.string().trim().min(1, `${label} is required.`);
+  return maximum === undefined ? schema : schema.max(maximum, `${label} must be at most ${maximum} characters.`);
+}
 
 function optionalPositiveNumber(label: string, integer = false) {
   return z.string().trim().refine((value) => {
@@ -63,12 +66,20 @@ function optionalPositiveNumber(label: string, integer = false) {
   }, `${label} must be a positive${integer ? ' whole' : ''} number.`);
 }
 
+function optionalWholeNumberAtLeast(label: string, minimum: number) {
+  return z.string().trim().refine((value) => {
+    if (!value) return true;
+    const number = Number(value);
+    return Number.isInteger(number) && number >= minimum;
+  }, `${label} must be ${minimum} or more.`);
+}
+
 const vmsFormSchema = z.object({
-  code: requiredText('VMS code'),
+  code: requiredText('VMS code', 100),
   organizationId: z.string(),
   organizationUnitId: requiredText('Organization unit'),
   siteId: z.string(),
-  displayName: requiredText('Display name'),
+  displayName: requiredText('Display name', 255),
   vendor: z.union([z.literal(''), z.enum(vendors)]).refine((value) => Boolean(value), 'Vendor is required.'),
   endpoint: requiredText('Endpoint').refine((value) => {
     try {
@@ -83,8 +94,8 @@ const vmsFormSchema = z.object({
   runtimeClass: z.union([z.literal(''), z.enum(runtimeClasses)]),
   rateLimitPerSecond: optionalPositiveNumber('Rate limit per second'),
   rateLimitBurst: optionalPositiveNumber('Rate limit burst', true),
-  inventoryPollSeconds: optionalPositiveNumber('Inventory poll seconds', true),
-  statusPollSeconds: optionalPositiveNumber('Status poll seconds', true),
+  inventoryPollSeconds: optionalWholeNumberAtLeast('Inventory poll seconds', 30),
+  statusPollSeconds: optionalWholeNumberAtLeast('Status poll seconds', 5),
   eventPollSeconds: optionalPositiveNumber('Event poll seconds', true),
   maxConcurrentRequests: optionalPositiveNumber('Maximum concurrent requests', true),
   expectedCameraCount: z.string().trim().refine((value) => !value || (Number.isInteger(Number(value)) && Number(value) >= 0), 'Expected camera count must be zero or a positive whole number.'),
@@ -164,7 +175,7 @@ export function VmsForm({ organizations, organizationUnits, sites, selectorState
     'aria-invalid': Boolean(errors[name]),
   });
 
-  return <form className="vms-form" onSubmit={form.handleSubmit(async (values) => {
+  return <form className="vms-form" noValidate onSubmit={form.handleSubmit(async (values) => {
     form.clearErrors('root');
     try {
       await onSubmit(toConnectorTargetRequest(values));
@@ -174,8 +185,8 @@ export function VmsForm({ organizations, organizationUnits, sites, selectorState
   })}>
     <fieldset>
       <legend>Target identity <span aria-hidden="true">* Required</span></legend>
-      <label>VMS code<span aria-hidden="true"> *</span><input aria-required="true" {...register('code')} {...validationProps('code')} /></label><FieldError id="code-error" message={errors.code?.message} />
-      <label>Display name<span aria-hidden="true"> *</span><input aria-required="true" {...register('displayName')} {...validationProps('displayName')} /></label><FieldError id="displayName-error" message={errors.displayName?.message} />
+      <label>VMS code<span aria-hidden="true"> *</span><input aria-required="true" maxLength={100} {...register('code')} {...validationProps('code')} /></label><FieldError id="code-error" message={errors.code?.message} />
+      <label>Display name<span aria-hidden="true"> *</span><input aria-required="true" maxLength={255} {...register('displayName')} {...validationProps('displayName')} /></label><FieldError id="displayName-error" message={errors.displayName?.message} />
       <label>Organization<select aria-describedby={selectorStates.organizations.state === 'ready' ? undefined : 'vms-organizations-status'} disabled={selectorStates.organizations.state !== 'ready'} {...organizationRegistration} onChange={(event) => {
         organizationRegistration.onChange(event);
         form.setValue('organizationUnitId', '');
@@ -202,8 +213,8 @@ export function VmsForm({ organizations, organizationUnits, sites, selectorState
       <label>Runtime class<select {...register('runtimeClass')}><option value="">Use server default</option>{runtimeClasses.map((runtimeClass) => <option key={runtimeClass} value={runtimeClass}>{runtimeClass}</option>)}</select></label>
       <label>Rate limit per second<input inputMode="decimal" type="number" min="0" step="any" {...register('rateLimitPerSecond')} {...validationProps('rateLimitPerSecond')} /></label><FieldError id="rateLimitPerSecond-error" message={errors.rateLimitPerSecond?.message} />
       <label>Rate limit burst<input inputMode="numeric" type="number" min="1" step="1" {...register('rateLimitBurst')} {...validationProps('rateLimitBurst')} /></label><FieldError id="rateLimitBurst-error" message={errors.rateLimitBurst?.message} />
-      <label>Inventory poll seconds<input inputMode="numeric" type="number" min="1" step="1" {...register('inventoryPollSeconds')} {...validationProps('inventoryPollSeconds')} /></label><FieldError id="inventoryPollSeconds-error" message={errors.inventoryPollSeconds?.message} />
-      <label>Status poll seconds<input inputMode="numeric" type="number" min="1" step="1" {...register('statusPollSeconds')} {...validationProps('statusPollSeconds')} /></label><FieldError id="statusPollSeconds-error" message={errors.statusPollSeconds?.message} />
+      <label>Inventory poll seconds<input inputMode="numeric" type="number" min="30" step="1" {...register('inventoryPollSeconds')} {...validationProps('inventoryPollSeconds')} /></label><FieldError id="inventoryPollSeconds-error" message={errors.inventoryPollSeconds?.message} />
+      <label>Status poll seconds<input inputMode="numeric" type="number" min="5" step="1" {...register('statusPollSeconds')} {...validationProps('statusPollSeconds')} /></label><FieldError id="statusPollSeconds-error" message={errors.statusPollSeconds?.message} />
       <label>Event poll seconds<input inputMode="numeric" type="number" min="1" step="1" {...register('eventPollSeconds')} {...validationProps('eventPollSeconds')} /></label><FieldError id="eventPollSeconds-error" message={errors.eventPollSeconds?.message} />
       <label>Maximum concurrent requests<input inputMode="numeric" type="number" min="1" step="1" {...register('maxConcurrentRequests')} {...validationProps('maxConcurrentRequests')} /></label><FieldError id="maxConcurrentRequests-error" message={errors.maxConcurrentRequests?.message} />
       <label>Expected camera count<input inputMode="numeric" type="number" min="0" step="1" {...register('expectedCameraCount')} {...validationProps('expectedCameraCount')} /></label><FieldError id="expectedCameraCount-error" message={errors.expectedCameraCount?.message} />
