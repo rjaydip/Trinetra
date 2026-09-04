@@ -4,8 +4,11 @@ import { useNavigate } from 'react-router-dom';
 
 import { isApiProblem } from '../../api/client';
 import { api } from '../../api/endpoints';
-import { PageState } from '../../components/ui';
-import { CameraForm } from './CameraForm';
+import { CameraForm, type CameraSelectorStates, type SelectorState } from './CameraForm';
+
+function referenceError(error: unknown, fallback: string): string {
+  return isApiProblem(error) ? error.detail : fallback;
+}
 
 export function NewCameraPage() {
   const navigate = useNavigate();
@@ -50,22 +53,42 @@ export function NewCameraPage() {
       navigate('/cameras');
     },
   });
-  const onboardingError = organizations.isError ? organizations.error
-    : organizationUnits.isError ? organizationUnits.error
-      : sites.isError ? sites.error
-        : vms.isError ? vms.error
-          : undefined;
+  const organizationsState: SelectorState = organizations.isPending || (organizations.isError && organizations.isFetching)
+    ? { state: 'loading' }
+    : organizations.isError
+      ? { state: 'error', message: referenceError(organizations.error, 'Organizations could not be loaded. Please try again.'), retry: () => { void organizations.refetch(); } }
+      : organizations.data?.length
+        ? { state: 'ready' }
+        : { state: 'empty' };
+  const organizationUnitsState: SelectorState = !organizationId
+    ? { state: 'idle' }
+    : organizationUnits.isPending || (organizationUnits.isError && organizationUnits.isFetching)
+      ? { state: 'loading' }
+      : organizationUnits.isError
+        ? { state: 'error', message: referenceError(organizationUnits.error, 'Organization units could not be loaded. Please try again.'), retry: () => { void organizationUnits.refetch(); } }
+        : organizationUnits.data?.length
+          ? { state: 'ready' }
+          : { state: 'empty' };
+  const sitesState: SelectorState = sites.isPending || (sites.isError && sites.isFetching)
+    ? { state: 'loading' }
+    : sites.isError
+      ? { state: 'error', message: referenceError(sites.error, 'Sites could not be loaded. Please try again.'), retry: () => { void sites.refetch(); } }
+      : sites.data?.length
+        ? { state: 'ready' }
+        : { state: 'empty' };
+  const vmsState: SelectorState = vms.isPending || (vms.isError && vms.isFetching)
+    ? { state: 'loading' }
+    : vms.isError
+      ? { state: 'error', message: referenceError(vms.error, 'VMS records could not be loaded. Please try again.'), retry: () => { void vms.refetch(); } }
+      : vms.data?.length
+        ? { state: 'ready' }
+        : { state: 'empty' };
+  const selectorStates: CameraSelectorStates = {
+    organizations: organizationsState,
+    organizationUnits: organizationUnitsState,
+    sites: sitesState,
+    vms: vmsState,
+  };
 
-  if (organizations.isError || organizationUnits.isError || sites.isError || vms.isError) return <section>
-    <PageState title="Couldn&apos;t load onboarding options">{isApiProblem(onboardingError) ? onboardingError.detail : 'Try again to retrieve the organizations, organization units, sites, and VMS records you can use.'}</PageState>
-    <button className="button" type="button" onClick={() => {
-      if (organizations.isError) void organizations.refetch();
-      if (sites.isError) void sites.refetch();
-      if (vms.isError) void vms.refetch();
-      if (organizationUnits.isError) void organizationUnits.refetch();
-    }}>Try again</button>
-  </section>;
-  if (organizations.isPending || sites.isPending || vms.isPending) return <PageState title="Loading onboarding options">Retrieving the organization, site, and VMS options you can use…</PageState>;
-
-  return <section className="onboarding-page" aria-labelledby="new-camera-title"><header><p className="eyebrow">Camera registry</p><h1 id="new-camera-title">Register camera</h1><p>Required fields identify the camera and its physical location.</p></header><CameraForm organizations={organizations.data ?? []} organizationUnits={organizationUnits.data ?? []} sites={sites.data ?? []} vms={vms.data ?? []} mapFeatures={mapContext.data} onCoordinatesChange={handleCoordinatesChange} onOrganizationChange={setOrganizationId} onSubmit={async (values) => { await create.mutateAsync(values); }} /></section>;
+  return <section className="onboarding-page" aria-labelledby="new-camera-title"><header><p className="eyebrow">Camera registry</p><h1 id="new-camera-title">Register camera</h1><p>Required fields identify the camera and its physical location.</p></header><CameraForm organizations={organizations.data ?? []} organizationUnits={organizationUnits.data ?? []} sites={sites.data ?? []} vms={vms.data ?? []} selectorStates={selectorStates} mapFeatures={mapContext.data} onCoordinatesChange={handleCoordinatesChange} onOrganizationChange={setOrganizationId} onSubmit={async (values) => { await create.mutateAsync(values); }} /></section>;
 }
