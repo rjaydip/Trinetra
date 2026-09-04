@@ -64,11 +64,20 @@ public static class ApiKeyEndpoints
         ]);
     }
 
-    private static async Task<Created<ApiKeyCreatedResponse>> CreateAsync(
+    private static async Task<Results<Created<ApiKeyCreatedResponse>, ProblemHttpResult>> CreateAsync(
         [FromBody] CreateApiKeyRequest request, NpgsqlDataSource db,
-        HttpContext http, CancellationToken ct)
+        AccessGroupRepository groups, HttpContext http, CancellationToken ct)
     {
         var caller = CallerContextFactory.From(http);
+
+        // A key acts through its group exactly as a user does, so minting one runs the same
+        // privilege-escalation chokepoint as adding a user to that group. Without it,
+        // apikey.manage alone let a scoped administrator mint a key in the platform-admin group.
+        if (await GroupGrantGuard.CheckAsync(groups, caller, request.GroupId, "apikey.manage", ct)
+            is { } denied)
+        {
+            return denied;
+        }
 
         var rawKey = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(32));
         var keyId = $"ak_{Guid.NewGuid():N}"[..16];

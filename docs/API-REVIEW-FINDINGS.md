@@ -123,6 +123,29 @@ ResolveCamera pre-scope, `17-M1` heartbeat spoofable, `17-M2` client-supplied la
 (#10, #19) → F7 design decision → audit-fidelity + pagination + validation waves → P3 sweep.
 F2/F3/DELETE fold in wherever the touched files are already open.
 
+### PR plan (agreed 2026-09-04)
+
+The API is **not deployed anywhere yet**, so the "a version file is never edited once applied"
+rule does not bite — still prefer new `v1.7+` files over editing `v1.sql`. Branch per PR off
+`main`.
+
+| PR | Contents | Schema |
+|----|----------|--------|
+| PR1  | **P0**: 8-C1 + 15-H1 — ✅ implemented (not committed) | — |
+| PR2  | **Geography-scope wave**: 9-H1, 13-H1, 15-M1, verify 14-M1 / 16-L2 (`CameraRepository` pattern) | — |
+| PR3  | **VMS lifecycle**: 9-NEW-H, 9-H2, 9-H3, 9-M1, 9-M2 | `vms.delete` |
+| PR4  | **Token revocation**: 4-C1 + `POST /auth/logout` + `ChangePasswordAsync` status re-check | `token_version` |
+| PR5  | **Unscoped reads**: 6-H1, 8-H1, 8-H2 | — |
+| PR6  | **Hierarchy correctness**: 5-H1, 5-H2, 5-M1 | — |
+| PR7  | **Auth hardening**: 4-H1..H5 (may split) | `password_history`, MFA |
+| PR8  | **Audit-fidelity wave** (P2) | — |
+| PR9  | **Pagination wave** (P2) | — |
+| PR10 | **Validation / error-shape wave** (P2) | — |
+| PR11 | **P3 sweep** incl. F1 | — |
+| F7   | separate feature branch, **after** the design decision | approval tables |
+
+Status: **not started.**
+
 ═══════════════════════════════════════════════════════════════════════════════
 
 ## Finding 1 — internal "Model N" jargon leaks into the public OpenAPI reference

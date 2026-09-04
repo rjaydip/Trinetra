@@ -355,53 +355,16 @@ public static class UserEndpoints
                 statusCode: StatusCodes.Status400BadRequest);
         }
 
-        // THE escalation guard. Without it, anyone holding user.manage could put themselves
-        // in the platform administrators group and own the estate — a one-request takeover
-        // from the lowest privilege that can manage users at all.
-        // THE escalation chokepoint. Three independent things must hold, and checking only
-        // the first was a real takeover path: a caller could create a group carrying their
-        // own role, never scope it — an unscoped group reaches every department — and assign
-        // it to themselves. The permission-subset check passed, because the permissions were
-        // identical to their own. Only the scope checks catch it.
-        if (!caller.IsUnscopedFor("user.manage"))
+        // THE escalation chokepoint. A membership and a minted API key confer the same grant,
+        // so both run one shared guard (GroupGrantGuard) — checking only the permission subset
+        // was a real takeover path: a caller could build a group carrying their own role, never
+        // scope it (an unscoped group reaches every department), and assign it to themselves;
+        // the subset check passed because the permissions matched theirs. Only the scope checks
+        // catch it.
+        if (await GroupGrantGuard.CheckAsync(groups, caller, request.GroupId, "user.manage", ct)
+            is { } denied)
         {
-            // 1. Cannot hand out permissions you do not hold.
-            var granted = await groups.GetGroupPermissionsAsync(request.GroupId, ct);
-            var exceeding = granted.Where(p => !caller.Has(p)).OrderBy(p => p).ToList();
-
-            if (exceeding.Count > 0)
-            {
-                return TypedResults.Problem(
-                    title: "Would grant more than you hold",
-                    detail: $"'{target.Code}' grants permissions you do not have: "
-                          + $"{string.Join(", ", exceeding)}. You cannot give away access "
-                          + "you were not given.",
-                    statusCode: StatusCodes.Status403Forbidden);
-            }
-
-            // 2. Cannot hand out a group that is unrestricted by organization. This is the
-            // one that closes the takeover: an unscoped group grants its permissions over
-            // every department, so granting one is granting the estate.
-            if (!await groups.HasOrganizationScopeAsync(request.GroupId, ct))
-            {
-                return TypedResults.Problem(
-                    title: "Group is unrestricted by organization",
-                    detail: $"'{target.Code}' declares no organization scope, so it applies "
-                          + "across every department. Only an administrator who is already "
-                          + "unscoped may grant it.",
-                    statusCode: StatusCodes.Status403Forbidden);
-            }
-
-            // 3. Cannot hand out your own permissions over someone else's department.
-            if (!await groups.GroupScopesWithinReachAsync(
-                    request.GroupId, caller, "user.manage", ct))
-            {
-                return TypedResults.Problem(
-                    title: "Group reaches beyond your scope",
-                    detail: $"'{target.Code}' is scoped to organization units you do not "
-                          + "administer.",
-                    statusCode: StatusCodes.Status403Forbidden);
-            }
+            return denied;
         }
 
         await using var work = await UnitOfWork.BeginAsync(db, ct);

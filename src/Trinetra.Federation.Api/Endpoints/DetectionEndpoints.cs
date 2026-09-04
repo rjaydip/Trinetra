@@ -24,6 +24,21 @@ public static class DetectionEndpoints
     private const string VehicleTypeKey = "vehicleType";
     private const string PlateNumberKey = "plateNumber";
 
+    private static readonly System.Buffers.SearchValues<char> SafeIdChars =
+        System.Buffers.SearchValues.Create(
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_");
+
+    /// <summary>
+    /// The detection <c>id</c> is caller-supplied and becomes both the evidence filename and the
+    /// idempotency key. Constrain it to a safe token so a crafted value such as
+    /// <c>../../etc/cron.d/x</c> cannot escape the evidence root. The worker sends
+    /// <c>evt-{uuid:n}</c>, which this admits.
+    /// </summary>
+    private static bool IsSafeDetectionId(string? id) =>
+        !string.IsNullOrEmpty(id)
+        && id.Length <= 128
+        && !id.AsSpan().ContainsAnyExcept(SafeIdChars);
+
     public static void MapDetectionEndpoints(this IEndpointRouteBuilder app)
     {
         var group = app.MapGroup("/api/v1/detections")
@@ -61,6 +76,14 @@ public static class DetectionEndpoints
         HttpContext http, CancellationToken ct)
     {
         var caller = CallerContextFactory.From(http);
+
+        if (!IsSafeDetectionId(request.Id))
+        {
+            return TypedResults.Problem(
+                title: "Invalid detection id",
+                detail: "id must be 1-128 characters of ASCII letters, digits, '-' or '_'.",
+                statusCode: StatusCodes.Status400BadRequest);
+        }
 
         var resolved = await detections.ResolveCameraAsync(request.CameraId, ct);
         if (resolved is null)
@@ -137,13 +160,20 @@ public static class DetectionEndpoints
             return request.Evidence?.GetValueOrDefault(SnapshotPathKey);
         }
 
-        var root = configuration["Evidence:RootPath"] ?? "evidence";
+        var root = Path.GetFullPath(configuration["Evidence:RootPath"] ?? "evidence");
         Directory.CreateDirectory(root);
 
         var fileName = $"{request.Id}.jpg";
-        var path = Path.Combine(root, fileName);
+        var fullPath = Path.GetFullPath(Path.Combine(root, fileName));
 
-        await File.WriteAllBytesAsync(path, Convert.FromBase64String(base64), ct);
+        // Defence in depth behind IsSafeDetectionId: the write must never land outside the
+        // configured root even if the id check is ever weakened.
+        if (!fullPath.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Evidence path escaped the configured root.");
+        }
+
+        await File.WriteAllBytesAsync(fullPath, Convert.FromBase64String(base64), ct);
 
         return Path.Combine(Path.GetFileName(root), fileName);
     }
