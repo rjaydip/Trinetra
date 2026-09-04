@@ -127,6 +127,51 @@ describe('CredentialPanel', () => {
     expect(polls).toBe(2);
   });
 
+  it('allowlists cached connection-test fields when the server returns unexpected secret-like properties', async () => {
+    const leakedPassword = 'unexpected-top-level-password';
+    const leakedToken = 'unexpected-top-level-token';
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = new URL(String(input)).pathname;
+      if (path.endsWith('/credential/status')) return Response.json({ reference: 'vms/north-nvr', exists: true });
+      if (path.endsWith('/test') && init?.method === 'POST') {
+        return Response.json({ testId, status: 'pending', statusUrl: `/api/v1/vms/${vmsId}/test/${testId}` }, { status: 202 });
+      }
+      if (path.endsWith(`/test/${testId}`)) {
+        return Response.json({
+          testId,
+          targetId: vmsId,
+          status: 'completed',
+          requestedAt: '2026-09-04T10:30:00Z',
+          completedAt: '2026-09-04T10:30:01Z',
+          failureReason: null,
+          result: { reachable: true },
+          password: leakedPassword,
+          token: leakedToken,
+          credential: { value: 'unexpected-nested-secret' },
+        });
+      }
+      return new Response(null, { status: 404 });
+    }));
+    const user = userEvent.setup();
+
+    const { queryClient } = renderCredentialPanel();
+    await user.click(await screen.findByRole('button', { name: /test connection/i }));
+    expect(await screen.findByText(/connection test completed/i)).toBeVisible();
+
+    const cachedTest = queryClient.getQueryCache().find({ queryKey: ['vms', vmsId, 'connection-test', testId] })?.state.data;
+    expect(cachedTest).toEqual({
+      testId,
+      targetId: vmsId,
+      status: 'completed',
+      requestedAt: '2026-09-04T10:30:00Z',
+      completedAt: '2026-09-04T10:30:01Z',
+      failureReason: null,
+      result: { reachable: true },
+    });
+    expect(JSON.stringify(cachedTest)).not.toContain(leakedPassword);
+    expect(JSON.stringify(cachedTest)).not.toContain(leakedToken);
+  });
+
   it('does not offer credential writes or connection tests without their permissions', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => Response.json({ reference: 'vms/north-nvr', exists: true })));
 

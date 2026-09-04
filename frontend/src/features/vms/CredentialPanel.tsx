@@ -35,7 +35,15 @@ function safeTestDetails(result: unknown): SafeTestDetails | null {
 }
 
 function sanitizeTestResult(result: ConnectionTestResult): SafeConnectionTestResult {
-  return { ...result, result: safeTestDetails(result.result) };
+  return {
+    testId: result.testId,
+    targetId: result.targetId,
+    status: result.status,
+    requestedAt: result.requestedAt,
+    completedAt: result.completedAt,
+    failureReason: result.failureReason,
+    result: safeTestDetails(result.result),
+  };
 }
 
 function messageFrom(error: unknown, fallback: string) {
