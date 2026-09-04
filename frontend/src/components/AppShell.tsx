@@ -10,6 +10,7 @@ const navigation = [
 
 export function AppShell() {
   const { session } = useAuth();
+  const showAdmin = ['organization.read', 'geography.read', 'group.read'].some((permission) => hasPermission(session, permission));
   return (
     <div className="app-shell">
       <header className="app-header">
@@ -22,6 +23,7 @@ export function AppShell() {
               </li>
             ))}
             {hasPermission(session, 'vms.read') && <li><NavLink to="/vms">VMS</NavLink></li>}
+            {showAdmin && <li><NavLink to="/admin">Admin</NavLink></li>}
           </ul>
         </nav>
       </header>

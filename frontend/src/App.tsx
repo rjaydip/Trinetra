@@ -8,6 +8,10 @@ import { PasswordPage } from './auth/PasswordPage';
 import { RequireAuth } from './auth/RequireAuth';
 import { RequirePermission } from './auth/RequirePermission';
 import { AppShell } from './components/AppShell';
+import { AccessGroupsPage } from './features/admin/AccessGroupsPage';
+import { AdminPage, RequireAnyAdminPermission, supportedAdminReadPermissions } from './features/admin/AdminPage';
+import { HierarchyPage } from './features/admin/HierarchyPage';
+import { RolesPage } from './features/admin/RolesPage';
 import { CameraDetailPage } from './features/cameras/CameraDetailPage';
 import { BulkImportPage } from './features/cameras/BulkImportPage';
 import { NewCameraPage } from './features/cameras/NewCameraPage';
@@ -49,6 +53,11 @@ function SessionApplication() {
           <Route path="/vms" element={<RequirePermission permission="vms.read"><VmsPage /></RequirePermission>} />
           <Route path="/vms/:vmsId" element={<RequirePermission permission="vms.read"><VmsPage /></RequirePermission>} />
           <Route path="/vms/:vmsId/discovery" element={<RequirePermission permission="vms.read"><RequirePermission permission="camera.import"><DiscoveryPage /></RequirePermission></RequirePermission>} />
+          <Route path="/admin" element={<RequireAnyAdminPermission permissions={supportedAdminReadPermissions}><AdminPage /></RequireAnyAdminPermission>}>
+            <Route path="hierarchy" element={<RequireAnyAdminPermission permissions={['organization.read', 'geography.read']}><HierarchyPage /></RequireAnyAdminPermission>} />
+            <Route path="roles" element={<RequirePermission permission="group.read"><RolesPage /></RequirePermission>} />
+            <Route path="access-groups" element={<RequirePermission permission="group.read"><AccessGroupsPage /></RequirePermission>} />
+          </Route>
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Route>
       </Routes>
