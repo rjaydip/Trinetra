@@ -1,9 +1,10 @@
 import { zodResolver } from '@hookform/resolvers/zod';
-import { useForm } from 'react-hook-form';
+import { useEffect } from 'react';
+import { useForm, useWatch } from 'react-hook-form';
 import { z } from 'zod';
 
 import { isApiProblem } from '../../api/client';
-import type { CameraWriteRequest, OrganizationResponse, OrganizationUnitResponse, SiteResponse, VmsResponse } from '../../api/models';
+import type { CameraWriteRequest, GeoJsonFeatureCollection, OrganizationResponse, OrganizationUnitResponse, SiteResponse, VmsResponse } from '../../api/models';
 import { Button } from '../../components/ui';
 import {
   cameraTypes,
@@ -13,6 +14,7 @@ import {
   protocols,
   roundCoordinate,
 } from './cameraVocabulary';
+import { LocationPicker } from './LocationPicker';
 
 const uuidSchema = z.guid();
 
@@ -162,8 +164,10 @@ interface CameraFormProps {
   organizationUnits: OrganizationUnitResponse[];
   sites: SiteResponse[];
   vms: VmsResponse[];
+  mapFeatures?: GeoJsonFeatureCollection;
   initialValues?: CameraFormValues;
   onOrganizationChange(organizationId: string): void;
+  onCoordinatesChange?(latitude: number | null, longitude: number | null): void;
   onSubmit(values: CameraWriteRequest): Promise<void>;
 }
 
@@ -171,9 +175,23 @@ function FieldError({ id, message }: { id: string; message?: string }) {
   return message ? <p className="form-error" id={id} role="alert">{message}</p> : null;
 }
 
-export function CameraForm({ organizations, organizationUnits, sites, vms, initialValues, onOrganizationChange, onSubmit }: CameraFormProps) {
+function coordinate(value: string, minimum: number, maximum: number) {
+  const number = Number(value);
+  return value.trim() && Number.isFinite(number) && number >= minimum && number <= maximum ? number : null;
+}
+
+function optionalNumericValue(value: string) {
+  const number = Number(value);
+  return value.trim() && Number.isFinite(number) ? number : null;
+}
+
+export function CameraForm({ organizations, organizationUnits, sites, vms, mapFeatures, initialValues, onOrganizationChange, onCoordinatesChange, onSubmit }: CameraFormProps) {
   const form = useForm<CameraFormValues>({ defaultValues: initialValues ?? defaults, resolver: zodResolver(cameraFormSchema) });
   const { register, formState: { errors, isSubmitting } } = form;
+  const [latitudeValue, longitudeValue, azimuthValue] = useWatch({ control: form.control, name: ['latitude', 'longitude', 'azimuth'] });
+  const latitude = coordinate(latitudeValue, -90, 90);
+  const longitude = coordinate(longitudeValue, -180, 180);
+  const azimuth = optionalNumericValue(azimuthValue);
   const selectedOrganizationId = form.watch('organizationId');
   const selectedVmsId = form.watch('vmsId');
   const organizationRegistration = register('organizationId');
@@ -182,10 +200,14 @@ export function CameraForm({ organizations, organizationUnits, sites, vms, initi
     : { 'aria-invalid': false };
   const numericFields: Array<{ name: NumericField; label: string; step?: string }> = [
     { name: 'altitude', label: 'Altitude', step: 'any' }, { name: 'mountingHeight', label: 'Mounting height', step: 'any' },
-    { name: 'azimuth', label: 'Azimuth', step: 'any' }, { name: 'tilt', label: 'Tilt', step: 'any' },
+    { name: 'tilt', label: 'Tilt', step: 'any' },
     { name: 'horizontalFov', label: 'Horizontal field of view', step: 'any' }, { name: 'verticalFov', label: 'Vertical field of view', step: 'any' },
     { name: 'effectiveRange', label: 'Effective range', step: 'any' }, { name: 'port', label: 'Port', step: '1' },
   ];
+
+  useEffect(() => {
+    onCoordinatesChange?.(latitude, longitude);
+  }, [latitude, longitude, onCoordinatesChange]);
 
   return (
     <form className="camera-form" onSubmit={form.handleSubmit(async (values) => {
@@ -210,6 +232,18 @@ export function CameraForm({ organizations, organizationUnits, sites, vms, initi
         <label>Camera type<span aria-hidden="true"> (required)</span><select aria-required="true" {...register('cameraType')} {...validationProps('cameraType')}><option value="">Select a camera type</option>{cameraTypes.map((type) => <option key={type} value={type}>{type}</option>)}</select></label><FieldError id="cameraType-error" message={errors.cameraType?.message} />
         <label>Latitude<span aria-hidden="true"> (required)</span><input aria-required="true" inputMode="decimal" {...register('latitude')} {...validationProps('latitude')} /></label><FieldError id="latitude-error" message={errors.latitude?.message} />
         <label>Longitude<span aria-hidden="true"> (required)</span><input aria-required="true" inputMode="decimal" {...register('longitude')} {...validationProps('longitude')} /></label><FieldError id="longitude-error" message={errors.longitude?.message} />
+        <LocationPicker
+          latitude={latitude}
+          longitude={longitude}
+          azimuth={azimuth}
+          azimuthError={errors.azimuth?.message}
+          features={mapFeatures}
+          onLocationChange={(nextLatitude, nextLongitude) => {
+            form.setValue('latitude', String(nextLatitude), { shouldDirty: true, shouldValidate: true });
+            form.setValue('longitude', String(nextLongitude), { shouldDirty: true, shouldValidate: true });
+          }}
+          onAzimuthChange={(nextAzimuth) => form.setValue('azimuth', nextAzimuth === null ? '' : String(nextAzimuth), { shouldDirty: true, shouldValidate: true })}
+        />
       </fieldset>
       <fieldset><legend>Device and network</legend>
         <label>Manufacturer<input aria-required={!selectedVmsId} {...register('manufacturer')} {...validationProps('manufacturer')} /></label><FieldError id="manufacturer-error" message={errors.manufacturer?.message} /><label>Model<input {...register('model')} {...validationProps('model')} /></label><label>Serial number<input {...register('serialNumber')} {...validationProps('serialNumber')} /></label>

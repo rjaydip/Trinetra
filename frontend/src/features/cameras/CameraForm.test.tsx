@@ -38,6 +38,27 @@ describe('CameraForm', () => {
     });
   });
 
+  it('updates the coordinate fields when a map location is selected', async () => {
+    const user = userEvent.setup();
+    render(<CameraForm {...emptySelectors} onSubmit={vi.fn()} organizationUnits={[]} sites={[]} initialValues={validForm()} />);
+
+    await user.click(screen.getByRole('button', { name: /set location to 19.076012345/i }));
+
+    expect(screen.getByLabelText(/^Latitude/i)).toHaveValue('19.0760123');
+    expect(screen.getByLabelText(/^Longitude/i)).toHaveValue('72.8777');
+  });
+
+  it('uses the accessible picker input as the form azimuth value', async () => {
+    const user = userEvent.setup();
+    const submit = vi.fn().mockResolvedValue(undefined);
+    render(<CameraForm {...emptySelectors} onSubmit={submit} organizationUnits={[]} sites={[]} initialValues={validForm()} />);
+
+    await user.type(screen.getByLabelText(/^Azimuth/i), '45.125');
+    await user.click(screen.getByRole('button', { name: /register camera/i }));
+
+    expect(submit).toHaveBeenCalledWith(expect.objectContaining({ azimuth: 45.125 }));
+  });
+
   it('blocks submission until required camera identity and coordinates are supplied', async () => {
     const user = userEvent.setup();
     const submit = vi.fn();
