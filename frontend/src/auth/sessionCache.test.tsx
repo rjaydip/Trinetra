@@ -67,7 +67,7 @@ it('keeps the signed-out user cache unavailable while the next real login loads 
   await user.type(screen.getByLabelText(/username/i), 'second');
   await user.type(screen.getByLabelText(/^password/i), 'valid password');
   await user.click(screen.getByRole('button', { name: /sign in/i }));
-  await user.click(screen.getByRole('link', { name: /camera registry/i }));
+  await user.click(await screen.findByRole('link', { name: /camera registry/i }));
   expect(screen.queryAllByText('Prior private camera')).toHaveLength(0);
   await waitFor(() => expect(releaseSecond).toBeDefined());
   await act(async () => releaseSecond!());
