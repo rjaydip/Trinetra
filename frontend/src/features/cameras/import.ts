@@ -24,6 +24,21 @@ const importEnvelopeSchema = z.object({
   items: z.array(importItemSchema).min(1, 'Import items must contain between 1 and 500 items.').max(500, 'Import items must contain between 1 and 500 items.'),
 }).strict();
 
+export function createSampleImport(): BulkImportRequest {
+  return {
+    mode: 'insert',
+    items: [{
+      cameraCode: 'CAM-EXAMPLE-001',
+      name: 'Example camera',
+      organizationUnitId: '00000000-0000-0000-0000-000000000001',
+      siteId: '00000000-0000-0000-0000-000000000002',
+      cameraType: 'FIXED',
+      latitude: 19.076,
+      longitude: 72.8777,
+    }],
+  };
+}
+
 export function parseBulkImport(text: string): BulkImportRequest {
   let parsed: unknown;
   try {

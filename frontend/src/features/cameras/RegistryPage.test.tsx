@@ -93,9 +93,18 @@ describe('RegistryPage', () => {
     const user = userEvent.setup();
 
     renderApp('/cameras');
-    await user.click(await screen.findByRole('button', { name: /next page/i }));
+    await user.click(await screen.findByRole('button', { name: /^next$/i }));
 
     await waitFor(() => expect(lastCameraRequest?.searchParams.get('cursor')).toBe('next-page-token'));
+  });
+
+  it('disables Next when the API returns no next cursor', async () => {
+    signIn();
+    vi.stubGlobal('fetch', async () => Response.json({ items: [liveCamera()], nextCursor: null }));
+
+    renderApp('/cameras');
+
+    expect(await screen.findByRole('button', { name: /^next$/i })).toBeDisabled();
   });
 
   it('reflects supported filters in the registry URL query and API request', async () => {
@@ -157,7 +166,7 @@ describe('RegistryPage', () => {
     const user = userEvent.setup();
 
     renderApp('/cameras');
-    const next = await screen.findByRole('button', { name: /next page/i });
+    const next = await screen.findByRole('button', { name: /^next$/i });
     await user.type(screen.getByLabelText(/search cameras/i), 'north');
 
     expect(next).toBeDisabled();

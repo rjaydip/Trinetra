@@ -31,9 +31,14 @@ afterEach(() => {
 describe('ReportsPage', () => {
   it('does not present unavailable coverage gaps as zero', async () => {
     signIn();
-    vi.stubGlobal('fetch', async () => Response.json({
-      targets: 10, activeTargets: 8, quarantinedTargets: 2, cameras: 12, unreachableCameras: 3,
-    }));
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/api/v1/overview') return Response.json({
+        targets: 10, activeTargets: 8, quarantinedTargets: 2, cameras: 12, unreachableCameras: 3,
+      });
+      if (url.pathname === '/api/v1/organizations' || url.pathname === '/api/v1/geographic-areas') return Response.json([]);
+      return new Response(null, { status: 404 });
+    });
 
     renderApp('/reports');
 
@@ -52,6 +57,10 @@ describe('ReportsPage', () => {
       if (url.pathname === '/api/v1/gis/coverage') {
         return Response.json({ buckets: { operationalStatus: { ACTIVE: 9, INACTIVE: 3 } } });
       }
+      if (url.pathname === '/api/v1/geographic-areas') {
+        return Response.json([{ id: 'c0a80101-0000-4000-8000-000000000030', parentAreaId: null, code: 'MUM', name: 'Mumbai', areaType: 'CITY', status: 'ACTIVE' }]);
+      }
+      if (url.pathname === '/api/v1/organizations') return Response.json([]);
       return new Response(null, { status: 404 });
     });
     vi.stubGlobal('fetch', fetch);
@@ -61,32 +70,37 @@ describe('ReportsPage', () => {
 
     expect(await screen.findByText('12')).toBeVisible();
     expect(screen.getByText(/3 unreachable/i)).toBeVisible();
-    await user.type(screen.getByLabelText(/coverage bounding box/i), '77.5,12.9,77.6,13.0');
+    await user.selectOptions(await screen.findByLabelText(/coverage geographic area/i), 'c0a80101-0000-4000-8000-000000000030');
     await user.click(screen.getByRole('button', { name: /load coverage summary/i }));
 
     expect(await screen.findByText('ACTIVE')).toBeVisible();
     expect(screen.getByText('9')).toBeVisible();
+    expect(fetch.mock.calls.map(([input]) => String(input))).toContainEqual(expect.stringContaining('geographicAreaId=c0a80101-0000-4000-8000-000000000030'));
+    expect(screen.queryByLabelText(/coverage bounding box/i)).not.toBeInTheDocument();
     await waitFor(() => expect(fetch.mock.calls.map(([input]) => String(input))).not.toContainEqual(expect.stringContaining('/api/v1/gis/gaps')));
     expect(screen.getAllByText(/estimated planning aid/i)).not.toHaveLength(0);
   });
 
-  it('associates coverage format guidance and validation errors with the bounding-box input', async () => {
+  it('requires an API-backed coverage selector before loading a summary', async () => {
     signIn();
-    vi.stubGlobal('fetch', async () => Response.json({
-      targets: 10, activeTargets: 8, quarantinedTargets: 2, cameras: 12, unreachableCameras: 3,
-    }));
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/api/v1/overview') return Response.json({
+        targets: 10, activeTargets: 8, quarantinedTargets: 2, cameras: 12, unreachableCameras: 3,
+      });
+      if (url.pathname === '/api/v1/organizations' || url.pathname === '/api/v1/geographic-areas') return Response.json([]);
+      return new Response(null, { status: 404 });
+    });
     const user = userEvent.setup();
 
     renderApp('/reports');
 
-    const input = await screen.findByLabelText(/coverage bounding box/i);
-    expect(input).toHaveAttribute('aria-describedby', 'coverage-scope-help');
-    expect(input).toHaveAttribute('aria-invalid', 'false');
-
+    await screen.findByText('12');
     await user.click(screen.getByRole('button', { name: /load coverage summary/i }));
 
-    expect(input).toHaveAttribute('aria-describedby', 'coverage-scope-help coverage-scope-error');
-    expect(input).toHaveAttribute('aria-invalid', 'true');
+    const geographicArea = await screen.findByLabelText(/coverage geographic area/i);
+    expect(geographicArea).toHaveAttribute('aria-describedby', 'coverage-scope-error');
+    expect(geographicArea).toHaveAttribute('aria-invalid', 'true');
     expect(screen.getByRole('alert')).toHaveAttribute('id', 'coverage-scope-error');
   });
 });

@@ -30,6 +30,23 @@ afterEach(() => {
 });
 
 describe('BulkImportPage', () => {
+  it('downloads the contract-valid JSON sample and revokes its temporary URL', async () => {
+    signIn();
+    const createObjectURL = vi.fn(() => 'blob:camera-import-sample');
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal('URL', { createObjectURL, revokeObjectURL });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
+    const user = userEvent.setup();
+
+    renderApp('/cameras/import');
+    await user.click(screen.getByRole('button', { name: /download JSON template/i }));
+
+    expect(createObjectURL).toHaveBeenCalledWith(expect.any(Blob));
+    expect(click).toHaveBeenCalled();
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:camera-import-sample');
+    click.mockRestore();
+  });
+
   it('keeps import preview and server row failures visible with the mobile stylesheet', async () => {
     signIn();
     vi.stubGlobal('innerWidth', 375);

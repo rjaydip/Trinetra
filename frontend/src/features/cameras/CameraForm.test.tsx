@@ -42,6 +42,7 @@ describe('CameraForm', () => {
     const user = userEvent.setup();
     render(<CameraForm {...emptySelectors} onSubmit={vi.fn()} organizationUnits={[]} sites={[]} initialValues={validForm()} />);
 
+    await user.click(screen.getByRole('button', { name: /additional details/i }));
     await user.click(screen.getByRole('button', { name: /set location to 19.076012345/i }));
 
     expect(screen.getByLabelText(/^Latitude/i)).toHaveValue('19.0760123');
@@ -53,12 +54,26 @@ describe('CameraForm', () => {
     const submit = vi.fn().mockResolvedValue(undefined);
     render(<CameraForm {...emptySelectors} onSubmit={submit} organizationUnits={[]} sites={[]} initialValues={validForm()} />);
 
+    await user.click(screen.getByRole('button', { name: /additional details/i }));
     const azimuth = screen.getByLabelText(/^Azimuth/i);
     await user.type(azimuth, '45.125');
     expect(azimuth).toHaveValue(45.125);
     await user.click(screen.getByRole('button', { name: /register camera/i }));
 
     expect(submit).toHaveBeenCalledWith(expect.objectContaining({ azimuth: 45.125 }));
+  });
+
+  it('keeps optional fields hidden until Additional details is expanded', async () => {
+    const user = userEvent.setup();
+    render(<CameraForm {...emptySelectors} onSubmit={vi.fn()} organizationUnits={[]} sites={[]} />);
+
+    expect(screen.queryByLabelText(/mounting height/i)).not.toBeInTheDocument();
+    const details = screen.getByRole('button', { name: /additional details/i });
+    expect(details).toHaveAttribute('aria-expanded', 'false');
+    await user.click(details);
+
+    expect(details).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByLabelText(/mounting height/i)).toBeVisible();
   });
 
   it('blocks submission until required camera identity and coordinates are supplied', async () => {
@@ -119,6 +134,7 @@ describe('CameraForm', () => {
     const submit = vi.fn();
     render(<CameraForm {...emptySelectors} onSubmit={submit} organizationUnits={[]} sites={[]} initialValues={validForm({ vmsId: 'not-a-uuid' })} />);
 
+    await user.click(screen.getByRole('button', { name: /additional details/i }));
     await user.click(screen.getByRole('button', { name: /register camera/i }));
 
     expect(await screen.findByText(/VMS ID must be a valid UUID/i)).toBeVisible();
@@ -135,6 +151,7 @@ describe('CameraForm', () => {
       credentialReference: 'vault://nvr', verifyTls: true, state: 'ACTIVE', expectedCameraCount: null,
     }]} initialValues={validForm({ manufacturer: '', ipAddress: '', port: '', protocol: '' })} />);
 
+    await user.click(screen.getByRole('button', { name: /additional details/i }));
     await user.selectOptions(screen.getByLabelText(/vms/i), vmsId);
 
     await user.click(screen.getByRole('button', { name: /register camera/i }));
