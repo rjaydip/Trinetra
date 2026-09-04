@@ -11,8 +11,15 @@ import type {
   CameraResponse,
   CameraWriteRequest,
   ChangePasswordRequest,
+  ConnectionTestAccepted,
+  ConnectionTestResult,
+  ConnectorTargetRequest,
   CoverageSummaryResponse,
+  CredentialExistsResponse,
+  CredentialRequest,
+  CredentialResponse,
   CreatedResponse,
+  FederatedCameraResponse,
   GeoJsonFeature,
   GeoJsonFeatureCollection,
   GeographicAreaResponse,
@@ -76,6 +83,17 @@ export const api = {
   },
   vms: {
     list: () => request<VmsResponse[]>('/api/v1/vms'),
+    create: (body: ConnectorTargetRequest) => request<CreatedResponse>('/api/v1/vms', json(body)),
+    get: (id: string) => request<VmsResponse>(`/api/v1/vms/${id}`),
+    discoveredCameras: (id: string) => request<FederatedCameraResponse[]>(`/api/v1/vms/${id}/cameras`),
+  },
+  credentials: {
+    status: (id: string) => request<CredentialExistsResponse>(`/api/v1/vms/${id}/credential/status`),
+    save: (id: string, body: CredentialRequest) => request<CredentialResponse>(`/api/v1/vms/${id}/credential`, { body: JSON.stringify(body), method: 'PUT' }),
+  },
+  connectionTests: {
+    create: (vmsId: string) => request<ConnectionTestAccepted>(`/api/v1/vms/${vmsId}/test`, { method: 'POST' }),
+    get: (vmsId: string, testId: string) => request<ConnectionTestResult>(`/api/v1/vms/${vmsId}/test/${testId}`),
   },
   overview: () => request<OverviewResponse>('/api/v1/overview'),
 };
