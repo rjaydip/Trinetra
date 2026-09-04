@@ -21,6 +21,7 @@ it('shows a retryable organization failure before the disabled units query loadi
   });
   render(<MemoryRouter initialEntries={['/cameras/new']}><AuthProvider><App /></AuthProvider></MemoryRouter>);
   expect(await screen.findByRole('heading', { name: /couldn't load onboarding options/i })).toBeVisible();
+  expect(screen.getByText('Reference data is temporarily unavailable.')).toBeVisible();
   expect(screen.queryByRole('heading', { name: /loading onboarding options/i })).not.toBeInTheDocument();
   organizationsUnavailable = false;
   await userEvent.click(screen.getByRole('button', { name: /try again/i }));
