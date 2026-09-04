@@ -5,7 +5,7 @@ import { isApiProblem } from '../../api/client';
 import { api } from '../../api/endpoints';
 import type { BulkImportRequest, BulkImportResult } from '../../api/models';
 import { Button } from '../../components/ui';
-import { parseBulkImport } from './import';
+import { createSampleImport, parseBulkImport } from './import';
 
 function requestError(error: unknown) {
   return isApiProblem(error) ? error.detail : 'Unable to import cameras. Please try again.';
@@ -65,7 +65,18 @@ export function BulkImportPage() {
     setResult(null);
   }
 
+  function downloadSample() {
+    const blob = new Blob([JSON.stringify(createSampleImport(), null, 2)], { type: 'application/json' });
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = objectUrl;
+    link.download = 'trinetra-camera-import-sample.json';
+    link.click();
+    URL.revokeObjectURL(objectUrl);
+  }
+
   return <section className="onboarding-page" aria-labelledby="bulk-import-title"><header><p className="eyebrow">Camera registry</p><h1 id="bulk-import-title">Bulk import cameras</h1><p>Upload a JSON <code>BulkImportRequest</code> with 1–500 items. The server validates each row and reports its outcome.</p></header>
+    <Button onClick={downloadSample} type="button">Download JSON template</Button>
     <label className="file-input">Import JSON file<input accept=".json,application/json" aria-describedby={error ? 'import-error' : undefined} onChange={selectFile} type="file" /></label>
     {error && <p className="form-error" id="import-error" role="alert">{error}</p>}
     {request && <section className="import-preview" aria-labelledby="import-preview-title"><h2 id="import-preview-title">Preview: {fileName}</h2>

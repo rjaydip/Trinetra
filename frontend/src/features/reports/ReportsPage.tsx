@@ -11,25 +11,33 @@ function reportError(error: unknown): string {
 }
 
 export function ReportsPage() {
-  const [boundingBox, setBoundingBox] = useState('');
-  const [submittedBoundingBox, setSubmittedBoundingBox] = useState<string | null>(null);
+  const [organizationId, setOrganizationId] = useState('');
+  const [organizationUnitId, setOrganizationUnitId] = useState('');
+  const [geographicAreaId, setGeographicAreaId] = useState('');
+  const [submittedScope, setSubmittedScope] = useState<{ organizationUnitId?: string; geographicAreaId?: string } | null>(null);
   const [scopeError, setScopeError] = useState<string | null>(null);
   const overview = useQuery({ queryKey: ['overview'], queryFn: api.overview });
+  const organizations = useQuery({ queryKey: ['reference', 'organizations'], queryFn: api.reference.organizations });
+  const organizationUnits = useQuery({
+    queryKey: ['reference', 'organization-units', organizationId],
+    queryFn: () => api.reference.organizationUnits(organizationId),
+    enabled: Boolean(organizationId),
+  });
+  const geographicAreas = useQuery({ queryKey: ['reference', 'geographic-areas'], queryFn: () => api.reference.geographicAreas() });
   const coverage = useQuery({
-    queryKey: ['coverage-summary', submittedBoundingBox],
-    queryFn: () => api.gis.coverage({ bbox: submittedBoundingBox! }),
-    enabled: submittedBoundingBox !== null,
+    queryKey: ['coverage-summary', submittedScope],
+    queryFn: () => api.gis.coverage(submittedScope!),
+    enabled: submittedScope !== null,
   });
 
   function submitCoverage(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const value = boundingBox.trim();
-    if (!value) {
-      setScopeError('Enter a bounding box before loading the coverage summary.');
+    if (!organizationUnitId && !geographicAreaId) {
+      setScopeError('Select an organization unit or geographic area before loading the coverage summary.');
       return;
     }
     setScopeError(null);
-    setSubmittedBoundingBox(value);
+    setSubmittedScope({ organizationUnitId: organizationUnitId || undefined, geographicAreaId: geographicAreaId || undefined });
   }
 
   if (overview.isPending) return <PageState title="Loading fleet report">Retrieving current fleet totals…</PageState>;
@@ -54,12 +62,13 @@ export function ReportsPage() {
       <section className="report-panel" aria-labelledby="coverage-summary-title">
         <div className="report-panel__header"><div><h2 id="coverage-summary-title">Coverage summary</h2><p>Estimated planning aid only; terrain and obstructions are not modelled.</p></div><StatusBadge tone="warning">Estimated</StatusBadge></div>
         <form className="coverage-scope-form" onSubmit={submitCoverage}>
-          <label htmlFor="coverage-bounding-box">Coverage bounding box <input aria-describedby={scopeError ? 'coverage-scope-help coverage-scope-error' : 'coverage-scope-help'} aria-invalid={Boolean(scopeError)} id="coverage-bounding-box" value={boundingBox} onChange={(event) => setBoundingBox(event.target.value)} placeholder="west,south,east,north" /></label>
-          <p id="coverage-scope-help">Use coordinates in west,south,east,north order for the area you are assessing.</p>
+          <label>Coverage organization<select value={organizationId} onChange={(event) => { setOrganizationId(event.target.value); setOrganizationUnitId(''); }}><option value="">All organizations</option>{(organizations.data ?? []).map((organization) => <option key={organization.id} value={organization.id}>{organization.name} ({organization.code})</option>)}</select></label>
+          <label>Coverage organization unit<select aria-describedby={scopeError ? 'coverage-scope-error' : undefined} aria-invalid={Boolean(scopeError)} disabled={!organizationId} value={organizationUnitId} onChange={(event) => setOrganizationUnitId(event.target.value)}><option value="">All organization units</option>{(organizationUnits.data ?? []).map((unit) => <option key={unit.id} value={unit.id}>{unit.name} ({unit.code})</option>)}</select></label>
+          <label>Coverage geographic area<select aria-describedby={scopeError ? 'coverage-scope-error' : undefined} aria-invalid={Boolean(scopeError)} value={geographicAreaId} onChange={(event) => setGeographicAreaId(event.target.value)}><option value="">All geographic areas</option>{(geographicAreas.data ?? []).map((area) => <option key={area.id} value={area.id}>{area.name} ({area.code})</option>)}</select></label>
           {scopeError && <p className="form-error" id="coverage-scope-error" role="alert">{scopeError}</p>}
           <button className="button" type="submit">Load coverage summary</button>
         </form>
-        {coverage.isPending && submittedBoundingBox && <p role="status">Loading coverage summary…</p>}
+        {coverage.isPending && submittedScope && <p role="status">Loading coverage summary…</p>}
         {coverage.isError && <p className="form-error" role="alert">{reportError(coverage.error)}</p>}
         {coverage.data && <CoverageSummary coverage={coverage.data} />}
       </section>
