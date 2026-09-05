@@ -127,6 +127,33 @@ public sealed class ConnectorTargetRepository
 
         var c = work.Connection;
 
+        // Referenced records must exist AND be ACTIVE. A foreign key alone catches "does not
+        // exist" (400 via ConstraintViolationExceptionHandler); it says nothing about status, so
+        // without this a target could attach to a deactivated unit or site and silently drop out
+        // of every scope query. Runs unconditionally — including for an unscoped caller, who
+        // otherwise got no validation here at all.
+        var refs = await c.QuerySingleAsync<ReferenceCheckRow>(new CommandDefinition(
+            """
+            SELECT
+                EXISTS (SELECT 1 FROM federation.organization_units
+                        WHERE id = @OrgUnit AND status = 'ACTIVE') AS org_active,
+                (@SiteId::uuid IS NULL OR EXISTS (
+                    SELECT 1 FROM federation.sites WHERE id = @SiteId AND status = 'ACTIVE')
+                ) AS site_active;
+            """, new { OrgUnit = target.OrganizationUnitId, target.SiteId },
+            work.Transaction, cancellationToken: ct));
+
+        if (!refs.OrgActive)
+        {
+            throw new InvalidReferenceException(
+                "organizationUnitId", "does not exist or is not ACTIVE");
+        }
+
+        if (!refs.SiteActive)
+        {
+            throw new InvalidReferenceException("siteId", "does not exist or is not ACTIVE");
+        }
+
         // A caller must be able to reach BOTH the organization unit and the site's geography
         // they are assigning the target to — otherwise they could park a target in another
         // department, or another district, and read its events. Each dimension is skipped only
@@ -188,13 +215,16 @@ public sealed class ConnectorTargetRepository
                     @StatusPollSeconds, @EventPollSeconds, @MaxConcurrentRequests,
                     @ExpectedCameraCount, @ActorId, @ActorId)
             ON CONFLICT (id) DO UPDATE
+            -- state is deliberately NOT in this list. A replace must never change it — see
+            -- VmsEndpoints.ReplaceAsync's doc — so state is written only by SetStateAsync from
+            -- here on; the INSERT branch above still writes it (defaults to Active on register).
             SET code = EXCLUDED.code,
                 organization_unit_id = EXCLUDED.organization_unit_id,
                 site_id = EXCLUDED.site_id, display_name = EXCLUDED.display_name,
                 vendor = EXCLUDED.vendor, runtime_class = EXCLUDED.runtime_class,
                 endpoint = EXCLUDED.endpoint,
                 credential_reference = EXCLUDED.credential_reference,
-                verify_tls = EXCLUDED.verify_tls, state = EXCLUDED.state,
+                verify_tls = EXCLUDED.verify_tls,
                 rate_limit_per_second = EXCLUDED.rate_limit_per_second,
                 rate_limit_burst = EXCLUDED.rate_limit_burst,
                 inventory_poll_seconds = EXCLUDED.inventory_poll_seconds,
@@ -253,24 +283,37 @@ public sealed class ConnectorTargetRepository
         return affected > 0;
     }
 
+    /// <summary>
+    /// Hard-deletes a target the caller can reach. Gated on <c>vms.delete</c>, distinct from
+    /// <c>vms.update</c> — a destructive, irreversible cascade should not share a permission
+    /// with routine edits (invariant: <c>camera.delete</c> is the same split for the camera
+    /// registry). The caller must already have set the target's state to non-Active first — see
+    /// <c>VmsEndpoints.RemoveAsync</c>, which enforces that before calling this.
+    /// </summary>
     public async Task<bool> DeleteAsync(
         Guid id, CallerContext caller, UnitOfWork work, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(caller);
         ArgumentNullException.ThrowIfNull(work);
-        caller.Require("vms.update");
+        caller.Require("vms.delete");
 
-        var args = ScopeArgs(caller, "vms.update");
+        var args = ScopeArgs(caller, "vms.delete");
         args.Add("id", id);
 
         var c = work.Connection;
         var affected = await c.ExecuteAsync(new CommandDefinition($"""
             DELETE FROM federation.connector_target
             WHERE id = @id
-              AND ({Scope("connector_target", "vms.update")});
+              AND ({Scope("connector_target", "vms.delete")});
             """, args, work.Transaction, cancellationToken: ct));
 
         return affected > 0;
+    }
+
+    private sealed class ReferenceCheckRow
+    {
+        public bool OrgActive { get; init; }
+        public bool SiteActive { get; init; }
     }
 
     private sealed class TargetRow

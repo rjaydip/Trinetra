@@ -69,7 +69,9 @@ public static class VmsEndpoints
               + "NVR and only need setting for a device that cannot keep up.\n\n"
               + "The target is created in its default state and is not polled until `POST "
               + "/vms/{id}/state` activates it. An unparseable endpoint or unknown vendor is "
-              + "rejected here rather than becoming an unexplained dead site later.");
+              + "rejected here rather than becoming an unexplained dead site later. So is a "
+              + "deactivated `organizationUnitId` or `siteId` — an active-looking target attached "
+              + "to a retired unit would otherwise never appear in anyone's scope.");
 
         group.MapPut("/{id:guid}", ReplaceAsync)
           .RequirePermission("vms.update")
@@ -80,6 +82,12 @@ public static class VmsEndpoints
               + "Does not change the target's state, and does not write a credential — those are "
               + "`POST /vms/{id}/state` and `PUT /vms/{id}/credential`. Changing `endpoint` or "
               + "`vendor` takes effect at the worker's next poll cycle.\n\n"
+              + "`organizationUnitId` and `siteId` must reference an **active** unit and site — a "
+              + "deactivated one is a 400, not a silent drop out of scope resolution.\n\n"
+              + "Omitting `verifyTls` sets it to `true`, the safe default — **not** the target's "
+              + "previous value, because this endpoint replaces rather than patches. Sending "
+              + "`verifyTls: false` explicitly disables certificate verification and is recorded "
+              + "as such in the audit log.\n\n"
               + "The before and after values are recorded in the audit log, with the credential "
               + "reference kept and its value never present to begin with.");
 
@@ -95,15 +103,23 @@ public static class VmsEndpoints
               + "response lists the states this build accepts.");
 
         group.MapDelete("/{id:guid}", RemoveAsync)
-          .RequirePermission("vms.update")
+          .RequirePermission("vms.delete")
           .WithSummary("Remove a VMS target")
           .WithDescription(
               "A hard delete that cascades: the discovered camera inventory, capability matrix, "
               + "health history, event cursor and connection-test records for this target all go "
               + "with it. Events already published to the bus and stored are keyed by source and "
-              + "remain.\n\n"
+              + "remain. `camera_status_history` rows for this target's cameras are **not** "
+              + "cascaded either — they carry no foreign key to the target by design (an "
+              + "append-only timeline, not owned state) and stay queryable by `targetId` after "
+              + "deletion, ageing out under the normal retention window.\n\n"
+              + "**The target must not be `Active`.** Set its state to something else with "
+              + "`POST /vms/{id}/state` first — a 409 otherwise. This stops a delete from racing "
+              + "a worker that currently holds the target's lease.\n\n"
               + "To stop polling a device without losing any of that, set its state instead. The "
-              + "deleted configuration is captured in the audit row.");
+              + "deleted configuration is captured in the audit row.\n\n"
+              + "Gated on `vms.delete`, not `vms.update`: permanently destroying a target and its "
+              + "whole inventory is a distinct, irreversible action from editing it.");
 
         // ---- Monitoring ----------------------------------------------------
 
@@ -376,7 +392,7 @@ public static class VmsEndpoints
         return TypedResults.NoContent();
     }
 
-    private static async Task<Results<NoContent, NotFound>> RemoveAsync(
+    private static async Task<Results<NoContent, NotFound, ProblemHttpResult>> RemoveAsync(
         Guid id, ConnectorTargetRepository repo, NpgsqlDataSource db,
         HttpContext http, CancellationToken ct)
     {
@@ -386,6 +402,17 @@ public static class VmsEndpoints
         if (before is null)
         {
             return TypedResults.NotFound();
+        }
+
+        // Deleting a target a worker currently holds the lease on races its in-flight writes.
+        // Quarantine already means "not polled", so only Active blocks the delete.
+        if (before.State == TargetState.Active)
+        {
+            return TypedResults.Problem(
+                title: "Target is active",
+                detail: "Set the target's state to something other than Active with "
+                      + "POST /vms/{id}/state before deleting it.",
+                statusCode: StatusCodes.Status409Conflict);
         }
 
         await using var work = await UnitOfWork.BeginAsync(db, ct);

@@ -14,6 +14,7 @@ internal static class ApiHttpExtensions
         services.AddProblemDetails();
         services.AddExceptionHandler<BadRequestExceptionHandler>();
         services.AddExceptionHandler<ConstraintViolationExceptionHandler>();
+        services.AddExceptionHandler<InvalidReferenceExceptionHandler>();
         services.AddExceptionHandler<UnhandledExceptionHandler>();
 
         services.AddRateLimiter(options =>

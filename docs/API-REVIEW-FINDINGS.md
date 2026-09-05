@@ -133,7 +133,7 @@ rule does not bite — still prefer new `v1.7+` files over editing `v1.sql`. Bra
 |----|----------|--------|
 | PR1  | **P0**: 8-C1 + 15-H1 — ✅ done, commit `d86c6ee` | — |
 | PR2  | **Geography-scope wave**: 9-H1, 13-H1, 15-M1, 14-M1 — ✅ implemented + BA/dotnet-expert reviewed, 13 integration tests added (not committed); 16-L2 verified n/a | — |
-| PR3  | **VMS lifecycle**: 9-NEW-H, 9-H2, 9-H3, 9-M1, 9-M2 | `vms.delete` |
+| PR3  | **VMS lifecycle**: 9-NEW-H, 9-H2, 9-H3, 9-M1, 9-M2 — ✅ done, BA/dotnet-expert plan reviewed, 12 new tests | `vms.delete` (v1.7.sql) |
 | PR4  | **Token revocation**: 4-C1 + `POST /auth/logout` + `ChangePasswordAsync` status re-check | `token_version` |
 | PR5  | **Unscoped reads**: 6-H1, 8-H1, 8-H2 | — |
 | PR6  | **Hierarchy correctness**: 5-H1, 5-H2, 5-M1 | — |
@@ -544,6 +544,32 @@ dimension is broken across read AND write.
   orgUnit/site exist / are ACTIVE / site's `geographic_area_id` consistent with the org unit. FK
   → 400, but a target can attach to a DEACTIVATED unit/site (FK ignores status) → drops out of
   scope resolution silently.
+**PR3 RESOLUTION (2026-09-04):** 9-NEW-H, 9-H2, 9-H3, 9-M1, 9-M2 all fixed.
+- 9-NEW-H: `state = EXCLUDED.state` removed from `UpsertAsync`'s `ON CONFLICT DO UPDATE` — state
+  is now write-once-at-insert, changed only by `SetStateAsync` thereafter.
+- 9-H2: `RemoveAsync` refuses with 409 when `before.State == Active` (only Active blocks — a
+  quarantined target is already not polled, so no in-flight-write race). `camera_status_history`
+  needed no fix — its own DDL comment says "No FK on purpose" and it already ages out under the
+  existing 90-day retention job; documented in the route description instead.
+- 9-H3: new `db/versions/v1.7.sql` — `vms.delete` permission, granted to `STATE_ADMIN`,
+  `DEPARTMENT_ADMIN`, `VMS_ADMIN` (+ SUPER_ADMIN backfill). `RemoveAsync`/`DeleteAsync` switched
+  from `vms.update`; `SetStateAsync` deliberately left on `vms.update` (quarantine is edit-class).
+- 9-M1: kept `VerifyTls` as non-nullable `bool` (NOT `bool?` — would violate the endpoint's own
+  documented full-replace-not-patch contract). Proved via a real STJ round-trip test (using the
+  app's actual `[FromBody]` options — `JsonSerializerOptions.Default` alone is a DIFFERENT,
+  case-sensitive code path and would have proven nothing) that omission → `true` (safe default),
+  explicit `false` → honoured, explicit `null` → 400 via the existing `BadRequestExceptionHandler`.
+- 9-M2: new `InvalidReferenceException` → `InvalidReferenceExceptionHandler` (400), unconditional
+  (not just for scoped callers — closed a gap where unscoped admins got zero validation) check in
+  `UpsertAsync` that `organizationUnitId`/`siteId` exist and are `ACTIVE`. Narrowed to VMS only —
+  the org/site hierarchy-consistency check and `CameraRepository`'s identical gap are explicitly
+  deferred to a follow-up PR.
+- New tests: `tests/Trinetra.IntegrationTests/VmsLifecycleTests.cs` (9 tests, real Postgres) +
+  `tests/Trinetra.UnitTests/ConnectorTargetRequestSerializationTests.cs` (3 tests). Caught a real
+  regression before it shipped: `GeographyScopeTests`'s bespoke test role didn't hold the new
+  `vms.delete` permission, so its existing `Vms_DeleteAsync_OutOfDistrictTarget_AffectsNoRows`
+  test started throwing `ForbiddenException` instead of returning false — fixed by extending that
+  role's permission list.
 - **9-M3** CONFIRMED. `CamerasAsync` → `SELECT ... FROM federated_camera WHERE target_id=@t
   ORDER BY native_camera_id` no LIMIT; one aggregating VMS = thousands of cameras, unbounded
   response, double array-materialised. (Target `ListAsync` also unpaginated but bounded by design

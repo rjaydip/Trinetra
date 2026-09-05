@@ -129,3 +129,26 @@ public sealed class ForbiddenException : Exception
 
     public string? Permission { get; }
 }
+
+/// <summary>
+/// A write referenced another record — an organization unit, a site — that either does not
+/// exist or is not <c>ACTIVE</c>.
+/// </summary>
+/// <remarks>
+/// A foreign key alone catches "does not exist" (mapped to 400 by
+/// <c>ConstraintViolationExceptionHandler</c>); it says nothing about status, so a write could
+/// silently attach a row to a deactivated unit or site and drop it out of every scope query with
+/// no error at all. This is the half a foreign key cannot cover.
+/// </remarks>
+public sealed class InvalidReferenceException : Exception
+{
+    public InvalidReferenceException(string field, string reason)
+        : base($"'{field}' {reason}.") => Field = field;
+
+    public InvalidReferenceException() { }
+
+    public InvalidReferenceException(string message, Exception innerException)
+        : base(message, innerException) { }
+
+    public string? Field { get; }
+}
