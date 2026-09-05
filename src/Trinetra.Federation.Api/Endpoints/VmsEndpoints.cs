@@ -295,6 +295,9 @@ public static class VmsEndpoints
         t.Code, t.OrganizationUnitId, t.SiteId, t.DisplayName,
         Vendor = t.Vendor.ToString(), t.Endpoint, t.CredentialReference,
         t.VerifyTls, t.ExpectedCameraCount,
+        // Included so the delete audit row (RemoveAsync) records the state the target was in
+        // when removed — the 409 guard right before it exists entirely because of that value.
+        State = t.State.ToString(),
     };
 
     private static async Task<Ok<IReadOnlyList<VmsResponse>>> ListAsync(

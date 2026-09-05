@@ -570,6 +570,16 @@ dimension is broken across read AND write.
   `vms.delete` permission, so its existing `Vms_DeleteAsync_OutOfDistrictTarget_AffectsNoRows`
   test started throwing `ForbiddenException` instead of returning false — fixed by extending that
   role's permission list.
+- **Post-implementation review (BA + dotnet-expert) fix:** `VmsEndpoints.Redact(ConnectorTarget)`
+  omitted `State` — the delete audit row for 9-H2 couldn't show what state the target was removed
+  in, the one fact that guard exists to protect. Added.
+- **Accepted test-coverage gap (BA-flagged, not fixed):** the 9-H2 409-on-Active guard lives in
+  `VmsEndpoints.RemoveAsync` and is not exercised by any test — the repo has no
+  `WebApplicationFactory`/HTTP-level test harness anywhere yet, so nothing in this PR introduces
+  one for a single assertion. `VmsLifecycleTests.Delete_ActiveTarget_HasNothingRepositoryLevelToStopIt_GuardLivesInTheEndpoint`
+  is honestly named — it proves the precondition (`GetAsync` reports true state) the guard reads,
+  not the guard's 409 itself. Revisit if/when an HTTP-level test harness is added for another
+  reason.
 - **9-M3** CONFIRMED. `CamerasAsync` → `SELECT ... FROM federated_camera WHERE target_id=@t
   ORDER BY native_camera_id` no LIMIT; one aggregating VMS = thousands of cameras, unbounded
   response, double array-materialised. (Target `ListAsync` also unpaginated but bounded by design
