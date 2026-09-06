@@ -120,6 +120,10 @@ public static class UserEndpoints
           .WithDescription(
               "Changes display name, email or status. Membership is not touched here — use "
               + "`/users/{id}/groups`.\n\n"
+              + "Deactivating an account (setting `status` to anything other than `ACTIVE`) "
+              + "takes effect **immediately**: its access tokens fail on their next request and "
+              + "all its refresh tokens are revoked, in the same transaction as the status "
+              + "change. Re-activating later does not revive those tokens.\n\n"
               + "Deactivating the **last active account that can administer users** is refused "
               + "with 409: nothing in the running system could undo it, and recovery would mean "
               + "direct database access. Editing an account with more authority than the caller "
@@ -134,7 +138,8 @@ public static class UserEndpoints
               + "the current one.\n\n"
               + "The new password always lands flagged must-change: an administrator performing a "
               + "reset necessarily knows the value, so it must not remain the user's working "
-              + "credential.\n\n"
+              + "credential. The reset also **ends every session the account has** — access "
+              + "tokens fail on next use, refresh tokens are revoked.\n\n"
               + "Resetting an account with more authority than the caller is refused — otherwise "
               + "`user.manage` alone would be enough to reset the bootstrap administrator and "
               + "take the platform. The audit row records that a reset happened, never the "
@@ -156,16 +161,20 @@ public static class UserEndpoints
               + "every department, so granting one is granting the estate;\n"
               + "3. the group's scopes are within the units the caller administers.\n\n"
               + "A caller who is unscoped for `user.manage` bypasses all three, which is what "
-              + "being unscoped means.");
+              + "being unscoped means.\n\n"
+              + "Granting a membership does **not** force the user to log in again — a newly "
+              + "granted permission appears in their access token the next time their client "
+              + "refreshes it (within ~15 minutes). Only *removal* is applied immediately.");
 
         group.MapDelete("/{id:guid}/groups/{groupId:guid}", RemoveFromGroupAsync)
           .RequirePermission("user.manage")
           .WithSummary("Remove a user from an access group")
           .WithDescription(
-              "Revokes a membership and every permission it carried. **Not instantaneous:** "
-              + "permission codes are carried as claims in an already-issued token, so a session "
-              + "holding one keeps those codes until it expires (8 hours by default). Scope is "
-              + "resolved against the database on every query and narrows immediately.\n\n"
+              "Revokes a membership and every permission it carried. **Takes effect "
+              + "immediately:** the removal bumps the user's token version and revokes all their "
+              + "refresh tokens in the same transaction, so an access token still carrying the "
+              + "removed permission fails on its next request and the user must sign in again. "
+              + "Scope is also resolved against the database on every query.\n\n"
               + "Revoking the last remaining grant of user administration is refused with 409, "
               + "the same lockout guard as deactivation and easier to trip by accident.");
     }
@@ -246,7 +255,7 @@ public static class UserEndpoints
 
     private static async Task<Results<NoContent, NotFound, ProblemHttpResult>> UpdateAsync(
         Guid id, [FromBody] UpdateUserRequest request, UserRepository users,
-        AccessGroupRepository groups, NpgsqlDataSource db,
+        AccessGroupRepository groups, RefreshTokenRepository refreshTokens, NpgsqlDataSource db,
         HttpContext http, CancellationToken ct)
     {
         var caller = CallerContextFactory.From(http);
@@ -281,6 +290,13 @@ public static class UserEndpoints
 
         await users.UpdateAsync(id, request.DisplayName, request.Email, status, work, ct);
 
+        // Deactivation is immediate: kill every session the account has, in this same
+        // transaction, so an access token issued minutes ago cannot outlive it.
+        if (status != "ACTIVE" && before.Status == "ACTIVE")
+        {
+            await SessionRevocation.EndAllAsync(users, refreshTokens, id, work, ct);
+        }
+
         await work.AuditAsync(caller, "update", "user", id.ToString(), before,
             new { request.DisplayName, request.Email, status }, organizationUnitId: null, ct);
         await work.CommitAsync(ct);
@@ -290,7 +306,8 @@ public static class UserEndpoints
 
     private static async Task<Results<NoContent, NotFound, ProblemHttpResult>> ResetPasswordAsync(
         Guid id, [FromBody] ResetPasswordRequest request, UserRepository users,
-        NpgsqlDataSource db, HttpContext http, CancellationToken ct)
+        RefreshTokenRepository refreshTokens, NpgsqlDataSource db, HttpContext http,
+        CancellationToken ct)
     {
         var caller = CallerContextFactory.From(http);
         caller.Require("user.manage");
@@ -321,9 +338,15 @@ public static class UserEndpoints
         await users.SetPasswordAsync(
             id, PasswordHasher.Hash(request.NewPassword), mustChange: true, work, ct);
 
+        // The reset also ends every session the account currently has — the leaked or forgotten
+        // credential that prompted the reset must not keep working through an old token.
+        await SessionRevocation.EndAllAsync(users, refreshTokens, id, work, ct);
+
         // Records that a reset happened, never the value.
         await work.AuditAsync(caller, "update", "user_password", id.ToString(),
-            before: null, after: new { reset = true, mustChangePassword = true }, organizationUnitId: null, ct);
+            before: null,
+            after: new { reset = true, mustChangePassword = true, sessionsEnded = true },
+            organizationUnitId: null, ct);
         await work.CommitAsync(ct);
 
         return TypedResults.NoContent();
@@ -382,7 +405,8 @@ public static class UserEndpoints
 
     private static async Task<Results<NoContent, NotFound, ProblemHttpResult>> RemoveFromGroupAsync(
         Guid id, Guid groupId, UserRepository users, AccessGroupRepository groups,
-        NpgsqlDataSource db, HttpContext http, CancellationToken ct)
+        RefreshTokenRepository refreshTokens, NpgsqlDataSource db, HttpContext http,
+        CancellationToken ct)
     {
         var caller = CallerContextFactory.From(http);
         caller.Require("user.manage");
@@ -413,8 +437,14 @@ public static class UserEndpoints
             return TypedResults.NotFound();
         }
 
+        // Immediate: a removed permission must not linger in an access token for up to its
+        // ~15-minute life. Bump + revoke-all forces the user to re-authenticate; their next
+        // token is issued without the removed group. (Only removal — see AddToGroupAsync.)
+        await SessionRevocation.EndAllAsync(users, refreshTokens, id, work, ct);
+
         await work.AuditAsync(caller, "delete", "user_group", id.ToString(),
-            before: new { groupId }, after: null, organizationUnitId: null, ct);
+            before: new { groupId }, after: new { sessionsEnded = true },
+            organizationUnitId: null, ct);
         await work.CommitAsync(ct);
 
         return TypedResults.NoContent();

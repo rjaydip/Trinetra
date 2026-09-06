@@ -18,6 +18,7 @@ CREATE TABLE federation.platform_users (
     is_system boolean DEFAULT false NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    token_version integer DEFAULT 0 NOT NULL,
     CONSTRAINT platform_users_status_check CHECK (((status)::text = ANY ((ARRAY['ACTIVE'::character varying, 'INACTIVE'::character varying, 'LOCKED'::character varying])::text[])))
 );
 

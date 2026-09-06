@@ -30,10 +30,25 @@ public sealed class JwtOptions
     public string SigningKey { get; set; } = "";
 
     /// <summary>
-    /// Token lifetime. Short because permissions are resolved at issue time: a revoked group
-    /// keeps working until the token expires, so the window should be minutes-to-hours, not days.
+    /// Access-token lifetime. Deliberately short: permissions are baked in at issue, and the
+    /// per-request revocation signal (<c>token_version</c>) only closes the gap to one request —
+    /// 15 minutes bounds how long a since-removed group or a stale permission set keeps working
+    /// before a client must refresh.
     /// </summary>
-    public TimeSpan Lifetime { get; set; } = TimeSpan.FromHours(8);
+    public TimeSpan AccessLifetime { get; set; } = TimeSpan.FromMinutes(15);
+
+    /// <summary>
+    /// Refresh-token lifetime, applied fresh on every rotation. The window slides forward on use
+    /// and lapses on this much inactivity, at which point the user re-authenticates.
+    /// </summary>
+    public TimeSpan RefreshLifetime { get; set; } = TimeSpan.FromHours(8);
+
+    /// <summary>
+    /// Grace window after a refresh token is rotated during which re-presenting it is treated as
+    /// a benign client race (two browser tabs) rather than theft. See
+    /// <c>AuthEndpoints.RefreshAsync</c>.
+    /// </summary>
+    public TimeSpan RefreshReuseGrace { get; set; } = TimeSpan.FromSeconds(10);
 }
 
 public sealed class SeedAdminOptions

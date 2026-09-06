@@ -12,7 +12,8 @@ namespace Trinetra.Federation.Storage.Repositories;
 /// </remarks>
 public sealed record UserCredentials(
     Guid Id, string Username, string DisplayName, PasswordHash Password,
-    bool MustChangePassword, string Status, int FailedLoginCount, DateTimeOffset? LockedUntil);
+    bool MustChangePassword, string Status, int FailedLoginCount, DateTimeOffset? LockedUntil,
+    int TokenVersion);
 
 /// <summary>Users, their credentials, and their effective permissions.</summary>
 // CA1822 fires on the write methods now that they take their connection from the UnitOfWork
@@ -49,7 +50,7 @@ public sealed class UserRepository
         var row = await c.QuerySingleOrDefaultAsync<LoginRow>(new CommandDefinition("""
             SELECT id, username, display_name, password_hash, password_salt,
                    password_iterations, password_algorithm, must_change_password,
-                   status, failed_login_count, locked_until
+                   status, failed_login_count, locked_until, token_version
             FROM federation.platform_users WHERE id = @id;
             """, new { id }, cancellationToken: ct));
 
@@ -57,7 +58,43 @@ public sealed class UserRepository
             row.Id, row.Username, row.DisplayName,
             new PasswordHash(row.PasswordHash, row.PasswordSalt, row.PasswordIterations,
                 row.PasswordAlgorithm),
-            row.MustChangePassword, row.Status, row.FailedLoginCount, row.LockedUntil);
+            row.MustChangePassword, row.Status, row.FailedLoginCount, row.LockedUntil,
+            row.TokenVersion);
+    }
+
+    /// <summary>
+    /// The current <c>token_version</c> for an ACTIVE user, or <see langword="null"/> when the
+    /// user is unknown or not ACTIVE (INACTIVE / any non-active status). Called once per
+    /// authenticated request by the JWT <c>OnTokenValidated</c> handler; a null or mismatched
+    /// result fails validation into the same generic 401 as an expired token. (Lockout is not
+    /// checked here — it blocks a new login, not an existing session.)
+    /// </summary>
+    public async Task<int?> GetTokenVersionAsync(Guid userId, CancellationToken ct)
+    {
+        await using var c = await _dataSource.OpenConnectionAsync(ct);
+        return await c.ExecuteScalarAsync<int?>(new CommandDefinition("""
+            SELECT token_version FROM federation.platform_users
+            WHERE id = @userId AND status = 'ACTIVE';
+            """, new { userId }, cancellationToken: ct));
+    }
+
+    /// <summary>
+    /// Increments <c>token_version</c> — invalidating every access token already issued to this
+    /// user — and returns the new value. Pairs with
+    /// <c>RefreshTokenRepository.RevokeAllForUserAsync</c> in the same <see cref="UnitOfWork"/>;
+    /// together they are one "end every session" operation (see <c>SessionRevocation</c>). The
+    /// return value is <c>RETURNING</c>ed rather than re-read on a fresh connection so a caller
+    /// that then issues a token in the same transaction stamps it with the post-bump version.
+    /// </summary>
+    public async Task<int> BumpTokenVersionAsync(Guid userId, UnitOfWork work, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(work);
+        return await work.Connection.ExecuteScalarAsync<int>(new CommandDefinition("""
+            UPDATE federation.platform_users
+            SET token_version = token_version + 1, updated_at = now()
+            WHERE id = @userId
+            RETURNING token_version;
+            """, new { userId }, work.Transaction, cancellationToken: ct));
     }
 
     public async Task<UserCredentials?> FindForLoginAsync(
@@ -68,7 +105,7 @@ public sealed class UserRepository
         var row = await c.QuerySingleOrDefaultAsync<LoginRow>(new CommandDefinition("""
             SELECT id, username, display_name, password_hash, password_salt,
                    password_iterations, password_algorithm, must_change_password,
-                   status, failed_login_count, locked_until
+                   status, failed_login_count, locked_until, token_version
             FROM federation.platform_users
             WHERE lower(username) = lower(@username);
             """, new { username }, cancellationToken: ct));
@@ -77,7 +114,8 @@ public sealed class UserRepository
             row.Id, row.Username, row.DisplayName,
             new PasswordHash(row.PasswordHash, row.PasswordSalt, row.PasswordIterations,
                 row.PasswordAlgorithm),
-            row.MustChangePassword, row.Status, row.FailedLoginCount, row.LockedUntil);
+            row.MustChangePassword, row.Status, row.FailedLoginCount, row.LockedUntil,
+            row.TokenVersion);
     }
 
     /// <summary>
@@ -388,5 +426,6 @@ public sealed class UserRepository
         public string Status { get; init; } = "";
         public int FailedLoginCount { get; init; }
         public DateTimeOffset? LockedUntil { get; init; }
+        public int TokenVersion { get; init; }
     }
 }

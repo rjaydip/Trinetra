@@ -26,6 +26,7 @@
     <ProjectReference Include="..\..\src\Trinetra.Federation.Runtime\Trinetra.Federation.Runtime.csproj" />
     <ProjectReference Include="..\..\src\Trinetra.Federation.Adapters\Trinetra.Federation.Adapters.csproj" />
     <ProjectReference Include="..\..\src\Trinetra.Federation.Storage\Trinetra.Federation.Storage.csproj" />
+    <ProjectReference Include="..\..\src\Trinetra.Federation.Api\Trinetra.Federation.Api.csproj" />
   </ItemGroup>
 
 </Project>

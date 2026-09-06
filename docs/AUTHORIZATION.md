@@ -11,9 +11,20 @@ Three kinds of caller reach the data layer, and all three resolve their access t
 
 | Principal | Identity | Acts through |
 |---|---|---|
-| User | JWT from `/api/v1/auth/login` | Their access groups |
+| User | short-lived access JWT from `/api/v1/auth/login` or `/api/v1/auth/refresh` | Their access groups |
 | API key | `X-Api-Key`, matched by SHA-256 | The single access group the key names |
 | System | None — the CLI and the connector workers | Full rights, audited by component |
+
+**User sessions are revocable.** The access token is a ~15-minute stateless JWT carrying a
+`trinetra:tokenver` claim; every authenticated request re-reads `platform_users.token_version`
+and rejects a token whose claim no longer matches (or whose user is no longer `ACTIVE`) with a
+generic 401. That column is bumped — and all the user's refresh tokens revoked, in the same
+transaction — on logout, self password change, admin password reset, deactivation, and removal
+from a group. A *grant* (adding a group) is not immediate: it appears on the user's next refresh.
+The paired opaque refresh token (8h sliding, hash-only in `refresh_token`, rotated on every use)
+is what a client exchanges at `/auth/refresh` for a new pair; re-presenting a rotated one outside
+a short grace window is treated as theft and revokes every session. API keys are unaffected —
+they re-resolve their grants per request already.
 
 An API key acts **through an access group, exactly as a user does**. This is not a convenience:
 two parallel authorization models would inevitably drift, and the weaker one would quietly become
@@ -218,6 +229,10 @@ The first is a choice; the two after it are gaps.
   the trade being made. The consequence is that a new query which omits its scope predicate
   returns everything rather than nothing, so the compile-time `CallerContext` requirement is
   load-bearing rather than a convenience — see §3.
+- **Token revocation now exists (PR4).** Access tokens were once stateless 8h bearers with no
+  revocation path at all — deactivation, group removal and password reset took up to 8h to bite.
+  `token_version` + a per-request check closed that; see §1. Still deferred: MFA, an asymmetric
+  signing-key ring, and a per-device session list (logout is all-or-nothing).
 - **Event, detection and VMS-target geographic scoping was incomplete; now fixed.** Until the
   "geography-scope wave" fix, `federation_event`, `detection_event` and `connector_target` were
   scoped on organization only — worse, one read path (`ConnectorTargetRepository.GetAsync`) let

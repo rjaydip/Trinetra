@@ -34,6 +34,13 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The integration tests call a few endpoint handlers directly (auth: refresh / logout /
+         password), which need a live pipeline to reach over HTTP but are plain static methods
+         otherwise. Nothing else is exposed. -->
+    <InternalsVisibleTo Include="Trinetra.IntegrationTests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- sd_notify support. Without it a Type=notify unit waits for a readiness signal that never
          arrives and systemd kills the service at TimeoutStartSec. -->
     <PackageReference Include="Microsoft.Extensions.Hosting.Systemd" />

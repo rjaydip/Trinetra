@@ -8,7 +8,26 @@ namespace Trinetra.Federation.Api.Contracts;
 
 public sealed record LoginRequest(string Username, string Password);
 
-public sealed record LoginResponse(string Token, DateTimeOffset ExpiresAt, bool MustChangePassword);
+/// <summary>
+/// The token pair returned by <c>/auth/login</c>, <c>/auth/refresh</c> and <c>/auth/password</c>.
+/// </summary>
+/// <remarks>
+/// The access token is a short-lived (~15 min) JWT sent as <c>Authorization: Bearer</c>. The
+/// refresh token is an opaque 8h sliding secret — store it, and present it to
+/// <c>POST /auth/refresh</c> before the access token expires to obtain a new pair without
+/// re-entering credentials. Each refresh <b>rotates</b> the refresh token. A response with
+/// <c>mustChangePassword: true</c> is still valid — route the user to <c>POST /auth/password</c>
+/// first.
+/// </remarks>
+public sealed record AuthTokenResponse(
+    string AccessToken,
+    int AccessExpiresIn,
+    string RefreshToken,
+    int RefreshExpiresIn,
+    bool MustChangePassword);
+
+/// <summary>The refresh-token exchange body: the opaque value from a prior <see cref="AuthTokenResponse"/>.</summary>
+public sealed record RefreshRequest(string RefreshToken);
 
 public sealed record ChangePasswordRequest(string CurrentPassword, string NewPassword);
 

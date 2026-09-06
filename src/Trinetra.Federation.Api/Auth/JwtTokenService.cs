@@ -1,4 +1,5 @@
 using Microsoft.IdentityModel.JsonWebTokens;
+using System.Globalization;
 using System.Security.Claims;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
@@ -32,6 +33,14 @@ public static class TrinetraClaims
 
     /// <summary>Set while the user must rotate a bootstrap or reset password.</summary>
     public const string MustChangePassword = "trinetra:pwchange";
+
+    /// <summary>
+    /// The <c>platform_users.token_version</c> the access token was minted against. Checked per
+    /// request in <c>ConfigureJwtBearer</c>'s <c>OnTokenValidated</c>; a bump on the user row
+    /// (logout, password change/reset, deactivation, group removal) makes every older token stale
+    /// immediately rather than at expiry.
+    /// </summary>
+    public const string TokenVersion = "trinetra:tokenver";
 }
 
 /// <summary>Issues signed access tokens.</summary>
@@ -42,8 +51,11 @@ public static class TrinetraClaims
 /// whereas a token carrying a resolved list would be stale the instant anyone edited the tree.
 /// </para>
 /// <para>
-/// The trade-off is that permission changes take effect at the next token issue rather than
-/// immediately, which is why <see cref="JwtOptions.Lifetime"/> is hours rather than days.
+/// The trade-off is that a permission GRANT takes effect at the next token issue rather than
+/// immediately; a REVOCATION is immediate, because every token carries a
+/// <see cref="TrinetraClaims.TokenVersion"/> that <c>OnTokenValidated</c> checks against the
+/// live user row. This is why <see cref="JwtOptions.AccessLifetime"/> is minutes — it only has
+/// to bound how long a stale grant lingers.
 /// </para>
 /// </remarks>
 public sealed class JwtTokenService
@@ -80,16 +92,25 @@ public sealed class JwtTokenService
             new SymmetricSecurityKey(keyBytes), SecurityAlgorithms.HmacSha256);
     }
 
+    /// <summary>Access-token lifetime, exposed so the auth endpoints can compute <c>expires_in</c>.</summary>
+    public TimeSpan AccessLifetime => _options.AccessLifetime;
+
+    /// <summary>Refresh-token lifetime, applied fresh on issue and on every rotation.</summary>
+    public TimeSpan RefreshLifetime => _options.RefreshLifetime;
+
+    /// <summary>How long after a rotation a re-presented refresh token is a race, not theft.</summary>
+    public TimeSpan RefreshReuseGrace => _options.RefreshReuseGrace;
+
     public (string Token, DateTimeOffset ExpiresAt) Issue(
         Guid userId, string username, IReadOnlySet<string> permissions,
         IReadOnlySet<string> unscopedPermissions, IReadOnlySet<string> unscopedGeography,
-        bool mustChangePassword)
+        int tokenVersion, bool mustChangePassword)
     {
         ArgumentNullException.ThrowIfNull(permissions);
         ArgumentNullException.ThrowIfNull(unscopedPermissions);
         ArgumentNullException.ThrowIfNull(unscopedGeography);
 
-        var expires = DateTimeOffset.UtcNow.Add(_options.Lifetime);
+        var expires = DateTimeOffset.UtcNow.Add(_options.AccessLifetime);
 
         var claims = new List<Claim>
         {
@@ -102,6 +123,9 @@ public sealed class JwtTokenService
 
         claims.AddRange(unscopedPermissions.Select(p => new Claim(TrinetraClaims.UnscopedPermission, p)));
         claims.AddRange(unscopedGeography.Select(p => new Claim(TrinetraClaims.UnscopedGeography, p)));
+
+        claims.Add(new Claim(
+            TrinetraClaims.TokenVersion, tokenVersion.ToString(CultureInfo.InvariantCulture)));
 
         if (mustChangePassword)
         {

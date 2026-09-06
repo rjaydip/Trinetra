@@ -134,7 +134,7 @@ rule does not bite — still prefer new `v1.7+` files over editing `v1.sql`. Bra
 | PR1  | **P0**: 8-C1 + 15-H1 — ✅ done, commit `d86c6ee` | — |
 | PR2  | **Geography-scope wave**: 9-H1, 13-H1, 15-M1, 14-M1 — ✅ implemented + BA/dotnet-expert reviewed, 13 integration tests added (not committed); 16-L2 verified n/a | — |
 | PR3  | **VMS lifecycle**: 9-NEW-H, 9-H2, 9-H3, 9-M1, 9-M2 — ✅ done, BA/dotnet-expert plan reviewed, 12 new tests | `vms.delete` (v1.7.sql) |
-| PR4  | **Token revocation**: 4-C1 + `POST /auth/logout` + `ChangePasswordAsync` status re-check | `token_version` |
+| PR4  | **Token revocation + refresh tokens** (scope expanded): 4-C1 + 4-M2 + `POST /auth/logout` + `POST /auth/refresh` + short access token + `ChangePasswordAsync` status re-check — ✅ done, BA + dotnet-expert + postgres-expert reviewed, fix pass applied, 15 new tests | `token_version` + `refresh_token` table (v1.8.sql) |
 | PR5  | **Unscoped reads**: 6-H1, 8-H1, 8-H2 | — |
 | PR6  | **Hierarchy correctness**: 5-H1, 5-H2, 5-M1 | — |
 | PR7  | **Auth hardening**: 4-H1..H5 (may split) | `password_history`, MFA |
@@ -184,15 +184,53 @@ access groups / scope. Want the user + token model shaped so this drops in later
 
 Deferred; triage before implementing. Severity-ordered.
 
+**PR4 RESOLUTION (2026-09-06):** 4-C1 fixed, and 4-M2 (refresh tokens) folded in when Jaydip
+expanded the scope.
+- `platform_users.token_version` (INTEGER, monotonic) — new `trinetra:tokenver` claim, checked
+  every request in `ConfigureJwtBearer`'s `OnTokenValidated` against the live user row (which
+  also fails a non-ACTIVE user). Bumped + all refresh tokens revoked, in one transaction, on:
+  self password change, admin reset, deactivation (ACTIVE→non-ACTIVE only), group REMOVAL (not
+  add — a grant propagates on next refresh), `POST /auth/logout`, and refresh-token replay.
+- Access token shortened to ~15 min (`JwtOptions.AccessLifetime`). New `refresh_token` table
+  (hash only, 8h sliding, `used_at`/`replaced_by`/`revoked_at`). New `POST /auth/refresh`
+  rotates the pair, re-resolves permissions fresh from the DB, treats replay of a rotated token
+  outside a 10s grace window as theft (revoke everything). New `POST /auth/logout`.
+- `ChangePasswordAsync` now re-checks Status/lockout before verifying the current password —
+  closes the self-reversible-deactivation hole in the same request.
+- Login/refresh response shape changed to `{ accessToken, accessExpiresIn, refreshToken,
+  refreshExpiresIn, mustChangePassword }`. `db/versions/v1.8.sql`. API keys untouched.
+- **Accepted test gap** (same posture as PR3's 9-H2): the end-to-end 401 from `OnTokenValidated`
+  needs a `WebApplicationFactory` the suite doesn't have. Everything it depends on
+  (`GetTokenVersionAsync`, every bump trigger, all `/auth/refresh` + `/auth/logout` +
+  `/auth/password` branches) is covered by 14 real-Postgres tests in `TokenRevocationTests.cs`.
+- **Deferred to follow-ups**: per-device session list (4-M4), refresh-token cleanup sweep,
+  absolute session-age cap, MFA (4-H2), JWT key ring / RS256 (4-H1).
+
+**PR4 fix pass (2026-09-06, BA + dotnet-expert + postgres-expert review):**
+- **dotnet-expert bug #1 (blocking):** `ChangePasswordAsync` bumped `token_version` on the
+  uncommitted `UnitOfWork`, then `IssuePairAsync` re-read it on a pooled connection and minted a
+  token against the *stale* value — 401 on first use. Fixed: `BumpTokenVersionAsync` now
+  `RETURNING token_version`; `SessionRevocation.EndAllAsync` returns the new value;
+  `IssuePairAsync` takes `int? knownTokenVersion`. New regression test decodes the post-change
+  access token and asserts `tokenver` == stored value (sabotage-verified).
+- **Clock skew (#2/#8):** `RefreshTokenRepository.FindAsync` now computes `is_expired` /
+  `is_replay_past_grace` in SQL against `now()`, not in C# — one clock near the 8h boundary.
+- **Header leak (#3):** `ConfigureJwtBearer` sets `IncludeErrorDetails = false` so a
+  `context.Fail` reason never reaches `WWW-Authenticate: error_description`.
+- **postgres-expert:** dropped the `refresh_token.replaced_by` self-FK (plain UUID forensic
+  chain — lets the nightly expiry sweep delete oldest-first without FK side-effects);
+  `token_version` moved to end of `platform_users` mirror to match pg_dump order.
+- New `SessionRevocation.EndAllAsync` helper centralises bump-then-revoke lock order across all
+  6 call sites (logout, self password change, admin reset, deactivation, group removal, replay).
+- 15 tests in `TokenRevocationTests.cs`, all green. Pre-existing 18 stale-`vendor_kind` failures
+  unrelated.
+
 ### CRITICAL
 
-- **C1** Token revocation: HS256 tokens stateless, `jti` unused. Deactivation, group removal,
-  admin password reset all ineffective up to 8h. Human-user path only (API keys re-resolve
-  grants per request). `ChangePasswordAsync` also doesn't re-check Status/lockout and
-  `SetPasswordAsync` clears `locked_until` → deactivation self-reversible. Fix: `token_version`/
-  `security_stamp` column on platform_users, claim at issue, checked in `OnTokenValidated`,
-  bumped on pw change / reset / deactivation / group change. Add `POST /auth/logout` +
-  admin "invalidate all sessions".
+- **C1** — ✅ FIXED by PR4 (above). Token revocation: HS256 tokens were stateless, `jti` unused.
+  Deactivation, group removal, admin password reset all ineffective up to 8h. `ChangePasswordAsync`
+  also didn't re-check Status/lockout and `SetPasswordAsync` clears `locked_until` → deactivation
+  was self-reversible.
 
 ### HIGH
 
