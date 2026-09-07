@@ -103,11 +103,11 @@ public sealed class GeographyRepository
         {
             // Both the area and its parent: without the parent check a scoped caller could
             // re-parent their own area under someone else's district and take it out of view.
-            await RequireAreaAsync(c, caller, area.ParentAreaId, ct).ConfigureAwait(false);
+            await RequireAreaAsync(c, work.Transaction, caller, area.ParentAreaId, ct).ConfigureAwait(false);
 
             if (area.Id != Guid.Empty)
             {
-                await RequireAreaAsync(c, caller, area.Id, ct).ConfigureAwait(false);
+                await RequireAreaAsync(c, work.Transaction, caller, area.Id, ct).ConfigureAwait(false);
             }
             else if (area.ParentAreaId is null)
             {
@@ -115,6 +115,10 @@ public sealed class GeographyRepository
                 throw new ForbiddenException("geography.manage");
             }
         }
+
+        // A live area may not be attached under a retired one (finding 5-M8).
+        await RequireActiveAreaAsync(c, work.Transaction, area.ParentAreaId, "parentAreaId", ct)
+            .ConfigureAwait(false);
 
         return await c.ExecuteScalarAsync<Guid>(new CommandDefinition("""
             INSERT INTO federation.geographic_areas
@@ -145,8 +149,25 @@ public sealed class GeographyRepository
         // and any reparent destination must be inside the caller's own geographic scope.
         if (!Geo(caller, "geography.manage"))
         {
-            await RequireAreaAsync(c, caller, areaId, ct).ConfigureAwait(false);
-            await RequireAreaAsync(c, caller, newParentId, ct).ConfigureAwait(false);
+            await RequireAreaAsync(c, work.Transaction, caller, areaId, ct).ConfigureAwait(false);
+            await RequireAreaAsync(c, work.Transaction, caller, newParentId, ct).ConfigureAwait(false);
+        }
+
+        // One lock for the whole geographic hierarchy, held for the transaction. Serializes
+        // concurrent deactivations; the residual ACTIVE-under-INACTIVE windows (the cascade race
+        // and the non-concurrent 5-M8 create path) are neither closed here — see the NOTE(5-H2)
+        // in OrganizationRepository.DeactivateUnitAsync and docs/OPERATIONS.md.
+        await c.ExecuteAsync(new CommandDefinition(
+            "SELECT pg_advisory_xact_lock(hashtext('federation.geographic_areas.deactivate'));",
+            transaction: work.Transaction, cancellationToken: ct)).ConfigureAwait(false);
+
+        var rootStatus = await c.ExecuteScalarAsync<string?>(new CommandDefinition("""
+            SELECT status FROM federation.geographic_areas WHERE id = @areaId FOR UPDATE;
+            """, new { areaId }, work.Transaction, cancellationToken: ct)).ConfigureAwait(false);
+
+        if (rootStatus == "INACTIVE")
+        {
+            return null;
         }
 
         var areas = (await c.QueryAsync<string>(new CommandDefinition("""
@@ -170,6 +191,10 @@ public sealed class GeographyRepository
             {
                 throw new InvalidOperationException("Reparenting requires a new parent area.");
             }
+
+            // The destination must itself be live (finding 5-M8).
+            await RequireActiveAreaAsync(c, work.Transaction, newParentId, "newParentId", ct)
+                .ConfigureAwait(false);
 
             // Checked before anything moves: a target inside the branch being deactivated would
             // detach that subtree from the root, and every containment query would stop matching
@@ -250,8 +275,12 @@ public sealed class GeographyRepository
 
         if (!Geo(caller, "geography.manage"))
         {
-            await RequireAreaAsync(c, caller, site.GeographicAreaId, ct).ConfigureAwait(false);
+            await RequireAreaAsync(c, work.Transaction, caller, site.GeographicAreaId, ct).ConfigureAwait(false);
         }
+
+        // A site may not be pinned to a retired area (finding 5-M8).
+        await RequireActiveAreaAsync(c, work.Transaction, site.GeographicAreaId, "geographicAreaId", ct)
+            .ConfigureAwait(false);
 
         return await c.ExecuteScalarAsync<Guid>(new CommandDefinition("""
             INSERT INTO federation.sites
@@ -290,8 +319,14 @@ public sealed class GeographyRepository
         caller.IsUnscopedForGeography(permission);
 
     /// <summary>Throws unless the caller's geographic scope covers the area.</summary>
+    /// <remarks>
+    /// Runs on the <see cref="UnitOfWork"/>'s connection and must enlist in its transaction —
+    /// Npgsql rejects an un-enlisted command once a transaction is open, which is why a scoped
+    /// caller previously got a 500 on every create and deactivate.
+    /// </remarks>
     private static async Task RequireAreaAsync(
-        NpgsqlConnection c, CallerContext caller, Guid? areaId, CancellationToken ct)
+        NpgsqlConnection c, NpgsqlTransaction tx, CallerContext caller, Guid? areaId,
+        CancellationToken ct)
     {
         if (areaId is null)
         {
@@ -303,11 +338,34 @@ public sealed class GeographyRepository
             SELECT EXISTS (SELECT 1 FROM federation.authorized_geographic_areas(
                                @UserId, @ApiKeyId, 'geography.manage')
                            WHERE geographic_area_id = @areaId);
-            """, new { caller.UserId, caller.ApiKeyId, areaId }, cancellationToken: ct));
+            """, new { caller.UserId, caller.ApiKeyId, areaId }, tx, cancellationToken: ct));
 
         if (!reachable)
         {
             throw new ForbiddenException("geography.manage");
+        }
+    }
+
+    /// <summary>
+    /// Throws <see cref="InvalidReferenceException"/> unless the given area exists and is ACTIVE.
+    /// A null id passes — it means "root" or "not supplied". Runs in the caller's transaction.
+    /// </summary>
+    private static async Task RequireActiveAreaAsync(
+        NpgsqlConnection c, NpgsqlTransaction tx, Guid? areaId, string field, CancellationToken ct)
+    {
+        if (areaId is null)
+        {
+            return;
+        }
+
+        var active = await c.ExecuteScalarAsync<bool>(new CommandDefinition("""
+            SELECT EXISTS (SELECT 1 FROM federation.geographic_areas
+                           WHERE id = @areaId AND status = 'ACTIVE');
+            """, new { areaId }, tx, cancellationToken: ct));
+
+        if (!active)
+        {
+            throw new InvalidReferenceException(field, "does not exist or is not ACTIVE");
         }
     }
 

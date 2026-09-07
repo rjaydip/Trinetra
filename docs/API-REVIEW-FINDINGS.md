@@ -48,8 +48,8 @@ The **Priority Index & Implementation Sequence** below is the working order; the
     `token_version` claim checked in `OnTokenValidated`, bumped on the relevant events;
     `POST /auth/logout`.
 11. **5-H1** Scoped `*.manage` callers 500 on every hierarchy create/deactivate (reach check
-    runs outside the txn). **Fix:** pass `work.Transaction`; integration test with a scoped caller.
-12. **5-H2** TOCTOU on hierarchy deactivate/reparent (no row lock / version guard).
+    runs outside the txn). **Fix:** pass `work.Transaction`; integration test with a scoped caller. ✅ PR6
+12. **5-H2** TOCTOU on hierarchy deactivate/reparent (no row lock / version guard). ✅ PR6
 13. **6-H1** Unscoped reads: users / groups / group-members list every account & the SUPER_ADMIN
     roster to any scoped `user.read`/`group.read` holder. (invariant 11) ✅ PR5
 14. **8-H2** `api-keys` list unscoped → privilege map of every service account. ✅ PR5
@@ -86,7 +86,7 @@ validation, `9-M1` VerifyTls non-nullable (TLS downgrade), `9-M2` org/site ACTIV
 
 **ESCALATION / SCOPE (non-P1):**
 `6-M1` geography asymmetry in group scope add/remove, `5-M1` org read perm mismatch
-(`geography.read` vs `organization.read`).
+(`geography.read` vs `organization.read`) ✅ PR6.
 
 **OTHER MEDIUM:**
 `4-M1` must-change-password advisory only, `4-M3` login rate-limit per-IP only, `4-M5` email
@@ -136,7 +136,7 @@ rule does not bite — still prefer new `v1.7+` files over editing `v1.sql`. Bra
 | PR3  | **VMS lifecycle**: 9-NEW-H, 9-H2, 9-H3, 9-M1, 9-M2 — ✅ done, BA/dotnet-expert plan reviewed, 12 new tests | `vms.delete` (v1.7.sql) |
 | PR4  | **Token revocation + refresh tokens** (scope expanded): 4-C1 + 4-M2 + `POST /auth/logout` + `POST /auth/refresh` + short access token + `ChangePasswordAsync` status re-check — ✅ done, BA + dotnet-expert + postgres-expert reviewed, fix pass applied, 15 new tests | `token_version` + `refresh_token` table (v1.8.sql) |
 | PR5  | **Unscoped reads**: 6-H1, 8-H1, 8-H2 — ✅ done, BA + dotnet-expert plan reviewed, 17 new tests | — (code-only) |
-| PR6  | **Hierarchy correctness**: 5-H1, 5-H2, 5-M1 | — |
+| PR6  | **Hierarchy correctness**: 5-H1, 5-H2, 5-M1, 5-M8 (folded in) — ✅ done, BA + dotnet-expert plan + implementation reviewed, 19 new tests | — (code-only) |
 | PR7  | **Auth hardening**: 4-H1..H5 (may split) | `password_history`, MFA |
 | PR8  | **Audit-fidelity wave** (P2) | — |
 | PR9  | **Pagination wave** (P2) | — |
@@ -291,6 +291,64 @@ endpoints file, CallerContextFactory, DB schema for platform_users / api_key / a
 Reviewed with a second pass 2026-09-01 — initial F5a–F5h refined below (F5f refuted, F5b partly
 refuted).
 
+### PR6 RESOLUTION (2026-09-07) — 5-H1, 5-H2, 5-M1 ✅
+
+BA + dotnet-expert planned independently and converged. Code-only, no schema change.
+
+- **5-H1** — `OrganizationRepository.RequireReachAsync` / `GeographyRepository.RequireAreaAsync`
+  now take the `NpgsqlTransaction` and enrol every command in it (was executing on the open
+  transaction's connection un-enrolled → Npgsql throws → 500 for **every** scoped `*.manage`
+  caller on create and deactivate). The vestigial `tx`-always-null param is gone. 9 call sites
+  updated — `RequireReachAsync` ×4 (`UpsertUnitAsync` ×2, `DeactivateUnitAsync` ×2) and
+  `RequireAreaAsync` ×5 (`UpsertAreaAsync` ×2, `DeactivateAreaAsync` ×2, `UpsertSiteAsync` — the
+  site path the finding undercounted).
+  Secondary fix: `RequireReachAsync` switched from `has_permission()` (which false-denies a
+  caller whose group also constrains geography — the PR2 bug, invariant 12) to
+  `authorized_org_units` set-membership, matching `RequireAreaAsync` and `CameraRepository`.
+- **5-H2** — both deactivate paths take one coarse `pg_advisory_xact_lock` per hierarchy
+  (`hashtext('federation.organization_units.deactivate')` /
+  `'federation.geographic_areas.deactivate'`), held for the transaction, plus
+  `SELECT status … FOR UPDATE` on the root row and an idempotent early-return when it is already
+  `INACTIVE`. Serializes concurrent deactivations (reparent is a `childStrategy` within
+  deactivate, not a standalone op) and *orders* a direct-child INSERT (FK takes `FOR KEY SHARE`
+  on the locked parent). With 5-M8 also fixed (below), the sequential re-attach path is closed,
+  so the **only residual** is a narrow race: a grandchild inserted under a still-ACTIVE mid-tree
+  node in the instant an ancestor is cascaded → ACTIVE under INACTIVE. Not a scope escape
+  (`org_unit_descendants` / `authorized_org_units` ignore `status`); a reconciliation query in
+  OPERATIONS.md finds and clears any. Create paths are deliberately **not** advisory-locked
+  (would serialize every structural write in the estate). `// NOTE(5-H2):` comment in both
+  repos; notes in DEPARTMENT-SCHEMA.md / GEOGRAPHY-SCHEMA.md / OPERATIONS.md.
+- **5-M8** (folded into PR6 on the owner's call — both review agents recommended it, it makes
+  the 5-H2 residual genuinely race-only) — new `RequireActiveParentAsync` (org) /
+  `RequireActiveAreaAsync` (geo), run unconditionally in the caller's transaction, throw
+  `InvalidReferenceException` (→ 400, existing handler) if the referenced parent is missing or
+  not `ACTIVE`. Wired into `UpsertUnitAsync` (parent), `UpsertAreaAsync` (parent),
+  `UpsertSiteAsync` (area), and both `Deactivate*` reparent branches (`newParentId`). A live
+  node can no longer be attached under a retired one, concurrently or sequentially.
+- **5-M1** — `HierarchyEndpoints.cs` `GET /organizations` and `/{id}` changed from
+  `.RequirePermission("geography.read")` to `"organization.read"` (the repo's real gate). No
+  description prose named a permission; no other route in the file mismatches.
+- New `tests/Trinetra.IntegrationTests/HierarchyScopeTests.cs` — 19 tests, bespoke
+  `HIER_SCOPE_TEST` role, caller scoped on **both** dimensions (so every guard branch runs and
+  each test is also a `has_permission` false-denial regression) + a `HIER_READ_TEST` role with
+  `organization.read` but not `geography.read` for 5-M1. Covers: scoped create/deactivate no
+  longer 500s (org units, areas, sites), out-of-reach → `ForbiddenException`, reparent in/out of
+  scope, already-INACTIVE deactivate is a no-op not a spurious children conflict (org + geo),
+  5-M8 (create + reparent under an INACTIVE parent → `InvalidReferenceException`, org + geo +
+  site), the advisory lock blocks a second transaction, and `ListAsync`/`GetAsync` work without
+  `geography.read`. Sabotage-verified ×4 (revert tx→has_permission: 4 fail; disable INACTIVE
+  early-return: 1 fails; remove advisory lock: concurrency test fails; disable 5-M8 check: 1
+  fails). Build 0 warnings; 140 integration pass (+19); same 18 pre-existing `vendor_kind`
+  failures.
+- **NOT** pulled into PR6 (stay their own findings):
+  5-M10 (the already-INACTIVE early-return still returns `null`, so the endpoint writes a
+  status-change audit row and returns 204 for a no-op — pre-existing, PR6 newly routes the
+  documented Refuse path through it; the `FOR UPDATE` SELECT is the hook for the eventual fix).
+  `ForbiddenException` still maps via the global middleware (403), not 404 — unchanged.
+
+Status: implemented + reviewed + fixed + tested, **NOT COMMITTED** (Jaydip commits via GitHub
+Desktop).
+
 ### HIGH
 
 - **5-H1** Scoped `*.manage` callers likely 500 on every create/deactivate.
@@ -335,9 +393,11 @@ refuted).
   name` no LIMIT/cursor. Unscoped `ListAsync` sorts whole table. Codebase elsewhere mandates
   keyset pagination (`Contracts.cs:91-96`). Add level-slicing + keyset cursor, at least sites &
   areas.
-- **5-M8** Live children can attach under an INACTIVE parent. None of `UpsertUnit/Area/Site` check
-  parent `status='ACTIVE'`; reparent `newParentId` checked for reach + not-in-branch, never
-  ACTIVE. Defeats the deactivation flow.
+- **5-M8** ✅ PR6. Live children can attach under an INACTIVE parent. None of
+  `UpsertUnit/Area/Site` check parent `status='ACTIVE'`; reparent `newParentId` checked for reach
+  + not-in-branch, never ACTIVE. Defeats the deactivation flow. FIXED in PR6 — see the PR6
+  RESOLUTION block above (`RequireActiveParentAsync` / `RequireActiveAreaAsync` →
+  `InvalidReferenceException` → 400).
 - **5-M9** Over-length `code` → 500. `code` VARCHAR(50) (sites 100); 51 chars raises `22001`, not
   in `ConstraintViolationExceptionHandler` switch (→500). No length/charset validation on
   Code/Name/Address at endpoint. Add DTO validation and/or map `22001`.

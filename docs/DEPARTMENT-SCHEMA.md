@@ -79,6 +79,13 @@ Do not store department names directly in the camera table.
 - Prefer deactivation over destructive deletion when historical records exist.
 - Organization codes should be unique.
 - Geography must remain a separate hierarchy.
+- Deactivating a unit takes one advisory lock for the whole unit hierarchy, held until the
+  transaction commits, so concurrent deactivations serialize (reparent is a `childStrategy`
+  inside deactivate, not a standalone op). Creating or reparenting a unit under a non-ACTIVE
+  parent is rejected (`400`), so a live unit cannot be attached under a retired one. One narrow
+  race remains — a grandchild created under a still-active mid-tree node in the instant an
+  ancestor is cascaded — a list/report inconsistency only (scope resolution ignores `status`);
+  `OPERATIONS.md` has the reconciliation query.
 
 ## RBAC Usage
 

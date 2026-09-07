@@ -235,6 +235,10 @@ PUT /api/v1/geographic-areas/{id}
 
 `newParentId` is validated before anything moves: it must exist, be ACTIVE, and must not be the area being deactivated or any of its descendants — otherwise reparenting would detach a whole subtree from the root and leave it unreachable.
 
+**Concurrency.** Every deactivation of the geographic hierarchy takes one advisory lock for the whole hierarchy, held until its transaction commits, so two operators cannot interleave two deactivations (a reparent is a `childStrategy` inside a deactivate, not a standalone operation). Creating or reparenting an area or site under a non-ACTIVE parent is rejected (`400`, "does not exist or is not ACTIVE"), so the sequential "deactivate an area, then add a child under it" path cannot strand a live node.
+
+One narrow race remains: a *grandchild* created under a still-active mid-tree node in the instant an ancestor is being cascaded can be left ACTIVE under an INACTIVE ancestor. This is a list/report inconsistency only — scope resolution walks the tree ignoring `status`, so no camera or event access is silently gained or lost. `OPERATIONS.md` carries a reconciliation query that finds ACTIVE nodes with an INACTIVE ancestor; re-running the deactivation clears them.
+
 ### Why it is not decided automatically
 
 Both silent behaviours are harmful in different directions.

@@ -278,6 +278,29 @@ FROM federation.config_audit ORDER BY changed_at DESC LIMIT 50;
 -- reference mean a rotated secret nobody updated, or someone probing.
 SELECT accessed_at, accessed_by, target_id, credential_reference, succeeded, failure_reason
 FROM federation.credential_access_log ORDER BY accessed_at DESC LIMIT 50;
+
+-- Hierarchy reconciliation: ACTIVE org units / geographic areas / sites left under an
+-- INACTIVE ancestor. Attaching a live node under a retired one is rejected, and deactivation
+-- serializes on an advisory lock, but a create landing in the instant an ancestor is cascaded
+-- can still strand one. Not a scope leak — resolution ignores status — but lists and reports
+-- will show it. Re-run the deactivation on each INACTIVE parent to clear.
+SELECT c.id, c.code, c.name, 'organization_unit' AS kind
+FROM federation.organization_units p
+JOIN federation.org_unit_descendants(p.id) d ON d.id <> p.id
+JOIN federation.organization_units c ON c.id = d.id AND c.status = 'ACTIVE'
+WHERE p.status = 'INACTIVE'
+UNION
+SELECT c.id, c.code, c.name, 'geographic_area'
+FROM federation.geographic_areas p
+JOIN federation.geographic_area_descendants(p.id) d ON d.id <> p.id
+JOIN federation.geographic_areas c ON c.id = d.id AND c.status = 'ACTIVE'
+WHERE p.status = 'INACTIVE'
+UNION
+SELECT s.id, s.code, s.name, 'site'
+FROM federation.geographic_areas p
+JOIN federation.geographic_area_descendants(p.id) d ON TRUE
+JOIN federation.sites s ON s.geographic_area_id = d.id AND s.status = 'ACTIVE'
+WHERE p.status = 'INACTIVE';
 ```
 
 ### The AI worker gets 403 or 404 resolving a stream credential

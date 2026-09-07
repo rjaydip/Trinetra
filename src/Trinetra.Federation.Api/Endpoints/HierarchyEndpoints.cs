@@ -28,7 +28,7 @@ public static class HierarchyEndpoints
                        .RequireAuthorization();
 
         group.MapGet("/", ListOrganizationsAsync)
-          .RequirePermission("geography.read")
+          .RequirePermission("organization.read")
           .WithSummary("List organizations")
           .WithDescription(
               "The top of the organizational dimension — one row per force, agency or operator "
@@ -36,7 +36,7 @@ public static class HierarchyEndpoints
               + "down with `GET /organizations/{id}/units`.");
 
         group.MapGet("/{id:guid}", GetOrganizationAsync)
-          .RequirePermission("geography.read")
+          .RequirePermission("organization.read")
           .WithSummary("Read one organization")
           .WithDescription(
               "Code, name, type, description and status. An organization the caller has no grant "
