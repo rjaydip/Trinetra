@@ -186,10 +186,14 @@ public sealed class TokenRevocationTests : IClassFixture<PostgresFixture>, IAsyn
         return raw;
     }
 
+    private AuthAuditRepository Audit => new(
+        _fixture.DataSource,
+        Microsoft.Extensions.Logging.Abstractions.NullLogger<AuthAuditRepository>.Instance);
+
     private async Task<int> CallRefresh(string token) => await StatusOf(
         await AuthEndpoints.RefreshAsync(
-            new RefreshRequest(token), Users, RefreshRepo, _fixture.DataSource, NewJwt(),
-            CancellationToken.None));
+            new RefreshRequest(token), ContextFor(), Users, RefreshRepo, Audit,
+            _fixture.DataSource, NewJwt(), CancellationToken.None));
 
     [Fact]
     public async Task Refresh_HappyPath_RotatesAndSlidesWindow_ThenReplayOutsideGraceNukes()
@@ -267,7 +271,7 @@ public sealed class TokenRevocationTests : IClassFixture<PostgresFixture>, IAsyn
 
         var status = await StatusOf(await AuthEndpoints.LogoutAsync(
             ContextFor(new Claim("sub", Alice.ToString())),
-            Users, RefreshRepo, _fixture.DataSource, CancellationToken.None));
+            Users, RefreshRepo, Audit, _fixture.DataSource, CancellationToken.None));
 
         status.ShouldBe(204);
         (await TokenVersionOf(Alice)).ShouldBe(1);
@@ -279,7 +283,7 @@ public sealed class TokenRevocationTests : IClassFixture<PostgresFixture>, IAsyn
     {
         var status = await StatusOf(await AuthEndpoints.LogoutAsync(
             ContextFor(new Claim("trinetra:apikey", "ak_x"), new Claim("sub", Guid.NewGuid().ToString())),
-            Users, RefreshRepo, _fixture.DataSource, CancellationToken.None));
+            Users, RefreshRepo, Audit, _fixture.DataSource, CancellationToken.None));
 
         status.ShouldBe(400);
     }
@@ -307,7 +311,7 @@ public sealed class TokenRevocationTests : IClassFixture<PostgresFixture>, IAsyn
         var status = await StatusOf(await AuthEndpoints.ChangePasswordAsync(
             new ChangePasswordRequest("CorrectHorse-2026!", "BrandNewValue-2026!"),
             ContextFor(new Claim("sub", Alice.ToString())),
-            Users, RefreshRepo, _fixture.DataSource, NewJwt(), CancellationToken.None));
+            Users, RefreshRepo, Audit, _fixture.DataSource, NewJwt(), CancellationToken.None));
 
         status.ShouldBe(401);
 
@@ -335,7 +339,7 @@ public sealed class TokenRevocationTests : IClassFixture<PostgresFixture>, IAsyn
         var status = await StatusOf(await AuthEndpoints.ChangePasswordAsync(
             new ChangePasswordRequest("CorrectHorse-2026!", "BrandNewValue-2026!"),
             ContextFor(new Claim("sub", Alice.ToString())),
-            Users, RefreshRepo, _fixture.DataSource, NewJwt(), CancellationToken.None));
+            Users, RefreshRepo, Audit, _fixture.DataSource, NewJwt(), CancellationToken.None));
 
         status.ShouldBe(200);
         (await TokenVersionOf(Alice)).ShouldBe(1);
@@ -362,7 +366,7 @@ public sealed class TokenRevocationTests : IClassFixture<PostgresFixture>, IAsyn
         var (status, body) = await ExecuteAsync(await AuthEndpoints.ChangePasswordAsync(
             new ChangePasswordRequest("CorrectHorse-2026!", "BrandNewValue-2026!"),
             ContextFor(new Claim("sub", Alice.ToString())),
-            Users, RefreshRepo, _fixture.DataSource, NewJwt(), CancellationToken.None));
+            Users, RefreshRepo, Audit, _fixture.DataSource, NewJwt(), CancellationToken.None));
 
         status.ShouldBe(200);
         var access = System.Text.Json.JsonDocument.Parse(body).RootElement

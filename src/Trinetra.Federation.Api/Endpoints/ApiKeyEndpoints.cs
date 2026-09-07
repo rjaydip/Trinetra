@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Caching.Memory;
 using Npgsql;
 using Trinetra.Federation.Api.Auth;
 using Trinetra.Federation.Api.Contracts;
@@ -112,13 +113,21 @@ public static class ApiKeyEndpoints
     }
 
     private static async Task<Results<NoContent, NotFound>> RevokeAsync(
-        Guid id, NpgsqlDataSource db, HttpContext http, CancellationToken ct)
+        Guid id, NpgsqlDataSource db, IMemoryCache cache, HttpContext http, CancellationToken ct)
     {
         var caller = CallerContextFactory.From(http);
 
         await using var work = await UnitOfWork.BeginAsync(db, ct);
 
         var result = await ApiKeyRepository.RevokeAsync(id, caller, work, ct);
+
+        // Evict this node's grant-cache entry so the revoke is felt immediately here; other
+        // nodes clear within the ~45s TTL. Harmless on NotFound / AlreadyRevoked.
+        if (cache.TryGetValue(ApiKeyGrantCache.IdIndexKey(id), out string? hash) && hash is not null)
+        {
+            cache.Remove(ApiKeyGrantCache.GrantKey(hash));
+            cache.Remove(ApiKeyGrantCache.IdIndexKey(id));
+        }
 
         switch (result.Outcome)
         {

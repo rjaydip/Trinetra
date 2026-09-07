@@ -52,6 +52,7 @@ internal static class ApiInfrastructureExtensions
         services.AddScoped<EventQueryRepository>();
         services.AddScoped<ApiKeyRepository>();
         services.AddScoped<RefreshTokenRepository>();
+        services.AddScoped<AuthAuditRepository>();
         services.AddSingleton<MaintenanceRepository>();
         services.AddScoped<SecretWriter>();
         services.AddScoped<AccessGroupRepository>();

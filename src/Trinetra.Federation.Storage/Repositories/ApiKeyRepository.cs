@@ -238,13 +238,24 @@ public sealed class ApiKeyRepository
         public bool Transitioned { get; init; }
     }
 
-    /// <summary>Stamps last use. Best effort: failing this must not deny a valid caller.</summary>
-    public async Task TouchAsync(Guid keyId, CancellationToken ct)
+    /// <summary>
+    /// Stamps last use, but only when it is stale — <c>last_used_at IS NULL</c> or older than
+    /// five minutes. Coarse on purpose (finding 8-NEW-H): a precise per-request timestamp is a
+    /// write on every machine-to-machine request for a field nobody reads at second precision.
+    /// Returns <see langword="true"/> when it actually wrote, which the auth handler uses to
+    /// sample the auth-audit success row. Best effort: failing this must not deny a valid caller.
+    /// </summary>
+    public async Task<bool> TouchAsync(Guid keyId, CancellationToken ct)
     {
         await using var c = await _dataSource.OpenConnectionAsync(ct);
 
-        await c.ExecuteAsync(new CommandDefinition(
-            "UPDATE federation.api_key SET last_used_at = now() WHERE id = @keyId;",
-            new { keyId }, cancellationToken: ct));
+        return await c.ExecuteScalarAsync<bool?>(new CommandDefinition("""
+            UPDATE federation.api_key
+            SET last_used_at = now()
+            WHERE id = @keyId
+              AND (last_used_at IS NULL OR last_used_at < now() - @Interval)
+            RETURNING TRUE;
+            """, new { keyId, Interval = TimeSpan.FromMinutes(5) },
+            cancellationToken: ct)) ?? false;
     }
 }

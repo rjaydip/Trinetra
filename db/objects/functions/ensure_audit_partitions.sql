@@ -8,7 +8,7 @@ DECLARE
     tbl       TEXT;
     part_name TEXT;
 BEGIN
-    FOREACH tbl IN ARRAY ARRAY['credential_access_log', 'config_audit'] LOOP
+    FOREACH tbl IN ARRAY ARRAY['credential_access_log', 'config_audit', 'auth_audit'] LOOP
         FOR i IN 0..months_ahead LOOP
             m := (date_trunc('month', from_month) + (i || ' month')::interval)::date;
             part_name := format('%s_%s', tbl, to_char(m, 'YYYYMM'));

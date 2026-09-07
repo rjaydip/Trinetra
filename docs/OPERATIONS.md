@@ -118,7 +118,7 @@ underscore is a nested key: `Auth__Jwt__SigningKey` sets `Auth:Jwt:SigningKey`.
 |---|---|---|
 | `ConnectionStrings:Federation` | Host, port, database, credentials | Startup fails immediately |
 | `Secrets:Key` | `openssl rand -base64 32` | See the warning below |
-| `Auth:Jwt:SigningKey` | `openssl rand -base64 48` | Startup refuses rather than run with a guessable key. A leaked key lets anyone forge a session as any user |
+| `Auth:Jwt:SigningKeys` | An ordered list, `openssl rand -base64 48` per entry. First entry signs, all entries validate. The legacy scalar `Auth:Jwt:SigningKey` is still accepted as a one-key ring (`kid` `legacy`). | Startup refuses rather than run with a guessable key. A leaked key lets anyone forge a session as any user |
 | `Auth:SeedAdmin:Password` | A strong value you will rotate at first login | Startup refuses an empty or short value rather than create a weak administrator |
 | `Auth:AllowedOrigins` | Where the frontend is served from | Never a wildcard. Requests carry credentials, so a wildcard lets any site an operator visits act as them |
 
@@ -126,6 +126,27 @@ underscore is a nested key: `Auth__Jwt__SigningKey` sets `Auth:Jwt:SigningKey`.
 > becomes permanently unreadable and must be re-entered by hand across the whole estate.
 > `Secrets:KeyId` records which key sealed each secret, so rotation can be staged rather than
 > done as a flag day.
+
+#### Rotating the JWT signing key
+
+Restart-based — there is no hot reload and no JWKS endpoint, matching the schema posture:
+operational discipline, not runtime enforcement.
+
+1. Generate a key: `openssl rand -base64 48`.
+2. Add it as a **non-first** entry in `Auth:Jwt:SigningKeys` on every host, then restart the
+   fleet — a rolling restart is safe, mixed old/new signers all validate both keys. Every host
+   now validates tokens signed with either key; all hosts still sign with the old first entry.
+3. Confirm every host has actually restarted with the new config (deploy tooling, or
+   `systemctl show trinetra-api -p ActiveEnterTimestamp`), then move the new entry to **first**
+   on every host and restart again. New tokens are signed with the new key; tokens signed with
+   the old key still validate until they expire (≤ one access lifetime, 15 min).
+4. A cycle later — after every old access token has expired — drop the old entry and restart.
+
+Refresh-token sessions are opaque database rows, not signed with this key, so **no logged-in
+user is signed out by a rotation** — only in-flight access tokens age out over ~15 minutes.
+Never remove a key that is still first, and never remove the only key. Adding a key straight as
+first (skipping step 2) breaks every access token the instant the first host restarts, forcing
+an estate-wide refresh.
 
 The three secrets should come from the environment in any real deployment. The committed file
 documents the shape, not the values — and in Production the API **refuses to start** if any of
@@ -143,10 +164,22 @@ runs on a key that is in the repository, with no runtime symptom at all.
   "HealthDays": 30,
   "CameraStatusDays": 90,
   "AuditMonths": 84,
+  "AuthAuditMonths": 24,
   "ConnectionTestDays": 30,
   "DeadLetterDays": 90
 }
 ```
+
+`AuthAuditMonths` is the authentication audit trail's own period (default 24), separate from
+`AuditMonths` — the auth trail is smaller and its lawful retention is a different question from
+configuration-change history. Startup refuses a value below one month; `auth_audit` appears in
+`federation.retention_status` alongside the other partitioned tables.
+
+The daily maintenance pass runs `federation.ensure_audit_partitions()` before it drops anything,
+so partitions for the coming months always exist. It is **not optional**: with `Enabled: false`,
+or if the pass never runs, every audit and event row lands in the `*_default` partition, which
+retention never reclaims — `federation.retention_status` and `federation.event_partition_health`
+are how you check that partitions are being created on schedule.
 
 **These are a policy decision, not a technical one.** CCTV event metadata is subject to statutory
 retention rules that differ by state, by department and by the purpose the cameras serve. The
@@ -249,7 +282,8 @@ which one wins. No leader election, the same reasoning as the connector leases.
 
 | Message | Meaning |
 |---|---|
-| `Auth:Jwt:SigningKey is not configured` | An unsigned or predictably-signed token is the same as no authentication |
+| `Auth:Jwt:SigningKeys is not configured` | An unsigned or predictably-signed token is the same as no authentication |
+| `Retention:AuthAuditMonths is N` | An authentication-audit retention below one month |
 | `Refusing to start in Production using secrets that are committed to the repository` | A `CHANGE_ME` was left in `/etc/trinetra/api.env`, so the service fell back to the committed development values |
 | `Retention:EventDays is N. The minimum is 7 days` | A retention period that would destroy data |
 | `Network:TrustForwardedHeaders is enabled but no … KnownProxies` | Would silently disable rate limiting |
@@ -273,6 +307,18 @@ SELECT job, last_run_date, detail FROM federation.maintenance_run;
 -- Who changed what.
 SELECT changed_at, actor, action, entity_type, entity_id
 FROM federation.config_audit ORDER BY changed_at DESC LIMIT 50;
+
+-- Who logged in, who failed, who locked out, and from where. Failures are coarse (a real
+-- account with a wrong password and an unknown username are both 'login.failure'); a
+-- presented_username with no user_id is the unknown-name case. Prefer GET /api/v1/auth-audit
+-- (needs authaudit.read) — this is the raw table.
+SELECT occurred_at, event_type, outcome, user_id, presented_username, source_address
+FROM federation.auth_audit ORDER BY occurred_at DESC LIMIT 50;
+
+-- Recent authentication trouble only.
+SELECT occurred_at, event_type, source_address, presented_username
+FROM federation.auth_audit WHERE outcome <> 'success'
+ORDER BY occurred_at DESC LIMIT 50;
 
 -- Who resolved which credential, for which target. Repeated failures against one
 -- reference mean a rotated secret nobody updated, or someone probing.

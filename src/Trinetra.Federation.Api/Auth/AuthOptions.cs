@@ -14,19 +14,43 @@ public sealed class AuthOptions
     public IList<string> AllowedOrigins { get; } = [];
 }
 
+/// <summary>One entry in the JWT signing-key ring.</summary>
+public sealed class JwtSigningKey
+{
+    /// <summary>
+    /// Stable identifier stamped into every token's <c>kid</c> header and matched on validation.
+    /// Free text — the ring's list order, not this value, decides which key signs.
+    /// </summary>
+    public string Kid { get; set; } = "";
+
+    /// <summary>Base64 symmetric key material. At least 32 bytes after decode (HMAC-SHA256).</summary>
+    public string Value { get; set; } = "";
+}
+
 public sealed class JwtOptions
 {
     public string Issuer { get; set; } = "trinetra";
     public string Audience { get; set; } = "trinetra-api";
 
     /// <summary>
-    /// Base64 symmetric signing key.
+    /// The signing-key ring. The <b>first</b> entry signs newly issued tokens; <b>every</b> entry
+    /// validates. Rotation is restart-based — add a new key as a non-first entry, restart the
+    /// fleet, then move it to first, then drop the old key a cycle later. See
+    /// <c>docs/OPERATIONS.md</c> §3.
     /// </summary>
     /// <remarks>
     /// Used while the platform issues its own tokens. When SSO takes over, validation moves to
-    /// the provider's authority and signing keys and this becomes unused — the claims mapping,
-    /// policies and endpoints do not change.
+    /// the provider's authority and this becomes unused — the claims mapping, policies and
+    /// endpoints do not change.
     /// </remarks>
+    public IList<JwtSigningKey> SigningKeys { get; } = [];
+
+    /// <summary>
+    /// Back-compat alias for a single-key ring. If <see cref="SigningKeys"/> is empty and this is
+    /// set, it is treated as one ring entry with <c>kid</c> <c>"legacy"</c> — so the env var
+    /// <c>Auth__Jwt__SigningKey</c> keeps working. Ignored when <see cref="SigningKeys"/> is
+    /// non-empty.
+    /// </summary>
     public string SigningKey { get; set; } = "";
 
     /// <summary>

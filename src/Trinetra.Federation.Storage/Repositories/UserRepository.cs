@@ -171,19 +171,38 @@ public sealed class UserRepository
     /// Lockout is time-based rather than permanent. A permanent lock turns a forgotten password
     /// into an administrator ticket, and turns an attacker into a denial-of-service against every
     /// account they can name.
+    /// <para>
+    /// A no-op while the account is already locked (finding 4-L3): otherwise every attempt an
+    /// attacker makes during the lockout window pushes <c>locked_until</c> further out, holding a
+    /// victim's account locked indefinitely.
+    /// </para>
+    /// <para>
+    /// <c>failed_login_count</c> is only cleared by <see cref="RecordSuccessfulLoginAsync"/>, so
+    /// once an account has locked, the first failed attempt after the window re-satisfies the
+    /// threshold and re-locks (and emits a fresh lockout audit row). Noisy, not a security
+    /// defect; a count-reset-on-expiry is a possible later refinement.
+    /// </para>
     /// </remarks>
-    public async Task RecordFailedLoginAsync(Guid userId, CancellationToken ct)
+    /// <returns>
+    /// <see langword="true"/> exactly on the attempt that transitions the account into lockout;
+    /// <see langword="false"/> otherwise (below threshold, or already locked, or unknown id).
+    /// The <c>WHERE</c> already excludes an already-locked row, so a returned <c>true</c> is
+    /// unambiguously the transition.
+    /// </returns>
+    public async Task<bool> RecordFailedLoginAsync(Guid userId, CancellationToken ct)
     {
         await using var c = await _dataSource.OpenConnectionAsync(ct);
-        await c.ExecuteAsync(new CommandDefinition("""
+        return await c.ExecuteScalarAsync<bool?>(new CommandDefinition("""
             UPDATE federation.platform_users
             SET failed_login_count = failed_login_count + 1,
                 locked_until = CASE WHEN failed_login_count + 1 >= @MaxFailed
                                     THEN now() + @Lockout ELSE locked_until END,
                 updated_at = now()
-            WHERE id = @userId;
+            WHERE id = @userId
+              AND (locked_until IS NULL OR locked_until <= now())
+            RETURNING (locked_until IS NOT NULL AND locked_until > now());
             """, new { userId, MaxFailed = MaxFailedLogins, Lockout = LockoutDuration },
-            cancellationToken: ct));
+            cancellationToken: ct)) ?? false;
     }
 
     public async Task RecordSuccessfulLoginAsync(Guid userId, CancellationToken ct)
@@ -197,10 +216,47 @@ public sealed class UserRepository
             """, new { userId }, cancellationToken: ct));
     }
 
+    /// <summary>
+    /// Changes a user's password, appending the OUTGOING hash to <c>password_history</c> and
+    /// pruning to the newest <see cref="PasswordPolicy.HistoryDepth"/> rows — all in
+    /// <paramref name="work"/>.
+    /// </summary>
+    /// <remarks>
+    /// The caller has already run the reuse check
+    /// (<see cref="LoadPasswordHistoryAsync"/> + <see cref="PasswordHasher.Verify"/>) and, for a
+    /// self-service change, the minimum-age check. A silent cost-upgrade rehash uses
+    /// <see cref="RehashPasswordAsync"/> instead — it does not change the password so it writes
+    /// no history row.
+    /// </remarks>
     public async Task SetPasswordAsync(
         Guid userId, PasswordHash password, bool mustChange, UnitOfWork work, CancellationToken ct)
     {
         var c = work.Connection;
+        var tx = work.Transaction;
+
+        // Snapshot the outgoing hash into history. FOR UPDATE so two concurrent changes for the
+        // same user serialize on the row BEFORE either snapshots — without it, the second could
+        // read the pre-first-change hash and the genuinely-used intermediate password would
+        // never reach history.
+        await c.ExecuteAsync(new CommandDefinition("""
+            INSERT INTO federation.password_history
+                (user_id, password_hash, password_salt, password_iterations, password_algorithm)
+            SELECT id, password_hash, password_salt, password_iterations, password_algorithm
+            FROM federation.platform_users
+            WHERE id = @userId
+            FOR UPDATE;
+            """, new { userId }, tx, cancellationToken: ct));
+
+        await c.ExecuteAsync(new CommandDefinition("""
+            DELETE FROM federation.password_history
+            WHERE user_id = @userId
+              AND id NOT IN (
+                  SELECT id FROM federation.password_history
+                  WHERE user_id = @userId
+                  ORDER BY set_at DESC, id DESC
+                  LIMIT @depth);
+            """, new { userId, depth = PasswordPolicy.HistoryDepth }, tx, cancellationToken: ct));
+
         await c.ExecuteAsync(new CommandDefinition("""
             UPDATE federation.platform_users
             SET password_hash = @Hash, password_salt = @Salt,
@@ -212,7 +268,54 @@ public sealed class UserRepository
         {
             userId, mustChange, password.Hash, password.Salt,
             password.Iterations, password.Algorithm,
+        }, tx, cancellationToken: ct));
+    }
+
+    /// <summary>
+    /// Silently re-stores the same password at the current cost. Writes no history row — the
+    /// password did not change. The login rehash path only.
+    /// </summary>
+    public async Task RehashPasswordAsync(
+        Guid userId, PasswordHash password, UnitOfWork work, CancellationToken ct)
+    {
+        await work.Connection.ExecuteAsync(new CommandDefinition("""
+            UPDATE federation.platform_users
+            SET password_hash = @Hash, password_salt = @Salt,
+                password_iterations = @Iterations, password_algorithm = @Algorithm,
+                updated_at = now()
+            WHERE id = @userId;
+            """, new
+        {
+            userId, password.Hash, password.Salt, password.Iterations, password.Algorithm,
         }, work.Transaction, cancellationToken: ct));
+    }
+
+    /// <summary>
+    /// The newest <see cref="PasswordPolicy.HistoryDepth"/> historical password hashes for a
+    /// user, newest first, each with its <c>set_at</c>. Empty if the user has never changed
+    /// their password.
+    /// </summary>
+    /// <remarks>
+    /// Keyed on one principal's own primary key and only ever called for the account being
+    /// changed, after that account has been authenticated (self) or passed
+    /// <c>UserAuthorityGuard</c> (admin) — the documented invariant-11 carve-out, same as
+    /// <see cref="FindForLoginByIdAsync"/>.
+    /// </remarks>
+    public async Task<IReadOnlyList<PasswordHistoryEntry>> LoadPasswordHistoryAsync(
+        Guid userId, CancellationToken ct)
+    {
+        await using var c = await _dataSource.OpenConnectionAsync(ct);
+        var rows = await c.QueryAsync<PasswordHistoryRow>(new CommandDefinition("""
+            SELECT password_hash, password_salt, password_iterations, password_algorithm, set_at
+            FROM federation.password_history
+            WHERE user_id = @userId
+            ORDER BY set_at DESC
+            LIMIT @depth;
+            """, new { userId, depth = PasswordPolicy.HistoryDepth }, cancellationToken: ct));
+
+        return [.. rows.Select(r => new PasswordHistoryEntry(
+            new PasswordHash(r.PasswordHash, r.PasswordSalt, r.PasswordIterations, r.PasswordAlgorithm),
+            r.SetAt))];
     }
 
     public async Task<Guid> CreateAsync(
@@ -530,4 +633,16 @@ public sealed class UserRepository
         public DateTimeOffset? LockedUntil { get; init; }
         public int TokenVersion { get; init; }
     }
+
+    private sealed class PasswordHistoryRow
+    {
+        public byte[] PasswordHash { get; init; } = [];
+        public byte[] PasswordSalt { get; init; } = [];
+        public int PasswordIterations { get; init; }
+        public string PasswordAlgorithm { get; init; } = "";
+        public DateTimeOffset SetAt { get; init; }
+    }
 }
+
+/// <summary>One retained prior password, from <see cref="UserRepository.LoadPasswordHistoryAsync"/>.</summary>
+public readonly record struct PasswordHistoryEntry(PasswordHash Hash, DateTimeOffset SetAt);

@@ -12,6 +12,10 @@ internal static class ApiHttpExtensions
     {
         services.AddHealthChecks();
         services.AddProblemDetails();
+
+        // One shared cache: the API-key auth-path rate-limit counters and the brief grant cache
+        // (finding 4-H5 / 8-NEW-H). Entries are tiny and TTL-bounded, so no SizeLimit.
+        services.AddMemoryCache();
         services.AddExceptionHandler<BadRequestExceptionHandler>();
         services.AddExceptionHandler<ConstraintViolationExceptionHandler>();
         services.AddExceptionHandler<InvalidReferenceExceptionHandler>();

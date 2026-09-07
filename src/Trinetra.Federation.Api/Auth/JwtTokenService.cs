@@ -61,35 +61,87 @@ public static class TrinetraClaims
 public sealed class JwtTokenService
 {
     private readonly JwtOptions _options;
-    private readonly SigningCredentials _credentials;
+    private readonly SigningCredentials _signing;                  // first ring entry — signs
+    private readonly IReadOnlyList<SecurityKey> _validationKeys;   // every ring entry — validates
 
     public JwtTokenService(IOptions<AuthOptions> options)
     {
         ArgumentNullException.ThrowIfNull(options);
         _options = options.Value.Jwt;
 
-        if (string.IsNullOrWhiteSpace(_options.SigningKey))
+        var ring = ResolveRing(_options);
+
+        if (ring.Count == 0)
         {
             throw new InvalidOperationException(
-                "Auth:Jwt:SigningKey is not configured.\n\n"
+                "Auth:Jwt:SigningKeys is not configured.\n\n"
                 + "  It lives in config/trinetra.settings.json, which every host reads.\n"
-                + "  Generate a replacement with:  openssl rand -base64 48\n\n"
-                + "  An environment variable named Auth__Jwt__SigningKey overrides that file, "
-                + "which is how a real deployment should supply it.\n\n"
+                + "  Provide an ordered ring; the first entry signs, all entries validate:\n\n"
+                + "      \"SigningKeys\": [ { \"Kid\": \"2026-09\", \"Value\": \"<key>\" } ]\n\n"
+                + "  Generate a key with:  openssl rand -base64 48\n"
+                + "  A single legacy env var named Auth__Jwt__SigningKey is still accepted and is\n"
+                + "  treated as a one-element ring with kid \"legacy\".\n\n"
                 + "  Startup is refused rather than continuing, because an unsigned or "
                 + "predictably-signed token is the same as no authentication at all.");
         }
 
-        var keyBytes = Convert.FromBase64String(_options.SigningKey);
-
-        if (keyBytes.Length < 32)
+        var keys = new List<SecurityKey>(ring.Count);
+        foreach (var k in ring)
         {
-            throw new InvalidOperationException(
-                "Auth:Jwt:SigningKey must be at least 32 bytes for HMAC-SHA256.");
+            if (string.IsNullOrWhiteSpace(k.Kid))
+            {
+                throw new InvalidOperationException(
+                    "Auth:Jwt:SigningKeys: every entry needs a non-empty Kid.");
+            }
+
+            byte[] bytes;
+            try
+            {
+                bytes = Convert.FromBase64String(k.Value);
+            }
+            catch (FormatException ex)
+            {
+                throw new InvalidOperationException(
+                    $"Auth:Jwt:SigningKeys entry '{k.Kid}': Value is not valid base64.", ex);
+            }
+
+            if (bytes.Length < 32)
+            {
+                throw new InvalidOperationException(
+                    $"Auth:Jwt:SigningKeys entry '{k.Kid}': key must be at least 32 bytes "
+                    + "for HMAC-SHA256.");
+            }
+
+            keys.Add(new SymmetricSecurityKey(bytes) { KeyId = k.Kid });
         }
 
-        _credentials = new SigningCredentials(
-            new SymmetricSecurityKey(keyBytes), SecurityAlgorithms.HmacSha256);
+        if (keys.Select(s => s.KeyId).Distinct(StringComparer.Ordinal).Count() != keys.Count)
+        {
+            throw new InvalidOperationException("Auth:Jwt:SigningKeys: duplicate Kid values.");
+        }
+
+        _validationKeys = keys;
+        _signing = new SigningCredentials(keys[0], SecurityAlgorithms.HmacSha256);
+    }
+
+    /// <summary>
+    /// The ring in priority order: <see cref="JwtOptions.SigningKeys"/> as configured, else the
+    /// legacy scalar <see cref="JwtOptions.SigningKey"/> as a one-element ring keyed
+    /// <c>"legacy"</c>, else empty (the caller throws).
+    /// </summary>
+    private static IReadOnlyList<JwtSigningKey> ResolveRing(JwtOptions o)
+    {
+        if (o.SigningKeys.Count > 0)
+        {
+            return [.. o.SigningKeys];
+        }
+
+        if (!string.IsNullOrWhiteSpace(o.SigningKey))
+        {
+            return [new JwtSigningKey { Kid = "legacy", Value = o.SigningKey }];
+        }
+
+        return [];
     }
 
     /// <summary>Access-token lifetime, exposed so the auth endpoints can compute <c>expires_in</c>.</summary>
@@ -143,7 +195,9 @@ public sealed class JwtTokenService
             Subject = new ClaimsIdentity(claims),
             NotBefore = DateTime.UtcNow,
             Expires = expires.UtcDateTime,
-            SigningCredentials = _credentials,
+            // The signing key carries its Kid, so JsonWebTokenHandler stamps the `kid` header
+            // itself — no AdditionalHeaderClaims needed.
+            SigningCredentials = _signing,
         };
 
         return (Handler.CreateToken(descriptor), expires);
@@ -161,8 +215,15 @@ public sealed class JwtTokenService
         ValidateAudience = true,
         ValidAudience = _options.Audience,
         ValidateIssuerSigningKey = true,
-        IssuerSigningKey = _credentials.Key,
+        // The whole ring, each key carrying its Kid. JsonWebTokenHandler matches the token's
+        // `kid` header against this set, so a key added for rotation validates old and new
+        // tokens side by side, and a token naming a retired key fails to the generic 401.
+        IssuerSigningKeys = _validationKeys,
         ValidateLifetime = true,
+
+        // Pinned, not left to library defaults: an unpinned validator can be talked into
+        // accepting `alg: none` or a downgraded algorithm (algorithm-confusion).
+        ValidAlgorithms = [SecurityAlgorithms.HmacSha256],
 
         // Without this, MapInboundClaims = false leaves Identity.Name null, and every audit row
         // records the subject GUID instead of the username — technically correct and useless to

@@ -36,8 +36,10 @@
   <ItemGroup>
     <!-- The integration tests call a few endpoint handlers directly (auth: refresh / logout /
          password), which need a live pipeline to reach over HTTP but are plain static methods
-         otherwise. Nothing else is exposed. -->
+         otherwise. The unit tests cover the pure auth helpers (API-key format check, the
+         fixed-window limiter). Nothing else is exposed. -->
     <InternalsVisibleTo Include="Trinetra.IntegrationTests" />
+    <InternalsVisibleTo Include="Trinetra.UnitTests" />
   </ItemGroup>
 
   <ItemGroup>

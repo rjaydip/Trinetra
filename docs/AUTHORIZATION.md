@@ -23,8 +23,40 @@ transaction — on logout, self password change, admin password reset, deactivat
 from a group. A *grant* (adding a group) is not immediate: it appears on the user's next refresh.
 The paired opaque refresh token (8h sliding, hash-only in `refresh_token`, rotated on every use)
 is what a client exchanges at `/auth/refresh` for a new pair; re-presenting a rotated one outside
-a short grace window is treated as theft and revokes every session. API keys are unaffected —
-they re-resolve their grants per request already.
+a short grace window is treated as theft and revokes every session.
+
+An **API-key caller** re-resolves its grants from the database on a cache miss, not on every
+request: each node holds a presented key's resolved permissions and scope for **up to ~45
+seconds**. Revoking a key (`DELETE /api/v1/api-keys/{id}`) evicts that entry immediately on the
+node serving the revoke and lets it lapse within ~45s on every other node, so revocation,
+expiry, and a change to the key's group (disable, delete, scope edit) all take effect within
+~45s fleet-wide rather than on the key's next request. This is a
+deliberate trade for removing a two-query round trip from every machine-to-machine request at
+the 80,000-camera design point. The key-auth path is also rate limited (20/min per key-hash +
+source IP, rejected before any database work) and rejects a key that is not 64 hex chars.
+
+**Login is constant-cost.** Unknown user, wrong password, inactive account and lockout all
+return the same 401, and all pay the same full PBKDF2 verify — a missing account is checked
+against `PasswordHasher.Decoy` rather than skipping the hash, so response time does not reveal
+which usernames exist. A failed attempt against an already-locked account does not extend the
+lockout window.
+
+**Signing keys are an ordered ring.** The first key signs, every key validates, and each token
+names its key in the `kid` header, so rotation overlaps old and new keys across a restart
+(`docs/OPERATIONS.md` §3). The algorithm is pinned (`ValidAlgorithms`), and a token naming a key
+not in the ring fails to the same generic 401 as any other bad signature.
+
+**Authentication events are recorded.** `auth_audit` is an append-only trail of logins (success
+and — coarsely — failure), lockouts, refresh rotation and replay-theft, logout, self and admin
+password changes, on-login rehash, and API-key authentication outcomes, each with source IP and
+user-agent. It is read only through `authaudit.read` (SUPER_ADMIN only — deliberately not
+bundled with `config.audit.read`), never written through the API, and retained on its own
+period (`Retention:AuthAuditMonths`, default 24). The login *response* is coarse — an unknown
+username and a wrong password for a real account both return the same 401 — but the *trail*
+records which: a resolved `user_id` means the name existed, a `presented_username` with no
+`user_id` means it did not. That distinction is for an investigator and is not an enumeration
+surface, because reading the trail requires SUPER_ADMIN. API-key *success* is sampled (~one row
+per key per five minutes); API-key *failure* is always recorded.
 
 An API key acts **through an access group, exactly as a user does**. This is not a convenience:
 two parallel authorization models would inevitably drift, and the weaker one would quietly become
@@ -259,8 +291,16 @@ The first is a choice; the two after it are gaps.
   load-bearing rather than a convenience — see §3.
 - **Token revocation now exists (PR4).** Access tokens were once stateless 8h bearers with no
   revocation path at all — deactivation, group removal and password reset took up to 8h to bite.
-  `token_version` + a per-request check closed that; see §1. Still deferred: MFA, an asymmetric
-  signing-key ring, and a per-device session list (logout is all-or-nothing).
+  `token_version` + a per-request check closed that; see §1.
+- **Auth hardening (PR7).** Login is constant-cost (4-H4) and a locked account's window cannot be
+  pushed out (4-L3); `auth_audit` records authentication events (4-H3); the API-key auth path is
+  rate limited with a brief grant cache (4-H5 / 8-NEW-H); the HMAC signing key is an ordered ring
+  with restart-based rotation (4-H1); `password_history` blocks the last 5 and a 24h minimum age
+  (4-M5). Still deferred: **MFA** (4-H2, its own design track), an *asymmetric* signing scheme
+  (RS256/JWKS — only worth it once an external party must verify our tokens), breached-password
+  screening (4-M6), the must-change-password middleware (4-M1), forwarded-headers / trusted-proxy
+  hardening (4-M3 — so a recorded `source_address` is the proxy's IP behind the on-prem proxy),
+  and a per-device session list (logout is all-or-nothing).
 - **User, access-group and API-key reads were unscoped; now fixed (PR5).** Every `user.read` /
   `group.read` / `apikey.read` holder could list every account, every group (the platform-admin
   roster included) and every service account's privilege level estate-wide, and any

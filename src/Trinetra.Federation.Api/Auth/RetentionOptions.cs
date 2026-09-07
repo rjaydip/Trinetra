@@ -65,6 +65,15 @@ public sealed class RetentionOptions
     /// </remarks>
     public int AuditMonths { get; set; } = 84;
 
+    /// <summary>Months of authentication audit history retained.</summary>
+    /// <remarks>
+    /// Its own period, separate from <see cref="AuditMonths"/>: the auth trail (logins, lockouts,
+    /// token rotation, API-key authentication) is smaller, and how long it must be kept is a
+    /// different question from configuration-change history. Default 24 months; same one-month
+    /// floor as <see cref="AuditMonths"/> because it too is audit-class data.
+    /// </remarks>
+    public int AuthAuditMonths { get; set; } = 24;
+
     /// <summary>Days of completed connection-test results retained.</summary>
     public int ConnectionTestDays { get; set; } = 30;
 
@@ -106,6 +115,14 @@ public sealed class RetentionOptions
                 + "changed what and who read which credential; it must be retained for at least "
                 + "one month, and most deployments are obliged to keep it for years.");
         }
+
+        if (AuthAuditMonths < 1)
+        {
+            throw new InvalidOperationException(
+                $"Retention:AuthAuditMonths is {AuthAuditMonths}. The authentication audit trail "
+                + "is the record of who got into the system; it must be retained for at least one "
+                + "month, and most deployments are obliged to keep it far longer.");
+        }
     }
 
     private static void RequireDays(string name, int value)
@@ -137,6 +154,7 @@ public sealed class RetentionOptions
             Health: today.AddDays(-HealthDays),
             CameraStatus: today.AddDays(-CameraStatusDays),
             Audit: today.AddMonths(-AuditMonths),
+            AuthAudit: today.AddMonths(-AuthAuditMonths),
             ConnectionTests: utcNow.AddDays(-ConnectionTestDays),
             DeadLetter: utcNow.AddDays(-DeadLetterDays));
     }
@@ -148,5 +166,6 @@ public readonly record struct RetentionCutoffs(
     DateOnly Health,
     DateOnly CameraStatus,
     DateOnly Audit,
+    DateOnly AuthAudit,
     DateTimeOffset ConnectionTests,
     DateTimeOffset DeadLetter);

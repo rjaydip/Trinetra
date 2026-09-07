@@ -57,10 +57,11 @@ The **Priority Index & Implementation Sequence** below is the working order; the
 16. **9-H3** VMS delete gated `vms.update` not a dedicated `vms.delete`.
 17. **15-H2** Detection base64: no try/catch (500) + no size / body cap (DoS / disk-fill).
 18. **4-H2** No MFA anywhere (incl. bootstrap admin) — likely compliance blocker.
-19. **4-H3** Auth events (login ok/fail, lockout, token issue, key use) bypass the audit trail.
+19. **4-H3** Auth events (login ok/fail, lockout, token issue, key use) bypass the audit trail. → PR7b
 20. **4-H4** Login is a timing oracle (unknown user skips PBKDF2) — defeats the stated
-    anti-enumeration. **Fix:** always verify against a dummy hash.
+    anti-enumeration. **Fix:** always verify against a dummy hash. ✅ PR7a
 21. **4-H1** JWT signing: single symmetric key, no `kid`, no key ring, `ValidAlgorithms` unpinned.
+    ✅ algorithm pinned (PR7a); key ring still open → PR7d
 22. **4-H5** API-key AUTH path: no rate limit + DB round trip pre-auth (brute-force +
     amplification). Related **8-NEW-H**: `TouchAsync` write + 3rd connection on every M2M request.
 23. **8-H3** API-key creation doesn't reject a DRAFT/DISABLED group → latent grant on activation.
@@ -137,7 +138,14 @@ rule does not bite — still prefer new `v1.7+` files over editing `v1.sql`. Bra
 | PR4  | **Token revocation + refresh tokens** (scope expanded): 4-C1 + 4-M2 + `POST /auth/logout` + `POST /auth/refresh` + short access token + `ChangePasswordAsync` status re-check — ✅ done, BA + dotnet-expert + postgres-expert reviewed, fix pass applied, 15 new tests | `token_version` + `refresh_token` table (v1.8.sql) |
 | PR5  | **Unscoped reads**: 6-H1, 8-H1, 8-H2 — ✅ done, BA + dotnet-expert plan reviewed, 17 new tests | — (code-only) |
 | PR6  | **Hierarchy correctness**: 5-H1, 5-H2, 5-M1, 5-M8 (folded in) — ✅ done, BA + dotnet-expert plan + implementation reviewed, 19 new tests | — (code-only) |
-| PR7  | **Auth hardening**: 4-H1..H5 (may split) | `password_history`, MFA |
+| PR7  | **Auth hardening** — split into 5 sub-PRs (BA + dotnet-expert, 2026-09-07): | |
+| PR7a | 4-H4 (login timing oracle) + 4-L3 (locked-account counter DoS) + pin JWT `ValidAlgorithms` — ✅ done, both agents' plans converged, dotnet-expert impl-reviewed, +10 tests (4 unit + 6 integration) | — (code-only) |
+| PR7b | 4-H3 auth event audit trail — ✅ done, spec'd by dotnet-expert, +15 tests | `auth_audit` table + `authaudit.read` (v1.9) |
+| PR7c | 4-H5 API-key auth rate limit + `last_used_at` coarsening + 8-NEW-H — ✅ done (residual: per-IP unknown-key lookup ceiling is a follow-up), +10 tests | — (config; `IMemoryCache`) |
+| PR7d | 4-H1 JWT signing **HMAC key ring** (owner's call) — ✅ done, +13 unit tests | config shape (`SigningKeys` list) |
+| PR7e | password history + minimum age (4-M5); breached-password screening (4-M6) DEFERRED to its own PR — ✅ done, +11 tests | `password_history` table (v1.10) |
+| —    | 4-H2 **MFA** → own design track, ~10 policy decisions; not a fix-PR | schema TBD |
+| —    | 4-H6 API-key entropy — **refuted**, keys already server-generated 256-bit CSPRNG | — |
 | PR8  | **Audit-fidelity wave** (P2) | — |
 | PR9  | **Pagination wave** (P2) | — |
 | PR10 | **Validation / error-shape wave** (P2) | — |
@@ -183,6 +191,138 @@ access groups / scope. Want the user + token model shaped so this drops in later
 ## Finding 4 — authentication gaps (second-pass review, 2026-09-01)
 
 Deferred; triage before implementing. Severity-ordered.
+
+**PR7 SPLIT (2026-09-07, BA + dotnet-expert planned independently, converged):** PR7 is 5 sub-PRs
+— 7a (login hardening), 7b (auth audit), 7c (API-key auth path), 7d (JWT key ring), 7e (password
+history). MFA (4-H2) is its own design track (~10 policy decisions). 4-H6 is refuted (keys are
+server-generated 256-bit CSPRNG — Finding 8 second pass). See the PR PLAN table above.
+
+**PR7a RESOLUTION (2026-09-07) — 4-H4, 4-L3, 4-H1 (partial):**
+- **4-H4** — `PasswordHasher.Decoy` (computed once from a random secret, carries
+  `DefaultIterations` so it tracks the cost as it rises). `AuthEndpoints.TryAuthenticateAsync`
+  runs `PasswordHasher.Verify(password, user?.Password ?? Decoy)` **unconditionally** before the
+  account-state checks — a missing / inactive / locked account now costs the same full PBKDF2
+  grind as a wrong password, so response time no longer reveals which usernames exist. `LoginAsync`
+  made `internal` for the timing test.
+- **4-L3** — `UserRepository.RecordFailedLoginAsync` gained `AND (locked_until IS NULL OR
+  locked_until <= now())` — an attacker's attempts during a lockout window no longer push
+  `locked_until` further out (indefinite-lock DoS).
+- **4-H1 (partial)** — `JwtTokenService.ValidationParameters.ValidAlgorithms = [HS256]` pinned,
+  closing `alg:none` / downgrade ahead of the full key ring in PR7d.
+- Tests: `PasswordHasherTests` + `JwtTokenServiceTests` (unit, 4) + `LoginHardeningTests`
+  (integration, 6 — unknown / locked / wrong-pw each spend ≥ half of one measured PBKDF2 grind
+  (relative floor, not a hardcoded ms), correct pw still succeeds, RecordFailedLogin frozen while
+  locked). Sabotage-verified ×3 (short-circuit Verify: 2 fail; drop the locked-until guard: 1
+  fails; drop ValidAlgorithms: unit test fails).
+- Residual (accepted, per dotnet-expert review): a *known* bad attempt still does an extra
+  `RecordFailedLoginAsync` UPDATE (~1–5ms) that an *unknown*-user attempt skips — sub-hash-noise
+  now that PBKDF2 dominates the response, not worth branching for.
+- Build 0 warnings. 73 unit + 146 integration pass (+10). Same 18 pre-existing `vendor_kind` fails.
+- NOT in 7a (both agents kept it minimal): 4-M1 (must-change-password middleware — needs the
+  restricted-token filter that 7e/MFA also want), 4-M3 (per-username rate partition + forwarded
+  headers). `ChangePasswordAsync` timing left as-is (authenticated, not an enumeration oracle).
+Status: PR7a is NOT yet committed — it ships in one batch with 7b–7e (HEAD = PR6, 69df7c1).
+
+**PR7b–7e RESOLUTION (2026-09-07) — specs by dotnet-expert (2 parallel), implemented together
+for one commit at the owner's request:**
+
+- **7b (4-H3) auth event audit trail.** New `db/versions/v1.9.sql`: `auth_audit` — monthly
+  RANGE-partitioned like `config_audit`, append-only, `outcome` CHECK (success|failure|lockout|
+  revoked), `user_id`/`api_key_id` both nullable `ON DELETE SET NULL`, `presented_username`
+  (≤256, only when `user_id` is null), `source_address`/`user_agent`/`jti`/`detail`. Wired into
+  `ensure_audit_partitions()` (one array element), new `drop_auth_audit_partitions_before(cutoff)`
+  keyed only on `auth_audit` (its OWN retention period), `retention_status` view gains an
+  `auth_audit` arm. New permission `authaudit.read` → **SUPER_ADMIN only**, NOT bundled with
+  `config.audit.read`. `db/objects/` mirrors added/edited.
+  `AuthAuditRepository` (Storage): `WriteAsync(UnitOfWork,…)` for events that ride a mutation,
+  `WriteBestEffortAsync(…)` for pure events (own pooled connection, swallows all but cancellation
+  — an audit outage must not become an auth outage), `ListAsync(query)` keyset on
+  `(occurred_at DESC, id DESC)`. `AuthAuditEvents` constants, `RequestClientMeta` (raw
+  `RemoteIpAddress` — forwarded-header hardening is 4-M3, out of scope). `AuthEndpoints`
+  (login/refresh/logout/password) + `UserEndpoints.ResetPasswordAsync` + `ApiKeyAuthenticationHandler`
+  write rows; `login.success` / `token.refresh` / `password.*` ride the existing UoW,
+  failures/lockout/api-key are best-effort. `RecordFailedLoginAsync` → `Task<bool>` (true only on
+  the lockout transition — the `WHERE` already excludes a locked row). New `GET /api/v1/auth-audit`
+  (`authaudit.read`, paged, newest first, append-only — no write route). `RetentionOptions.AuthAuditMonths`
+  (default 24, one-month floor) + `RetentionCutoffs.AuthAudit` + `MaintenanceService` wiring.
+- **7c (4-H5 + 8-NEW-H) API-key auth path.** `services.AddMemoryCache()`. New `ApiKeyAuthSupport`:
+  `ApiKeyFormat.IsWellFormed` (64 lowercase hex, allocation-free), `ApiKeyRateLimiter` (per-node
+  fixed window, 20/min, keyed `sha256(key)[..16] + IP` — key-hash primary so a junk header on a
+  shared IP can't lock out a real caller), `ApiKeyGrantCache` (per-node, 45s TTL). Handler
+  rewritten: rate-limit → 429 (with a `HandleChallengeAsync` guard so the framework 401 doesn't
+  overwrite it) BEFORE any DB work; format check; then a grant-cache lookup that on a miss does
+  `FindAsync` + `GrantsAsync`, caches `{Key,Grants}` + an id→hash index, and calls the now-coarse
+  `TouchAsync`. `ApiKeyRepository.TouchAsync` → `Task<bool>`, `UPDATE … WHERE last_used_at IS NULL
+  OR last_used_at < now() - 5min RETURNING TRUE`. `ApiKeyEndpoints` revoke busts this node's cache
+  entry. **Weakens** the "API keys re-resolve grants per request" guarantee to ≤45s fleet-wide —
+  documented in AUTHORIZATION.md.
+- **7d (4-H1) HMAC signing-key ring** (owner chose HMAC over RS256). `JwtOptions.SigningKey`
+  (scalar) → `SigningKeys` (`List<JwtSigningKey{Kid,Value}>`), first entry signs, all validate;
+  scalar kept as a back-compat alias → one-element ring, kid `"legacy"` (env `Auth__Jwt__SigningKey`
+  still works). `JwtTokenService` ctor validates each key (≥32 bytes, valid base64, non-empty
+  distinct Kid) or throws the same helpful startup error. `Issue` stamps the primary `kid`
+  automatically (SigningCredentials.Key.KeyId). `ValidationParameters.IssuerSigningKeys` = the
+  ring; `IssuerSigningKey` (singular) dropped; `ValidAlgorithms` pin kept. Rotation is
+  restart-based (add non-first → restart fleet → promote → drop old a cycle later). No JWKS, no
+  hot reload, no DB table, no RS256 half-support.
+- **7e (4-M5) password history + minimum age.** New `db/versions/v1.10.sql`: `password_history`
+  (user_id CASCADE, the four `password_*` columns, `set_at`). `PasswordPolicy` (const
+  `HistoryDepth = 5`, `static readonly MinimumAge = 24h` — policy not config). `UserRepository`:
+  `SetPasswordAsync` now snapshots the outgoing hash into history + prunes to the newest N, all in
+  the UoW; new `RehashPasswordAsync` (login cost-upgrade — same password, no history row) — the
+  login rehash path switched to it; new `LoadPasswordHistoryAsync` + `PasswordHistoryEntry`. New
+  `PasswordChangeGuard.Check(newPassword, history, enforceMinimumAge)` → 400 on reuse or (self
+  only) too-recent. Wired into `AuthEndpoints.ChangePasswordAsync` (`enforceMinimumAge:
+  !user.MustChangePassword` — a forced change after an admin reset must not be age-blocked by the
+  reset it is completing) and `UserEndpoints.ResetPasswordAsync` (false — an admin unlocking a stuck user isn't age-blocked,
+  but reuse still applies). Breached-password screening (4-M6) deferred to its own later PR.
+- Tests: `AuthAuditTests` (11), `ApiKeyCoarseTouchTests` (4), `ApiKeyAuthSupportTests` (unit, 6),
+  `RetentionOptionsTests` (unit, 3), `JwtTokenServiceTests` extended to 13 (ring: issue-under-A /
+  promote-B / old-token-valid / kid-not-in-ring-rejected / ctor validation), `PasswordHistoryTests`
+  (11). Sabotage-verified: 7b lockout-audit RETURNING; 7c coarse-touch WHERE; 7d kid stamp.
+  `InternalsVisibleTo("Trinetra.UnitTests")` added for the pure API-key helpers.
+- **dotnet-expert consolidated review: SHIP-WITH-FIXES — applied:**
+  (1) 7c — `ApiKeyRateLimiter` now returns `Allowed / JustLimited / AlreadyLimited`; the
+  `apikey.ratelimited` audit row is written **only on the window transition**, so a sustained
+  junk flood no longer produces unbounded INSERTs (it was partly reintroducing the 4-H5
+  amplification). `GetOrCreate` null (create/evict race) now falls through to Allowed, not a 500.
+  (2) 7e — `SetPasswordAsync`'s history-snapshot SELECT gained `FOR UPDATE` so two concurrent
+  changes for one user serialize on the row before either snapshots (else a genuinely-used
+  intermediate password could be absent from history); prune `ORDER BY set_at DESC, id DESC` for
+  a deterministic tie-break. (3) doc: `OPERATIONS.md` now states the partition-maintenance pass
+  is not optional (else `*_default` grows unbounded). (4) 7a xmldoc notes `failed_login_count`
+  is not reset on lockout expiry (noisy re-lock, not a defect). Not done (agent's own "not
+  blocking"): making the 45s grant-cache TTL configurable — kept as a const, flagged for a
+  follow-up if incident response needs to drop it without a redeploy.
+- **BA consolidated review: was BLOCK on 7e, now resolved — applied:**
+  (a) **[7e BLOCK]** `ChangePasswordAsync` skips the 24h min-age check when `MustChangePassword`
+  is true — the forced follow-up after an admin reset was 400-ing the user into a dead end.
+  Test `ChangePassword_ForcedChange_NotAgeBlocked` + `_StillRejectsAReusedPassword`, sabotage-
+  verified. (b) **[7b wording]** "the stored row never says whether the username was real" was
+  false and self-contradictory — reworded in v1.9.sql / AUTHORIZATION.md §1 / the endpoint
+  description: the *response* is coarse, the *trail* records `user_id`-null vs `presented_username`
+  for an investigator (SUPER_ADMIN only). (c) **[7b test]** `AuthAuditRead_IsSuperAdminOnly_
+  NotBundledWithAuditRead` — `authaudit.read` is granted to SUPER_ADMIN and no other role;
+  STATE_ADMIN holds the general `audit.read` but not this one. (d) **[7c tests]** new
+  `ApiKeyAuthHandlerTests` — 429 returned before any DB work (one ratelimited row per window,
+  not per request), malformed key rejected, grant cache serves the second call, revoke-style
+  bust clears both cache entries. (e) **[7c/4-H5 downgrade]** the finding is "amplification
+  reduced, not closed" — the key-hash-primary limiter lets a flood of *well-formed distinct
+  unknown* keys from one IP still reach `FindAsync` once per key; a per-IP lookup ceiling is a
+  logged follow-up. (f) doc: rotation runbook now notes refresh-token sessions survive rotation
+  and to confirm every host restarted before promoting; §1 45s note covers group status changes.
+- **Logged follow-ups (own findings, not this batch):** per-IP unknown-key lookup ceiling
+  (residual 4-H5); API-key success audit keyed on `(key, source_address)` so a new IP always
+  records; `PasswordPolicyOptions` with stricter-only floors (accreditation may mandate specific
+  numbers); config kill-switch for the grant-cache TTL (`0` = re-resolve per request);
+  `auth_audit_default` (like `config_audit_default`) is never retention-pruned.
+- Build 0 warnings. 100 unit + 179 integration pass (+47 across 7b–7e + review fixes). Same 18
+  pre-existing `vendor_kind` fails.
+- Out of scope, noted: forwarded-headers / trusted-proxy (4-M3); per-request API-key-use audit
+  (coarse only — sampled on the 5-min touch); 4-M1 middleware; 4-M6 breached-password list.
+Status: 7a–7e implemented + BA/dotnet-expert plan AND consolidated review + fixes + tested +
+sabotage-checked. Ready for ONE commit (7a + 7b + 7c + 7d + 7e together). NOT YET COMMITTED
+(HEAD = 69df7c1 = PR6).
 
 **PR4 RESOLUTION (2026-09-06):** 4-C1 fixed, and 4-M2 (refresh tokens) folded in when Jaydip
 expanded the scope.
@@ -237,17 +377,24 @@ expanded the scope.
 - **H1** JWT signing key: single symmetric HS256, no `kid`, no key ring, `ValidAlgorithms`
   unpinned. Rotation = global outage; secret on every node. Move to RS256/ES256 + kid +
   IssuerSigningKeys ring; at minimum current+previous 2-key validation. Pin ValidAlgorithms.
+  → **`ValidAlgorithms` pinned in PR7a; HMAC key ring done in PR7d** (owner chose HMAC over
+  RS256 — SSO/F3 swaps to the IdP's JWKS regardless). ✅
 - **H2** No MFA/2FA anywhere incl. bootstrap admin. At least TOTP for accounts with user.manage
   or an org-unscoped group. Likely compliance requirement.
-- **H3** Auth events not audited: login success/failure, lockout, token issue, API key use,
-  rehash-on-login all bypass `AuditAsync`. No source IP / UA / jti persisted. Make auth events
-  first-class audit records.
-- **H4** Login timing oracle: `TryAuthenticateAsync` short-circuits `||` so unknown user returns
-  ~0ms vs 600k PBKDF2 for known. Defeats stated anti-enumeration. Fix: always run Verify against
-  a fixed dummy hash on missing/inactive/locked.
-- **H5** API-key auth: no rate limit / lockout, `FindAsync` DB round trip pre-auth on every
-  X-Api-Key request = unauthenticated DB-load amplification + key brute-force. Add dedicated
-  tight limiter keyed on presented key hash + source IP.
+- **H3** — ✅ FIXED by PR7b. Auth events (login ok/fail, lockout, refresh, replay, logout,
+  password change/reset, rehash, API-key auth) now write to the new append-only `auth_audit`
+  (v1.9) with IP / UA / jti; `GET /api/v1/auth-audit` gated `authaudit.read` (SUPER_ADMIN only).
+  Login failures coarse; API-key success sampled.
+- **H4** — ✅ FIXED by PR7a. Login timing oracle: `TryAuthenticateAsync` short-circuited `||` so
+  an unknown user returned ~0ms vs 600k PBKDF2 for a known one. Now runs `Verify` against
+  `PasswordHasher.Decoy` unconditionally.
+- **H5** — ✅ mostly fixed by PR7c; one residual is a follow-up. Per-node fixed-window limiter
+  (20/min, keyed **key-hash + IP**) rejects with 429 before any DB work; 64-hex format pre-check;
+  a 45s per-node grant cache removes the double round trip; `TouchAsync` is now coarse (8-NEW-H,
+  ≤ 1 write/key/5min). **Residual (follow-up):** the limiter is key-hash-primary by design, so a
+  flood of *well-formed but distinct unknown* keys from one IP is a fresh 20/min partition each
+  and still reaches `FindAsync` once per key — amplification is *reduced* (no `GrantsAsync`, no
+  `Touch`), not closed. Needs a per-IP lookup ceiling or a short negative cache. Logged.
 - **H6** API key entropy not enforced server-side — **REFUTED** in Finding 8 (the endpoint
   generates a 256-bit CSPRNG key server-side). Kept for cross-reference only.
 
@@ -261,10 +408,12 @@ expanded the scope.
 - **M3** Login rate limiting per-IP only; add per-username partition. Verify NetworkOptions /
   forwarded-headers config for prod (proxy IP collapse, or spoofable XFF).
 - **M4** No session management / concurrent-login control / "sign out other devices".
-- **M5** No password history or minimum age — only current pw blocked. Needs `password_history`
-  table checked in ChangePasswordAsync + ResetPasswordAsync.
-- **M6** No breached/common-password screening (NIST 800-63B requires it alongside the
-  length-only stance). Add blocklist check at every set-password path.
+- **M5** — ✅ FIXED by PR7e. `password_history` (v1.10) — last 5 blocked on both change and
+  reset; a self-service change is refused while the current password is < 24h old (admin reset
+  exempt from the age check).
+- **M6** No breached/common-password screening. Deferred by the owner to its own PR (it needs a
+  bundled offline wordlist — a data-management decision worth isolating). PR7e ships history +
+  min-age without it.
 - **M7** CORS: `AllowAnyHeader().AllowAnyMethod().AllowCredentials()` to configured origins. Drop
   AllowCredentials if tokens are Bearer-only; tighten to actual headers/methods.
 - **M8** Bootstrap admin: `Auth__SeedAdmin__Password` lingers in env/systemd; nothing detects
@@ -275,8 +424,9 @@ expanded the scope.
 - **L1** Dev password grant `/auth/token` — keep bound to IsDevelopment(), never a config flag
   (ok today).
 - **L2** Lockout flat threshold, no exponential backoff on repeat lockouts.
-- **L3** Failed-login counter increments for already-locked accounts → attacker holds account
-  locked indefinitely (DoS). Skip increment when already locked.
+- **L3** — ✅ FIXED by PR7a. Failed-login counter incremented for already-locked accounts →
+  attacker held the account locked indefinitely. `RecordFailedLoginAsync` is now a no-op while
+  `locked_until` is in the future.
 - **L4** No user notification on security events (admin reset, new-device login, lockout) — tied
   to absent email infra.
 - **L5** `ForwardDefaultSelector`: junk `X-Api-Key` header suppresses a valid Bearer → 401. Minor.

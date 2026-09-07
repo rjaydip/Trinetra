@@ -307,8 +307,8 @@ public static class UserEndpoints
 
     private static async Task<Results<NoContent, NotFound, ProblemHttpResult>> ResetPasswordAsync(
         Guid id, [FromBody] ResetPasswordRequest request, UserRepository users,
-        RefreshTokenRepository refreshTokens, NpgsqlDataSource db, HttpContext http,
-        CancellationToken ct)
+        RefreshTokenRepository refreshTokens, AuthAuditRepository authAudit, NpgsqlDataSource db,
+        HttpContext http, CancellationToken ct)
     {
         var caller = CallerContextFactory.From(http);
         caller.Require("user.manage");
@@ -332,6 +332,16 @@ public static class UserEndpoints
             return refused;
         }
 
+        // History is enforced (a reset can't put the password back to a recently-used value);
+        // the minimum-age check is NOT — an admin unlocking a stuck account must not be blocked
+        // by how recently the account's own password changed (finding 4-M5).
+        var history = await users.LoadPasswordHistoryAsync(id, ct);
+        if (PasswordChangeGuard.Check(request.NewPassword, history, enforceMinimumAge: false)
+            is { } historyRejected)
+        {
+            return historyRejected;
+        }
+
         // Always forces a change: an administrator resetting a password necessarily knows
         // it, so it must not remain the user's working credential.
         await using var work = await UnitOfWork.BeginAsync(db, ct);
@@ -348,6 +358,15 @@ public static class UserEndpoints
             before: null,
             after: new { reset = true, mustChangePassword = true, sessionsEnded = true },
             organizationUnitId: null, ct);
+
+        var (ip, ua) = RequestClientMeta.From(http);
+        await AuthAuditRepository.WriteAsync(work, new AuthAuditEntry
+        {
+            EventType = AuthAuditEvents.PasswordAdminReset, Outcome = "success",
+            UserId = id, SourceAddress = ip, UserAgent = ua,
+            Detail = new { actorUserId = caller.UserId, actor = caller.Actor, sessionsEnded = true },
+        }, ct);
+
         await work.CommitAsync(ct);
 
         return TypedResults.NoContent();

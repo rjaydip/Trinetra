@@ -40,6 +40,18 @@ public static class PasswordHasher
     /// </remarks>
     public const int MinimumLength = 12;
 
+    /// <summary>
+    /// A throwaway hash to verify against when the named account does not exist, is inactive, or
+    /// is locked — so the login response time does not reveal which usernames are real
+    /// (finding 4-H4). Computed once from a random secret at first use rather than hardcoded, so
+    /// it always carries <see cref="DefaultIterations"/> and stays cost-matched as the cost is
+    /// raised. No real password ever verifies against it.
+    /// </summary>
+    public static PasswordHash Decoy => _decoy.Value;
+
+    private static readonly Lazy<PasswordHash> _decoy = new(() =>
+        Hash(Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(32))));
+
     public static PasswordHash Hash(string password, int iterations = DefaultIterations)
     {
         ArgumentException.ThrowIfNullOrEmpty(password);

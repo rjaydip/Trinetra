@@ -99,19 +99,23 @@ public static class AuthEndpoints
                 + "API-key callers get 400 — there is no password to change.");
     }
 
-    private static async Task<Results<Ok<AuthTokenResponse>, ProblemHttpResult>> LoginAsync(
+    internal static async Task<Results<Ok<AuthTokenResponse>, ProblemHttpResult>> LoginAsync(
         [FromBody] LoginRequest request,
+        HttpContext http,
         UserRepository users,
         RefreshTokenRepository refreshTokens,
+        AuthAuditRepository authAudit,
         NpgsqlDataSource db,
         JwtTokenService tokens,
         CancellationToken ct)
     {
+        var (ip, ua) = RequestClientMeta.From(http);
+
         await using var work = await UnitOfWork.BeginAsync(db, ct);
 
         var auth = await TryAuthenticateAsync(
             request.Username, request.Password, persistRefresh: true,
-            users, refreshTokens, tokens, work, ct);
+            users, refreshTokens, authAudit, tokens, ip, ua, work, ct);
 
         if (auth is not { } result)
         {
@@ -129,6 +133,13 @@ public static class AuthEndpoints
             "login", "session", result.UserId.ToString(),
             before: null, after: new { }, organizationUnitId: null, ct);
 
+        await AuthAuditRepository.WriteAsync(work, new AuthAuditEntry
+        {
+            EventType = AuthAuditEvents.LoginSuccess, Outcome = "success",
+            UserId = result.UserId, SourceAddress = ip, UserAgent = ua,
+            Jti = result.RefreshTokenId?.ToString(),
+        }, ct);
+
         await work.CommitAsync(ct);
 
         return TypedResults.Ok(ToResponse(result));
@@ -141,16 +152,21 @@ public static class AuthEndpoints
     private static async Task<Results<Ok<OAuthTokenResponse>, ProblemHttpResult>> TokenAsync(
         [FromForm] string username,
         [FromForm] string password,
+        HttpContext http,
         UserRepository users,
         RefreshTokenRepository refreshTokens,
+        AuthAuditRepository authAudit,
         NpgsqlDataSource db,
         JwtTokenService tokens,
         CancellationToken ct)
     {
+        var (ip, ua) = RequestClientMeta.From(http);
+
         await using var work = await UnitOfWork.BeginAsync(db, ct);
 
         var auth = await TryAuthenticateAsync(
-            username, password, persistRefresh: false, users, refreshTokens, tokens, work, ct);
+            username, password, persistRefresh: false, users, refreshTokens, authAudit, tokens,
+            ip, ua, work, ct);
 
         if (auth is not { } result)
         {
@@ -170,20 +186,32 @@ public static class AuthEndpoints
 
     internal static async Task<Results<Ok<AuthTokenResponse>, ProblemHttpResult>> RefreshAsync(
         [FromBody] RefreshRequest request,
+        HttpContext http,
         UserRepository users,
         RefreshTokenRepository refreshTokens,
+        AuthAuditRepository authAudit,
         NpgsqlDataSource db,
         JwtTokenService tokens,
         CancellationToken ct)
     {
-        static ProblemHttpResult Reject() => (ProblemHttpResult)TypedResults.Problem(
-            title: "Authentication failed",
-            detail: "The refresh token is invalid, expired, or has already been used.",
-            statusCode: StatusCodes.Status401Unauthorized);
+        var (ip, ua) = RequestClientMeta.From(http);
+
+        async Task<ProblemHttpResult> RejectAsync(Guid? userId)
+        {
+            await authAudit.WriteBestEffortAsync(new AuthAuditEntry
+            {
+                EventType = AuthAuditEvents.TokenRefresh, Outcome = "failure",
+                UserId = userId, SourceAddress = ip, UserAgent = ua,
+            }, ct);
+            return (ProblemHttpResult)TypedResults.Problem(
+                title: "Authentication failed",
+                detail: "The refresh token is invalid, expired, or has already been used.",
+                statusCode: StatusCodes.Status401Unauthorized);
+        }
 
         if (string.IsNullOrWhiteSpace(request.RefreshToken))
         {
-            return Reject();
+            return await RejectAsync(null);
         }
 
         var presentedHash = HashToken(request.RefreshToken);
@@ -191,7 +219,7 @@ public static class AuthEndpoints
 
         if (row is null || row.RevokedAt is not null || row.IsExpired)
         {
-            return Reject();
+            return await RejectAsync(row?.UserId);
         }
 
         // Already rotated. Inside the grace window this is a benign two-tab race — the sibling
@@ -210,10 +238,16 @@ public static class AuthEndpoints
                     before: null,
                     after: new { reason = "refresh token replay detected", allSessionsRevoked = true },
                     organizationUnitId: null, ct);
+                await AuthAuditRepository.WriteAsync(nuke, new AuthAuditEntry
+                {
+                    EventType = AuthAuditEvents.TokenReplay, Outcome = "revoked",
+                    UserId = row.UserId, SourceAddress = ip, UserAgent = ua,
+                    Jti = row.Id.ToString(), Detail = new { allSessionsRevoked = true },
+                }, ct);
                 await nuke.CommitAsync(ct);
             }
 
-            return Reject();
+            return await RejectAsync(row.UserId);
         }
 
         var user = await users.FindForLoginByIdAsync(row.UserId, ct);
@@ -221,7 +255,7 @@ public static class AuthEndpoints
             || user.Status != "ACTIVE"
             || (user.LockedUntil is { } locked && locked > DateTimeOffset.UtcNow))
         {
-            return Reject();
+            return await RejectAsync(row.UserId);
         }
 
         await using var work = await UnitOfWork.BeginAsync(db, ct);
@@ -231,6 +265,14 @@ public static class AuthEndpoints
             users, refreshTokens, tokens, work, ct);
 
         await refreshTokens.MarkRotatedAsync(row.Id, result.RefreshTokenId!.Value, work, ct);
+
+        await AuthAuditRepository.WriteAsync(work, new AuthAuditEntry
+        {
+            EventType = AuthAuditEvents.TokenRefresh, Outcome = "success",
+            UserId = user.Id, SourceAddress = ip, UserAgent = ua,
+            Jti = result.RefreshTokenId?.ToString(),
+        }, ct);
+
         await work.CommitAsync(ct);
 
         return TypedResults.Ok(ToResponse(result));
@@ -240,6 +282,7 @@ public static class AuthEndpoints
         HttpContext http,
         UserRepository users,
         RefreshTokenRepository refreshTokens,
+        AuthAuditRepository authAudit,
         NpgsqlDataSource db,
         CancellationToken ct)
     {
@@ -253,11 +296,19 @@ public static class AuthEndpoints
                 statusCode: StatusCodes.Status400BadRequest);
         }
 
+        var (ip, ua) = RequestClientMeta.From(http);
+
         await using var work = await UnitOfWork.BeginAsync(db, ct);
 
         await SessionRevocation.EndAllAsync(users, refreshTokens, userId, work, ct);
         await work.AuditAsync(caller, "logout", "session", userId.ToString(),
             before: null, after: new { allSessionsEnded = true }, organizationUnitId: null, ct);
+        await AuthAuditRepository.WriteAsync(work, new AuthAuditEntry
+        {
+            EventType = AuthAuditEvents.Logout, Outcome = "success",
+            UserId = userId, SourceAddress = ip, UserAgent = ua,
+            Detail = new { allSessionsEnded = true },
+        }, ct);
 
         await work.CommitAsync(ct);
 
@@ -269,6 +320,7 @@ public static class AuthEndpoints
         HttpContext http,
         UserRepository users,
         RefreshTokenRepository refreshTokens,
+        AuthAuditRepository authAudit,
         NpgsqlDataSource db,
         JwtTokenService tokens,
         CancellationToken ct)
@@ -284,6 +336,7 @@ public static class AuthEndpoints
                 statusCode: StatusCodes.Status400BadRequest);
         }
 
+        var (ip, ua) = RequestClientMeta.From(http);
         var user = await users.FindForLoginByIdAsync(userId, ct);
 
         // Status/lockout re-check FIRST, folded into the same generic 401 as a wrong password: a
@@ -295,6 +348,11 @@ public static class AuthEndpoints
             || (user.LockedUntil is { } locked && locked > DateTimeOffset.UtcNow)
             || !PasswordHasher.Verify(request.CurrentPassword, user.Password))
         {
+            await authAudit.WriteBestEffortAsync(new AuthAuditEntry
+            {
+                EventType = AuthAuditEvents.PasswordChange, Outcome = "failure",
+                UserId = userId, SourceAddress = ip, UserAgent = ua,
+            }, ct);
             return TypedResults.Problem(
                 title: "Authentication failed",
                 detail: "The current password is incorrect.",
@@ -318,6 +376,17 @@ public static class AuthEndpoints
                 statusCode: StatusCodes.Status400BadRequest);
         }
 
+        // Reuse + minimum-age (finding 4-M5). History always; the age check is skipped when the
+        // user is completing a forced change (an admin reset stamps a history row at now(), so
+        // enforcing age here would 400 the mandatory follow-up and strand the user).
+        var history = await users.LoadPasswordHistoryAsync(userId, ct);
+        if (PasswordChangeGuard.Check(
+                request.NewPassword, history, enforceMinimumAge: !user.MustChangePassword)
+            is { } rejected)
+        {
+            return rejected;
+        }
+
         await using var work = await UnitOfWork.BeginAsync(db, ct);
 
         await users.SetPasswordAsync(
@@ -332,6 +401,12 @@ public static class AuthEndpoints
         await work.AuditAsync(caller, "update", "user_password", userId.ToString(),
             before: null, after: new { changed = true, otherSessionsEnded = true },
             organizationUnitId: null, ct);
+        await AuthAuditRepository.WriteAsync(work, new AuthAuditEntry
+        {
+            EventType = AuthAuditEvents.PasswordChange, Outcome = "success",
+            UserId = userId, SourceAddress = ip, UserAgent = ua,
+            Detail = new { otherSessionsEnded = true },
+        }, ct);
 
         var result = await IssuePairAsync(
             userId, user.Username, mustChangePassword: false, persistRefresh: true,
@@ -364,30 +439,68 @@ public static class AuthEndpoints
     /// </summary>
     private static async Task<AuthResult?> TryAuthenticateAsync(
         string username, string password, bool persistRefresh,
-        UserRepository users, RefreshTokenRepository refreshTokens, JwtTokenService tokens,
+        UserRepository users, RefreshTokenRepository refreshTokens, AuthAuditRepository authAudit,
+        JwtTokenService tokens, string? ip, string? ua,
         UnitOfWork work, CancellationToken ct)
     {
         var user = await users.FindForLoginAsync(username, ct);
 
+        // Run one full PBKDF2 verify unconditionally — against the real hash if the account
+        // exists, against a fixed decoy otherwise — BEFORE the account-state checks below.
+        // Skipping it for a missing / inactive / locked account is what betrays which usernames
+        // exist (finding 4-H4), and that shortcut passes every functional test.
+        var passwordMatches = PasswordHasher.Verify(password, user?.Password ?? PasswordHasher.Decoy);
+
         if (user is null
             || user.Status != "ACTIVE"
             || (user.LockedUntil is { } locked && locked > DateTimeOffset.UtcNow)
-            || !PasswordHasher.Verify(password, user.Password))
+            || !passwordMatches)
         {
             if (user is not null)
             {
-                await users.RecordFailedLoginAsync(user.Id, ct);
+                var lockedNow = await users.RecordFailedLoginAsync(user.Id, ct);
+                await authAudit.WriteBestEffortAsync(new AuthAuditEntry
+                {
+                    EventType = AuthAuditEvents.LoginFailure, Outcome = "failure",
+                    UserId = user.Id, SourceAddress = ip, UserAgent = ua,
+                }, ct);
+                if (lockedNow)
+                {
+                    await authAudit.WriteBestEffortAsync(new AuthAuditEntry
+                    {
+                        EventType = AuthAuditEvents.Lockout, Outcome = "lockout",
+                        UserId = user.Id, SourceAddress = ip, UserAgent = ua,
+                        Detail = new { lockedMinutes = 15 },
+                    }, ct);
+                }
+            }
+            else
+            {
+                // Coarse: no user_id, so the trail cannot say whether the name was real.
+                await authAudit.WriteBestEffortAsync(new AuthAuditEntry
+                {
+                    EventType = AuthAuditEvents.LoginFailure, Outcome = "failure",
+                    PresentedUsername = username, SourceAddress = ip, UserAgent = ua,
+                }, ct);
             }
 
             return null;
         }
 
         // The cost can be raised over time; an old hash verifies at its own cost and is upgraded
-        // here, on the one occasion the plaintext is legitimately in hand.
+        // here, on the one occasion the plaintext is legitimately in hand. Same password, so no
+        // history row — RehashPasswordAsync, not SetPasswordAsync.
         if (PasswordHasher.NeedsRehash(user.Password))
         {
-            await users.SetPasswordAsync(
-                user.Id, PasswordHasher.Hash(password), user.MustChangePassword, work, ct);
+            await users.RehashPasswordAsync(
+                user.Id, PasswordHasher.Hash(password), work, ct);
+
+            await AuthAuditRepository.WriteAsync(work, new AuthAuditEntry
+            {
+                EventType = AuthAuditEvents.PasswordRehash, Outcome = "success",
+                UserId = user.Id, SourceAddress = ip, UserAgent = ua,
+                Detail = new { reason = "cost_upgrade" },
+            }, ct);
         }
 
         await users.RecordSuccessfulLoginAsync(user.Id, ct);

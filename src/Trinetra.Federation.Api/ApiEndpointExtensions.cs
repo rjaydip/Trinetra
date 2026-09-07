@@ -35,6 +35,7 @@ internal static class ApiEndpointExtensions
         app.MapWatchlistEndpoints();
         app.MapWorkerHealthEndpoints();
         app.MapApiKeyEndpoints();
+        app.MapAuthAuditEndpoints();
 
         app.ValidatePermissionCoverage(
             app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Trinetra.Permissions"));
