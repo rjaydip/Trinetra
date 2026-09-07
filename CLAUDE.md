@@ -165,7 +165,12 @@ These are enforced by review, and most are enforced by the type system or schema
     required `UnitOfWork`; audit rows are writable only through it. There is no path that changes
     something without recording it, or that records it separately.
 11. **Every scoped repository method takes a required `CallerContext`.** A query that omits
-    scoping should fail to compile, not fail review.
+    scoping should fail to compile, not fail review. One documented exception: a fetch keyed on
+    one principal's own primary key — the user/group itself and its sub-collections
+    (`/users/{id}/groups`, `/{id}/permissions`) — is authority-checked in the endpoint via a
+    shared guard (`UserAuthorityGuard` / `AccessGroupRepository.IsVisibleToAsync`). Every
+    *cross-principal* list (`ListAsync`, `ListMembersAsync`) still takes the context and filters
+    in SQL. See `docs/AUTHORIZATION.md` §3.
 12. **Organization and geography are independent scope dimensions**, ANDed. Never reuse one
     dimension's "unscoped" answer for the other. Unscoped is tracked per permission, never as a
     single flag.

@@ -52,17 +52,23 @@ public sealed class ApiKeyLifecycleTests : IClassFixture<PostgresFixture>, IAsyn
 
     private ApiKeyRepository Repo => new(_fixture.DataSource);
 
+    // Unscoped on both dimensions for the api-key permissions: the REPORTING group carries no
+    // scope, so it is estate-wide and only an unscoped caller may see or revoke a key bound to
+    // it. This suite exercises lifecycle mechanics; the scoped-caller filtering is
+    // UnscopedReadScopeTests.
     private static CallerContext AdminCaller => new()
     {
         UserId = Admin,
         Actor = "admin2",
-        Permissions = new HashSet<string>(StringComparer.Ordinal) { "apikey.manage" },
+        Permissions = new HashSet<string>(StringComparer.Ordinal) { "apikey.read", "apikey.manage" },
+        UnscopedPermissions = new HashSet<string>(StringComparer.Ordinal) { "apikey.read", "apikey.manage" },
+        UnscopedGeography = new HashSet<string>(StringComparer.Ordinal) { "apikey.read", "apikey.manage" },
     };
 
     [Fact]
     public async Task List_ReturnsKeysNewestFirst_WithGroupCode_AndNoHash()
     {
-        var keys = await Repo.ListAsync(CancellationToken.None);
+        var keys = await Repo.ListAsync(AdminCaller, CancellationToken.None);
 
         keys.Count.ShouldBe(2);
         keys[0].KeyId.ShouldBe("ak_live");

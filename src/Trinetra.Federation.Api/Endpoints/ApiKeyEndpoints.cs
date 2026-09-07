@@ -26,9 +26,14 @@ public static class ApiKeyEndpoints
           .RequirePermission("apikey.read")
           .WithSummary("List provisioned API keys")
           .WithDescription(
-              "Every API key, newest first: its access group, expiry, last-used time and whether "
-              + "it has been revoked. **Never returns key material** — the raw value exists only "
-              + "in the creation response, and only its SHA-256 is stored.");
+              "API keys you may see, newest first: each with its access group, expiry, last-used "
+              + "time and whether it has been revoked. **Never returns key material** — the raw "
+              + "value exists only in the creation response, and only its SHA-256 is stored.\n\n"
+              + "A key is listed only if you could have provisioned it: its access group is "
+              + "within your reach for `apikey.read` (the same rule that governs granting the "
+              + "group). A scoped administrator therefore never sees a key bound to the "
+              + "platform-admin group or to another department's group. An unscoped administrator "
+              + "sees every key.");
 
         group.MapPost("/", CreateAsync)
           .RequirePermission("apikey.manage")
@@ -47,14 +52,20 @@ public static class ApiKeyEndpoints
               "Takes effect on the key's next request: it resolves to no groups and therefore "
               + "no permissions, and authentication then fails as a uniform `401 Invalid API "
               + "key` — indistinguishable from an unknown or expired key.\n\n"
-              + "Idempotent: revoking an already-revoked key still returns `204`. The row is "
-              + "kept for audit and is never deleted.");
+              + "You may revoke a key only if you could have provisioned it — its access group is "
+              + "within your reach for `apikey.manage`. A key outside your reach returns `404`, "
+              + "identical to an unknown id and left untouched, so `apikey.manage` can no longer "
+              + "kill another department's integration key or the platform-admin key.\n\n"
+              + "Idempotent: revoking an already-revoked key you can reach still returns `204`. "
+              + "The row is kept for audit and is never deleted.");
     }
 
     private static async Task<Ok<IReadOnlyList<ApiKeyResponse>>> ListAsync(
-        ApiKeyRepository repo, CancellationToken ct)
+        ApiKeyRepository repo, HttpContext http, CancellationToken ct)
     {
-        var keys = await repo.ListAsync(ct);
+        var caller = CallerContextFactory.From(http);
+        caller.Require("apikey.read");
+        var keys = await repo.ListAsync(caller, ct);
 
         return TypedResults.Ok<IReadOnlyList<ApiKeyResponse>>(
         [

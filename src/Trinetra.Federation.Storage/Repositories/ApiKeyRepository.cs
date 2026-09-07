@@ -140,23 +140,33 @@ public sealed class ApiKeyRepository
             work.Transaction, cancellationToken: ct));
     }
 
-    /// <summary>Every provisioned key, newest first, with no secret material.</summary>
+    /// <summary>
+    /// Provisioned keys the caller may see, newest first, with no secret material.
+    /// </summary>
     /// <remarks>
-    /// Not scoped: an API key is not an organization- or geography-scoped entity, the same as an
-    /// access group. The endpoint gates this on <c>apikey.read</c>. The column list is explicit
-    /// and never includes <c>key_hash</c>.
+    /// A key has no scope of its own, but it acts through an access group that does. So a key is
+    /// visible to exactly the callers who could have provisioned it: the group passes the same
+    /// reachability test the escalation guard applies (<c>AccessGroupRepository.GroupVisiblePredicate</c>),
+    /// keyed on <c>apikey.read</c>. A scoped administrator therefore never sees a key bound to
+    /// PLATFORM-ADMINS or to another department's group — which is what made the unfiltered list
+    /// a target map for cross-department key revocation. An unscoped caller sees every key. The
+    /// column list is explicit and never includes <c>key_hash</c>.
     /// </remarks>
-    public async Task<IReadOnlyList<ApiKeySummary>> ListAsync(CancellationToken ct)
+    public async Task<IReadOnlyList<ApiKeySummary>> ListAsync(CallerContext caller, CancellationToken ct)
     {
+        ArgumentNullException.ThrowIfNull(caller);
+
         await using var c = await _dataSource.OpenConnectionAsync(ct);
 
-        var rows = await c.QueryAsync<ApiKeySummary>(new CommandDefinition("""
+        var rows = await c.QueryAsync<ApiKeySummary>(new CommandDefinition($"""
             SELECT k.id, k.key_id, k.display_name, k.group_id, ag.code AS group_code,
                    k.created_at, k.expires_at, k.last_used_at, k.revoked_at
             FROM federation.api_key k
             JOIN federation.access_groups ag ON ag.id = k.group_id
+            WHERE {AccessGroupRepository.GroupVisiblePredicate}
             ORDER BY k.created_at DESC;
-            """, cancellationToken: ct));
+            """, AccessGroupRepository.GroupVisibilityParams(caller, "apikey.read"),
+            cancellationToken: ct));
 
         return rows.ToList();
     }
@@ -166,9 +176,19 @@ public sealed class ApiKeyRepository
     /// <see cref="RevokeOutcome.AlreadyRevoked"/> and changes nothing.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// One statement: the existence check, the conditional update and the pre-revocation values
     /// for the audit row come back together. Takes the <see cref="UnitOfWork"/> because the
     /// caller pairs this with an audit write in the same transaction.
+    /// </para>
+    /// <para>
+    /// Authority-scoped: the <c>target</c> CTE carries the same visibility predicate as
+    /// <see cref="ListAsync"/> (keyed on <c>apikey.manage</c>, the permission being exercised),
+    /// and the <c>upd</c> CTE only fires when <c>target</c> is non-empty. A key whose group is
+    /// outside the caller's reach comes back as <see cref="RevokeOutcome.NotFound"/> — identical
+    /// to an unknown id, and left untouched — so <c>apikey.manage</c> can no longer revoke a key
+    /// in another department or the platform-admin group.
+    /// </para>
     /// </remarks>
     public static async Task<ApiKeyRevocation> RevokeAsync(
         Guid id, CallerContext caller, UnitOfWork work, CancellationToken ct)
@@ -176,16 +196,21 @@ public sealed class ApiKeyRepository
         ArgumentNullException.ThrowIfNull(caller);
         ArgumentNullException.ThrowIfNull(work);
 
-        var row = await work.Connection.QuerySingleOrDefaultAsync<RevokeRow>(new CommandDefinition("""
+        var p = AccessGroupRepository.GroupVisibilityParams(caller, "apikey.manage");
+        p.Add("id", id);
+        p.Add("ActorId", caller.UserId);
+
+        var row = await work.Connection.QuerySingleOrDefaultAsync<RevokeRow>(new CommandDefinition($"""
             WITH target AS (
-                SELECT id, revoked_at, display_name, group_id
-                FROM federation.api_key
-                WHERE id = @id
+                SELECT k.id, k.revoked_at, k.display_name, k.group_id
+                FROM federation.api_key k
+                JOIN federation.access_groups ag ON ag.id = k.group_id
+                WHERE k.id = @id AND ({AccessGroupRepository.GroupVisiblePredicate})
             ),
             upd AS (
                 UPDATE federation.api_key
                 SET revoked_at = now(), revoked_by = @ActorId
-                WHERE id = @id AND revoked_at IS NULL
+                WHERE id = @id AND revoked_at IS NULL AND EXISTS (SELECT 1 FROM target)
                 RETURNING id
             )
             SELECT t.display_name              AS display_name,
@@ -193,7 +218,7 @@ public sealed class ApiKeyRepository
                    t.revoked_at                AS prior_revoked_at,
                    EXISTS (SELECT 1 FROM upd)  AS transitioned
             FROM target t;
-            """, new { id, ActorId = caller.UserId }, work.Transaction, cancellationToken: ct));
+            """, p, work.Transaction, cancellationToken: ct));
 
         if (row is null)
         {

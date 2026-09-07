@@ -34,6 +34,64 @@ public sealed class AccessGroupRepository
 
     public AccessGroupRepository(NpgsqlDataSource dataSource) => _dataSource = dataSource;
 
+    /// <summary>
+    /// A boolean SQL fragment, true when the access group aliased <c>ag</c> is visible to the
+    /// caller exercising the permission in <c>@VisPermission</c>.
+    /// </summary>
+    /// <remarks>
+    /// This is the read-side mirror of <see cref="GroupScopesWithinReachAsync"/> +
+    /// <see cref="GroupGeographyScopesWithinReachAsync"/> — the same rule the escalation
+    /// chokepoint applies before <i>conferring</i> a group: per dimension the caller is scoped
+    /// on, the group must declare a scope of that type and every such scope must be within the
+    /// caller's authorized set. A dimension-unrestricted group is therefore visible only to a
+    /// caller unscoped on that dimension, so PLATFORM-ADMINS (no scopes) is invisible to every
+    /// scoped administrator. Parameters: <c>@UnscopedOrg</c>, <c>@UnscopedGeo</c>, <c>@UserId</c>,
+    /// <c>@ApiKeyId</c>, <c>@VisPermission</c>. Not user input — a fixed fragment, interpolated
+    /// the same way <c>CameraRepository.Scope</c> is.
+    /// </remarks>
+    internal const string GroupVisiblePredicate = """
+        (@UnscopedOrg OR (
+            EXISTS (SELECT 1 FROM federation.group_scopes gs
+                    JOIN federation.scopes s ON s.id = gs.scope_id
+                    WHERE gs.group_id = ag.id AND s.scope_type = 'ORGANIZATION')
+            AND NOT EXISTS (
+                SELECT 1 FROM federation.group_scopes gs
+                JOIN federation.scopes s ON s.id = gs.scope_id
+                WHERE gs.group_id = ag.id AND s.scope_type = 'ORGANIZATION'
+                  AND s.organization_unit_id <> ALL (
+                      SELECT organization_unit_id FROM federation.authorized_org_units(
+                          p_user_id => @UserId, p_api_key_id => @ApiKeyId,
+                          p_permission => @VisPermission)))))
+        AND (@UnscopedGeo OR (
+            EXISTS (SELECT 1 FROM federation.group_scopes gs
+                    JOIN federation.scopes s ON s.id = gs.scope_id
+                    WHERE gs.group_id = ag.id AND s.scope_type = 'GEOGRAPHY')
+            AND NOT EXISTS (
+                SELECT 1 FROM federation.group_scopes gs
+                JOIN federation.scopes s ON s.id = gs.scope_id
+                WHERE gs.group_id = ag.id AND s.scope_type = 'GEOGRAPHY'
+                  AND s.geographic_area_id <> ALL (
+                      SELECT geographic_area_id FROM federation.authorized_geographic_areas(
+                          p_user_id => @UserId, p_api_key_id => @ApiKeyId,
+                          p_permission => @VisPermission)))))
+        """;
+
+    /// <summary>
+    /// The parameters <see cref="GroupVisiblePredicate"/> needs, for <paramref name="caller"/>
+    /// exercising <paramref name="permission"/>. Returned as <see cref="DynamicParameters"/> so a
+    /// caller can add its own (e.g. <c>groupId</c>) before executing.
+    /// </summary>
+    internal static DynamicParameters GroupVisibilityParams(CallerContext caller, string permission)
+    {
+        var p = new DynamicParameters();
+        p.Add("UnscopedOrg", caller.IsUnscopedFor(permission));
+        p.Add("UnscopedGeo", caller.IsUnscopedForGeography(permission));
+        p.Add("UserId", caller.UserId);
+        p.Add("ApiKeyId", caller.ApiKeyId);
+        p.Add("VisPermission", permission);
+        return p;
+    }
+
     // ---- Reference data ----------------------------------------------------
 
     public async Task<IReadOnlyList<RoleSummary>> ListRolesAsync(CancellationToken ct)
@@ -95,25 +153,68 @@ public sealed class AccessGroupRepository
     /// The rule this encodes: a repository method must never call another repository method
     /// while holding a connection.
     /// </remarks>
-    public Task<IReadOnlyList<AccessGroupDetail>> ListAsync(CancellationToken ct) =>
-        LoadAsync(groupId: null, ct);
+    /// <summary>
+    /// Every access group <paramref name="caller"/> may see, with role, permissions and scopes
+    /// resolved. Filtered by <see cref="GroupVisiblePredicate"/> keyed on <c>group.read</c>: a
+    /// scoped caller sees only groups it could itself confer, so a dimension-unrestricted group
+    /// (PLATFORM-ADMINS and any other) is hidden from every scoped administrator.
+    /// </summary>
+    public Task<IReadOnlyList<AccessGroupDetail>> ListAsync(CallerContext caller, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(caller);
+        return LoadAsync(groupId: null, caller, ct);
+    }
 
+    /// <summary>
+    /// One group by id, unfiltered. The caller-visibility gate for a single group is
+    /// <see cref="IsVisibleToAsync"/>, run by the endpoint before this — <see cref="GetAsync"/>
+    /// itself is also called from the write-side guards, which must load a group precisely so
+    /// they can then reject conferring it.
+    /// </summary>
     public async Task<AccessGroupDetail?> GetAsync(Guid id, CancellationToken ct)
     {
-        var groups = await LoadAsync(id, ct);
+        var groups = await LoadAsync(id, filterCaller: null, ct);
         return groups.Count == 0 ? null : groups[0];
     }
 
-    private async Task<IReadOnlyList<AccessGroupDetail>> LoadAsync(
-        Guid? groupId, CancellationToken ct)
+    /// <summary>
+    /// Whether <paramref name="caller"/> may see group <paramref name="groupId"/> while
+    /// exercising <paramref name="permission"/> — the single-resource counterpart of the filter
+    /// <see cref="ListAsync"/> applies. Used by the endpoint to answer <c>GET /{id}</c> and
+    /// <c>GET /{id}/members</c> with a 404 (never a 403) for an out-of-reach group, so a hidden
+    /// group is indistinguishable from one that does not exist.
+    /// </summary>
+    public async Task<bool> IsVisibleToAsync(
+        Guid groupId, CallerContext caller, string permission, CancellationToken ct)
     {
-        const string sql = """
+        ArgumentNullException.ThrowIfNull(caller);
+
+        var p = GroupVisibilityParams(caller, permission);
+        p.Add("groupId", groupId);
+
+        await using var c = await _dataSource.OpenConnectionAsync(ct);
+        return await c.ExecuteScalarAsync<bool>(new CommandDefinition($"""
+            SELECT EXISTS (
+                SELECT 1 FROM federation.access_groups ag
+                WHERE ag.id = @groupId AND ({GroupVisiblePredicate}));
+            """, p, cancellationToken: ct));
+    }
+
+    private async Task<IReadOnlyList<AccessGroupDetail>> LoadAsync(
+        Guid? groupId, CallerContext? filterCaller, CancellationToken ct)
+    {
+        // The list path filters to what the caller may see; the by-id path does not (its gate is
+        // IsVisibleToAsync at the endpoint, and the write guards must see every group).
+        var visibleClause = filterCaller is null ? "" : $"AND ({GroupVisiblePredicate})";
+
+        var sql = $"""
             SELECT ag.id, ag.code, ag.name, ag.description, ag.status, r.code AS role_code,
                    (SELECT count(*) FROM federation.user_groups ug
                      WHERE ug.group_id = ag.id AND ug.status = 'ACTIVE') AS member_count
             FROM federation.access_groups ag
             JOIN federation.roles r ON r.id = ag.role_id
             WHERE (@groupId::uuid IS NULL OR ag.id = @groupId)
+            {visibleClause}
             ORDER BY ag.code;
 
             SELECT ag.id AS group_id, rp.permission_code
@@ -128,9 +229,21 @@ public sealed class AccessGroupRepository
             WHERE (@groupId::uuid IS NULL OR gs.group_id = @groupId);
             """;
 
+        DynamicParameters p;
+        if (filterCaller is null)
+        {
+            p = new DynamicParameters();
+        }
+        else
+        {
+            p = GroupVisibilityParams(filterCaller, "group.read");
+        }
+
+        p.Add("groupId", groupId);
+
         await using var c = await _dataSource.OpenConnectionAsync(ct);
         await using var reader = await c.QueryMultipleAsync(new CommandDefinition(
-            sql, new { groupId }, cancellationToken: ct));
+            sql, p, cancellationToken: ct));
 
         var groups = (await reader.ReadAsync<GroupRow>()).ToList();
         var permissions = (await reader.ReadAsync<(Guid GroupId, string PermissionCode)>())
@@ -171,19 +284,10 @@ public sealed class AccessGroupRepository
 
     // ---- Scopes ------------------------------------------------------------
 
-    public async Task<IReadOnlyList<ScopeSummary>> ListScopesAsync(
-        Guid groupId, CancellationToken ct)
-    {
-        await using var c = await _dataSource.OpenConnectionAsync(ct);
-        var rows = await c.QueryAsync<ScopeSummary>(new CommandDefinition("""
-            SELECT s.id, s.scope_type, s.organization_unit_id, s.geographic_area_id,
-                   s.resource_type, s.resource_id, s.description
-            FROM federation.group_scopes gs
-            JOIN federation.scopes s ON s.id = gs.scope_id
-            WHERE gs.group_id = @groupId;
-            """, new { groupId }, cancellationToken: ct));
-        return rows.ToList();
-    }
+    // A group's scopes are returned as part of GetAsync's AccessGroupDetail (which is behind
+    // IsVisibleToAsync). There is deliberately no standalone unscoped ListScopesAsync — it would
+    // be a row-returning query with no CallerContext, i.e. an invariant-11 hole waiting for a
+    // caller.
 
     /// <summary>Creates a scope and attaches it to a group.</summary>
     /// <remarks>
@@ -228,17 +332,33 @@ public sealed class AccessGroupRepository
 
     // ---- Membership --------------------------------------------------------
 
+    /// <summary>
+    /// A group's active members, filtered to the accounts <paramref name="caller"/> could also
+    /// see in the user directory (<see cref="UserRepository.VisibleForUserReadPredicate"/>).
+    /// </summary>
+    /// <remarks>
+    /// The endpoint gates the group itself through <see cref="IsVisibleToAsync"/> first; this
+    /// second filter stops a caller who legitimately sees a multi-department group from reading
+    /// the full roster of members in departments outside their reach. An unscoped caller sees
+    /// every member.
+    /// </remarks>
     public async Task<IReadOnlyList<(Guid UserId, string Username, DateTimeOffset? ExpiresAt)>>
-        ListMembersAsync(Guid groupId, CancellationToken ct)
+        ListMembersAsync(Guid groupId, CallerContext caller, CancellationToken ct)
     {
+        ArgumentNullException.ThrowIfNull(caller);
+
+        var p = UserRepository.UserVisibilityParams(caller);
+        p.Add("groupId", groupId);
+
         await using var c = await _dataSource.OpenConnectionAsync(ct);
-        var rows = await c.QueryAsync<(Guid, string, DateTimeOffset?)>(new CommandDefinition("""
-            SELECT u.id, u.username, ug.expires_at
+        var rows = await c.QueryAsync<(Guid, string, DateTimeOffset?)>(new CommandDefinition($"""
+            SELECT pu.id, pu.username, ug.expires_at
             FROM federation.user_groups ug
-            JOIN federation.platform_users u ON u.id = ug.user_id
+            JOIN federation.platform_users pu ON pu.id = ug.user_id
             WHERE ug.group_id = @groupId AND ug.status = 'ACTIVE'
-            ORDER BY u.username;
-            """, new { groupId }, cancellationToken: ct));
+              AND {UserRepository.VisibleForUserReadPredicate}
+            ORDER BY pu.username;
+            """, p, cancellationToken: ct));
         return rows.ToList();
     }
 

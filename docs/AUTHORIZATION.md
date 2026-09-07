@@ -133,6 +133,27 @@ What it adds is a declaration: the permission becomes part of the route's contra
 line buried in a lambda. The API reports coverage at startup, so a route that authenticates and
 checks nothing is visible rather than assumed.
 
+**One narrow exception to the compile-time rule.** Users and access groups are not
+organization- or geography-scoped *entities* — a user belongs to no unit, a group *has* scopes
+rather than sitting under one — so the `CameraRepository`-style `WHERE` predicate does not port
+to a fetch of a single one. For a fetch keyed on one principal's own primary key — the
+user/group itself (`GET /users/{id}`, `GET /access-groups/{id}`) and its sub-collections
+(`/users/{id}/groups`, `/{id}/permissions`, `/access-groups/{id}/members`) — the authority check
+runs in the endpoint through one shared, un-bypassable guard (`UserAuthorityGuard`,
+`AccessGroupRepository.IsVisibleToAsync`), the same pattern the *write* paths on these entities
+already use (`UpdateAsync`, `RevokeMembershipAsync` take no `CallerContext` either). Every
+*cross-principal* list — `ListAsync` for users, groups and API keys, and `ListMembersAsync` —
+still takes a required `CallerContext` and filters in SQL, so the surface that can leak many
+principals' rows at once stays under the compile-time rule.
+
+The list filter and the single-`GET` guard apply the **same** reachability rule for a given
+entity, so a row that appears in a list never 404s on its own detail route. For users
+specifically, both check organizational reach only (the target holds nothing through an
+estate-wide group, and every unit it reaches is one the caller reaches); the extra
+"holds no permission the caller lacks" check is a *write*-path escalation guard
+(`CanAdministerAsync` condition 1) and does not gate reads. User visibility is organization-only
+throughout; groups and keys check both dimensions — see §7.
+
 ---
 
 ## 4. The SQL surface
@@ -182,7 +203,14 @@ Some things are refused on purpose, and look like gaps until you know why.
 | Widening a group beyond the caller's own reach | Escalation by another route: granting access to a department they cannot themselves see |
 
 Out-of-scope reads return **404, not 403**. Distinguishing "does not exist" from "exists but is
-not yours" tells an unauthorised caller which ids are real.
+not yours" tells an unauthorised caller which ids are real. This holds for the user, access-group
+and API-key surfaces too, even though those are not org/geo entities: a scoped administrator sees
+only the users they may administer, only the groups they could grant (so a group unrestricted on
+a dimension the caller is scoped on — the platform-admin group included — is invisible), and only
+the API keys bound to such a group. A single-resource fetch outside that reach is a 404; a list
+simply omits the rows; and `DELETE /api/v1/api-keys/{id}` on an unreachable key is a 404 that
+changes nothing, so `apikey.manage` can no longer revoke another department's integration key.
+The member list of a visible group is filtered the same way the user directory is.
 
 ---
 
@@ -233,6 +261,16 @@ The first is a choice; the two after it are gaps.
   revocation path at all — deactivation, group removal and password reset took up to 8h to bite.
   `token_version` + a per-request check closed that; see §1. Still deferred: MFA, an asymmetric
   signing-key ring, and a per-device session list (logout is all-or-nothing).
+- **User, access-group and API-key reads were unscoped; now fixed (PR5).** Every `user.read` /
+  `group.read` / `apikey.read` holder could list every account, every group (the platform-admin
+  roster included) and every service account's privilege level estate-wide, and any
+  `apikey.manage` holder could revoke any key. The read repositories took no `CallerContext` at
+  all. They now filter by administrative reach — reusing the escalation-guard rule so "what a
+  scoped admin can see" equals "what they could grant" — with single-row fetches guarded in the
+  endpoint (see §3). One asymmetry remains, tracked for a later pass: user visibility is
+  organization-scoped only, matching `CanAdministerAsync`; groups and keys check both dimensions.
+  Operational effect once deployed: a scoped administrator will stop seeing rows they saw before
+  the change — a wider group or an unscoped read grant is the remedy.
 - **Event, detection and VMS-target geographic scoping was incomplete; now fixed.** Until the
   "geography-scope wave" fix, `federation_event`, `detection_event` and `connector_target` were
   scoped on organization only — worse, one read path (`ConnectorTargetRepository.GetAsync`) let

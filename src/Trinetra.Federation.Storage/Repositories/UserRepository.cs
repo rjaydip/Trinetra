@@ -36,6 +36,52 @@ public sealed class UserRepository
 
     public UserRepository(NpgsqlDataSource dataSource) => _dataSource = dataSource;
 
+    /// <summary>
+    /// A boolean SQL fragment, true when the platform user aliased <c>pu</c> is visible to a
+    /// caller exercising <c>user.read</c>. Same rule as <see cref="CanAdministerAsync"/>
+    /// conditions 2 and 3 (organization dimension only), plus the system account excluded.
+    /// Parameters: <c>@UserVisUnscoped</c>, <c>@UserVisUserId</c>, <c>@UserVisApiKeyId</c>.
+    /// Not user input — a fixed fragment, interpolated the way <c>CameraRepository.Scope</c> is;
+    /// reused by <c>AccessGroupRepository.ListMembersAsync</c> so a group's roster is filtered
+    /// the same way the user directory is.
+    /// </summary>
+    public const string VisibleForUserReadPredicate = """
+        (@UserVisUnscoped OR (
+            NOT pu.is_system
+            AND NOT EXISTS (
+                SELECT 1
+                FROM federation.user_groups ug
+                JOIN federation.access_groups ag ON ag.id = ug.group_id AND ag.status = 'ACTIVE'
+                WHERE ug.user_id = pu.id AND ug.status = 'ACTIVE'
+                  AND (ug.expires_at IS NULL OR ug.expires_at > now())
+                  AND NOT EXISTS (
+                      SELECT 1 FROM federation.group_scopes gs
+                      JOIN federation.scopes s ON s.id = gs.scope_id
+                      WHERE gs.group_id = ag.id AND s.scope_type = 'ORGANIZATION'))
+            AND NOT EXISTS (
+                SELECT 1
+                FROM federation.user_effective_access ea
+                WHERE ea.user_id = pu.id
+                  AND ea.scope_type = 'ORGANIZATION'
+                  AND ea.organization_unit_id IS NOT NULL
+                  AND ea.organization_unit_id <> ALL (
+                      SELECT organization_unit_id
+                      FROM federation.authorized_org_units(
+                               p_user_id => @UserVisUserId, p_api_key_id => @UserVisApiKeyId,
+                               p_permission => 'user.read')))))
+        """;
+
+    /// <summary>Parameters <see cref="VisibleForUserReadPredicate"/> needs for <paramref name="caller"/>.</summary>
+    public static DynamicParameters UserVisibilityParams(CallerContext caller)
+    {
+        ArgumentNullException.ThrowIfNull(caller);
+        var p = new DynamicParameters();
+        p.Add("UserVisUnscoped", caller.IsUnscopedFor("user.read"));
+        p.Add("UserVisUserId", caller.UserId);
+        p.Add("UserVisApiKeyId", caller.ApiKeyId);
+        return p;
+    }
+
     /// <summary>Loads credentials by id, for a caller already authenticated.</summary>
     /// <remarks>
     /// Separate from the username lookup on purpose. A password change must resolve the user
@@ -197,14 +243,38 @@ public sealed class UserRepository
             """, new { username }, cancellationToken: ct));
     }
 
-    public async Task<IReadOnlyList<PlatformUser>> ListAsync(CancellationToken ct)
+    /// <summary>
+    /// The user directory, filtered to the accounts <paramref name="caller"/> may administer.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A caller unscoped for <c>user.read</c> sees every account. A scoped caller sees only the
+    /// accounts that pass the same reachability test as <see cref="CanAdministerAsync"/>
+    /// conditions 2 and 3 — the target holds nothing through an organization-unrestricted group,
+    /// and every organization unit it reaches is one the caller administers — with the seeded
+    /// system account excluded outright. The permission-subset test (condition 1) is deliberately
+    /// not applied here: visibility tracks organizational reach, not whether the caller
+    /// out-ranks the target on every permission. An account with no groups grants nothing and is
+    /// visible to any <c>user.read</c> holder, matching <c>CanAdministerAsync</c>.
+    /// </para>
+    /// <para>
+    /// Organization dimension only. User authority is org-scoped throughout
+    /// (<see cref="CanAdministerAsync"/>); adding the geography dimension to user visibility is
+    /// tracked separately as the F6 geography-asymmetry item.
+    /// </para>
+    /// </remarks>
+    public async Task<IReadOnlyList<PlatformUser>> ListAsync(CallerContext caller, CancellationToken ct)
     {
+        ArgumentNullException.ThrowIfNull(caller);
+
         await using var c = await _dataSource.OpenConnectionAsync(ct);
-        var rows = await c.QueryAsync<PlatformUser>(new CommandDefinition("""
-            SELECT id, username, display_name, email, must_change_password,
-                   status, last_login_at, is_system
-            FROM federation.platform_users ORDER BY username;
-            """, cancellationToken: ct));
+        var rows = await c.QueryAsync<PlatformUser>(new CommandDefinition($"""
+            SELECT pu.id, pu.username, pu.display_name, pu.email, pu.must_change_password,
+                   pu.status, pu.last_login_at, pu.is_system
+            FROM federation.platform_users pu
+            WHERE {VisibleForUserReadPredicate}
+            ORDER BY pu.username;
+            """, UserVisibilityParams(caller), cancellationToken: ct));
         return rows.ToList();
     }
 
@@ -272,14 +342,46 @@ public sealed class UserRepository
     }
 
     /// <summary>
+    /// Whether the caller may <b>see</b> this one user — the single-record counterpart of the
+    /// filter <see cref="ListAsync"/> applies, so a listed account and its detail route agree.
+    /// </summary>
+    /// <remarks>
+    /// Runs exactly <see cref="VisibleForUserReadPredicate"/> (conditions 2 and 3 of
+    /// <see cref="CanAdministerAsync"/> plus the system-account exclusion — organization dimension
+    /// only) against the one row. The permission-subset check (condition 1) is deliberately not
+    /// here: read visibility tracks organizational reach, not whether the caller out-ranks the
+    /// target. A nonexistent id resolves to <see langword="true"/> so the endpoint falls through
+    /// to its own 404. API-key callers resolve through <c>authorized_org_units</c> like anyone
+    /// else — unlike <see cref="CanAdministerAsync"/>, which fail-closes them because administering
+    /// people is a human act.
+    /// </remarks>
+    public async Task<bool> CanReadAsync(
+        Guid targetUserId, CallerContext caller, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(caller);
+
+        var p = UserVisibilityParams(caller);
+        p.Add("targetUserId", targetUserId);
+
+        await using var c = await _dataSource.OpenConnectionAsync(ct);
+        return await c.ExecuteScalarAsync<bool>(new CommandDefinition($"""
+            SELECT COALESCE((
+                SELECT {VisibleForUserReadPredicate}
+                FROM federation.platform_users pu
+                WHERE pu.id = @targetUserId), TRUE);
+            """, p, cancellationToken: ct));
+    }
+
+    /// <summary>
     /// Whether the caller may administer this user at all.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Holding <c>user.manage</c> is necessary but nowhere near sufficient. Without this check a
-    /// department-scoped administrator could reset the bootstrap administrator's password, log in
-    /// as it, and hold the whole platform — a takeover from the lowest privilege that can manage
-    /// users at all.
+    /// Holding <paramref name="permission"/> (<c>user.manage</c>) is necessary but nowhere near
+    /// sufficient. Without this check a department-scoped administrator could reset the bootstrap
+    /// administrator's password, log in as it, and hold the whole platform — a takeover from the
+    /// lowest privilege that can manage users at all. Read guards use <see cref="CanReadAsync"/>
+    /// instead (conditions 2+3 only).
     /// </para>
     /// <para>Three conditions, all of which must hold:</para>
     /// <list type="number">
@@ -295,7 +397,7 @@ public sealed class UserRepository
     /// </para>
     /// </remarks>
     public async Task<bool> CanAdministerAsync(
-        Guid targetUserId, Guid? callerUserId, bool callerIsUnscoped,
+        Guid targetUserId, Guid? callerUserId, bool callerIsUnscoped, string permission,
         CancellationToken ct)
     {
         // A caller with no user identity (an API key) cannot administer people.
@@ -344,8 +446,8 @@ public sealed class UserRepository
                           SELECT organization_unit_id
                           FROM federation.authorized_org_units(
                                    p_user_id => @callerUserId, p_api_key_id => NULL,
-                                   p_permission => 'user.manage')));
-            """, new { targetUserId, callerUserId, callerIsUnscoped }, cancellationToken: ct));
+                                   p_permission => @permission)));
+            """, new { targetUserId, callerUserId, callerIsUnscoped, permission }, cancellationToken: ct));
     }
 
     /// <summary>Whether a user is the platform's own seeded account.</summary>

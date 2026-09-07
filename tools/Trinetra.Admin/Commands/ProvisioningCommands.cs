@@ -413,7 +413,7 @@ internal static class ProvisioningCommands
 
     public static async Task<int> ListUsersAsync(UserRepository users, CancellationToken ct)
     {
-        var all = await users.ListAsync(ct);
+        var all = await users.ListAsync(Caller, ct);
 
         if (all.Count == 0)
         {
@@ -524,7 +524,7 @@ internal static class ProvisioningCommands
 
     public static async Task<int> ListGroupsAsync(AccessGroupRepository repo, CancellationToken ct)
     {
-        var groups = await repo.ListAsync(ct);
+        var groups = await repo.ListAsync(Caller, ct);
 
         if (groups.Count == 0)
         {

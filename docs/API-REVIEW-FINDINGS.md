@@ -42,7 +42,7 @@ The **Priority Index & Implementation Sequence** below is the working order; the
 
 8. **9-NEW-H** `PUT /vms/{id}` silently resets state to Active → re-arms a quarantined target
    (violates non-negotiable #4). **Fix:** preserve existing state in `ReplaceAsync`.
-9. **8-H1** `ApiKeyRepository.RevokeAsync` not authority-scoped → cross-dept DoS (kill any key).
+9. **8-H1** `ApiKeyRepository.RevokeAsync` not authority-scoped → cross-dept DoS (kill any key). ✅ PR5
 10. **4-C1** No token revocation — deactivation / group removal / password reset ineffective
     ≤8h; `ChangePasswordAsync` doesn't re-check status/lockout & clears `locked_until`. **Fix:**
     `token_version` claim checked in `OnTokenValidated`, bumped on the relevant events;
@@ -51,8 +51,8 @@ The **Priority Index & Implementation Sequence** below is the working order; the
     runs outside the txn). **Fix:** pass `work.Transaction`; integration test with a scoped caller.
 12. **5-H2** TOCTOU on hierarchy deactivate/reparent (no row lock / version guard).
 13. **6-H1** Unscoped reads: users / groups / group-members list every account & the SUPER_ADMIN
-    roster to any scoped `user.read`/`group.read` holder. (invariant 11)
-14. **8-H2** `api-keys` list unscoped → privilege map of every service account.
+    roster to any scoped `user.read`/`group.read` holder. (invariant 11) ✅ PR5
+14. **8-H2** `api-keys` list unscoped → privilege map of every service account. ✅ PR5
 15. **9-H2** VMS hard-delete: no non-Active guard; silent `camera_status_history` orphan.
 16. **9-H3** VMS delete gated `vms.update` not a dedicated `vms.delete`.
 17. **15-H2** Detection base64: no try/catch (500) + no size / body cap (DoS / disk-fill).
@@ -135,7 +135,7 @@ rule does not bite — still prefer new `v1.7+` files over editing `v1.sql`. Bra
 | PR2  | **Geography-scope wave**: 9-H1, 13-H1, 15-M1, 14-M1 — ✅ implemented + BA/dotnet-expert reviewed, 13 integration tests added (not committed); 16-L2 verified n/a | — |
 | PR3  | **VMS lifecycle**: 9-NEW-H, 9-H2, 9-H3, 9-M1, 9-M2 — ✅ done, BA/dotnet-expert plan reviewed, 12 new tests | `vms.delete` (v1.7.sql) |
 | PR4  | **Token revocation + refresh tokens** (scope expanded): 4-C1 + 4-M2 + `POST /auth/logout` + `POST /auth/refresh` + short access token + `ChangePasswordAsync` status re-check — ✅ done, BA + dotnet-expert + postgres-expert reviewed, fix pass applied, 15 new tests | `token_version` + `refresh_token` table (v1.8.sql) |
-| PR5  | **Unscoped reads**: 6-H1, 8-H1, 8-H2 | — |
+| PR5  | **Unscoped reads**: 6-H1, 8-H1, 8-H2 — ✅ done, BA + dotnet-expert plan reviewed, 17 new tests | — (code-only) |
 | PR6  | **Hierarchy correctness**: 5-H1, 5-H2, 5-M1 | — |
 | PR7  | **Auth hardening**: 4-H1..H5 (may split) | `password_history`, MFA |
 | PR8  | **Audit-fidelity wave** (P2) | — |
@@ -390,6 +390,45 @@ Review 2026-09-04. Write paths are meticulously guarded (escalation chokepoint +
   holder sees every group incl. SUPER_ADMIN and its members = a roster of platform admins. Recon
   surface. Scope reads the way writes are scoped, or at least gate single-resource reads through
   the authority check.
+
+  **PR5 RESOLUTION (2026-09-06):** ✅ fixed.
+  - `UserRepository.ListAsync` / `AccessGroupRepository.ListAsync` / `ListMembersAsync` and
+    `ApiKeyRepository.ListAsync` now take a required `CallerContext` and filter in SQL.
+  - Filter rule for groups/keys = the read-side mirror of `GroupGrantGuard` (new
+    `AccessGroupRepository.GroupVisiblePredicate` fragment, both dimensions): visible iff the
+    caller could confer it. A dimension-unrestricted group — PLATFORM-ADMINS included — is hidden
+    from any caller scoped on that dimension. Filter rule for users = `CanAdministerAsync`
+    conditions 2+3 (org dimension only) + `NOT is_system` (new
+    `UserRepository.VisibleForUserReadPredicate`, reused by `ListMembersAsync` so a visible
+    group's roster is filtered like the directory).
+  - Single-row fetches (`GET /users/{id}`, `/{id}/groups`, `/{id}/permissions`,
+    `GET /access-groups/{id}`, `/{id}/members`) gated in the endpoint via the new shared
+    `Auth/UserAuthorityGuard` (extracted from `UserEndpoints.RefuseIfBeyondAuthorityAsync`) and
+    `AccessGroupRepository.IsVisibleToAsync` → 404, never 403. Narrow invariant-11 exception
+    documented in `AUTHORIZATION.md` §3 + `CLAUDE.md` #11.
+  - **List and single-GET use the same reachability rule** (implementation-review fix): the read
+    guard calls a new `UserRepository.CanReadAsync` — conditions 2+3 only, exactly
+    `VisibleForUserReadPredicate` on one row — not the full `CanAdministerAsync`. A row that
+    appears in `GET /users` never 404s on its own detail route. `CanAdministerAsync` (with its
+    condition-1 permission-subset check) is now write-path only; it gained a `permission` param.
+  - No schema change — "sees the whole estate" is already `IsUnscopedFor(<read perm>)`.
+  - Dead `AccessGroupRepository.ListScopesAsync` (0 callers, no `CallerContext`) removed rather
+    than left as a latent invariant-11 hole.
+  - `docs/AUTHORIZATION.md` §3/§5/§7 + endpoint descriptions updated.
+  - **Known asymmetry, split out:** user visibility is org-only (matches `CanAdministerAsync`);
+    groups/keys check both dimensions. Geography for user authority folds into the F6 6-M1
+    geo-asymmetry item.
+  - **Operator note (API not yet deployed):** after this change a scoped administrator (e.g. a
+    STATE_ADMIN placed in a scoped group) stops seeing users / groups / keys they saw before —
+    the platform-admin group included. "Missing" rows post-upgrade are expected; the remedy is
+    an unscoped read grant or a wider group.
+  - Tests: `tests/Trinetra.IntegrationTests/UnscopedReadScopeTests.cs` (17, real Postgres,
+    bespoke `READ_SCOPE_TEST` scoped role) — incl. geography-dimension group hiding, the
+    `is_system` single-GET 404, list-vs-single-GET agreement (with a higher-priv in-reach user),
+    and the unscoped-caller control. Sabotage-verified: removing the RevokeAsync predicate, the
+    `NOT is_system` filter, and reverting the read guard to full `CanAdministerAsync` all turn
+    tests red. `ApiKeyLifecycleTests` `AdminCaller` fixture made explicitly unscoped (REPORTING
+    group has no scope). Build 0 warnings; same 18 pre-existing `vendor_kind` fails.
 - **6-H2** No group lifecycle endpoints. Group created as DRAFT; route description says "add its
   scopes, then activate it" — **there is no activate route**. No PUT/PATCH, no `/{id}/activate`,
   no deactivate, no delete. Only path DRAFT→ACTIVE is `POST /` again with same code hitting
@@ -501,6 +540,23 @@ Review 2026-09-04, VERIFIED by second pass.
   group code (= privilege level of every service account)**, expiry, last-used, revoked state —
   a target list for 8-H1. Every other list endpoint in the codebase is scoped. Fix: restrict to
   `IsUnscopedFor("apikey.read")` or filter by key's group org-scope within caller reach.
+
+**PR5 RESOLUTION (2026-09-06):** ✅ 8-H1 + 8-H2 fixed together (they must share one predicate or
+revoke-what-you-cannot-see bypasses the fix).
+- `ApiKeyRepository.ListAsync` takes a required `CallerContext`; SQL gains
+  `AccessGroupRepository.GroupVisiblePredicate` keyed on `apikey.read` (a key's "scope" = its
+  group's scope). `ApiKeyEndpoints.ListAsync` gains `HttpContext`.
+- `ApiKeyRepository.RevokeAsync` — the `target` CTE gains the same predicate keyed on
+  `apikey.manage`, and the `upd` CTE only fires `WHERE ... AND EXISTS (SELECT 1 FROM target)`, so
+  an out-of-reach key is returned as `RevokeOutcome.NotFound` (→ 404, already wired) **and left
+  untouched**. No new enum value.
+- `GroupVisiblePredicate` intentionally does **not** filter `ag.status`: a key (or a caller)
+  bound to a group later set DRAFT/DISABLED stays visible and revocable to whoever reaches the
+  group's declared scopes — you must be able to see a stale grant to revoke it. (The user-side
+  `VisibleForUserReadPredicate` does require `ag.status = 'ACTIVE'`, but only in its
+  "held-through-an-estate-wide-group" sub-check, where a non-active group correctly grants
+  nothing.)
+- Full detail + tests under the 6-H1 PR5 RESOLUTION block above.
 - **8-NEW-H** (second pass) `TouchAsync` — `HandleAuthenticateAsync` awaits
   `UPDATE api_key SET last_used_at=now()` on EVERY authenticated M2M request, on a 3rd connection
   (after FindAsync + GrantsAsync), write+row-lock on one hot row per key. AI-worker fleet vs 80k

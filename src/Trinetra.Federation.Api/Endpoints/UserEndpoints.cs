@@ -33,35 +33,6 @@ public static class UserEndpoints
         u.Id, u.Username, u.DisplayName, u.Email,
         u.MustChangePassword, u.Status, u.LastLoginAt, u.IsSystem);
 
-    /// <summary>
-    /// Refuses a mutation on a user the caller has no authority over.
-    /// </summary>
-    /// <remarks>
-    /// Returns 404 rather than 403 for the same reason out-of-scope targets do: confirming that
-    /// a user id exists is itself a disclosure to someone who may not administer them.
-    /// </remarks>
-    private static async Task<ProblemHttpResult?> RefuseIfBeyondAuthorityAsync(
-        Guid targetUserId, CallerContext caller, UserRepository users, CancellationToken ct)
-    {
-        var unscoped = caller.IsUnscopedFor("user.manage");
-
-        // The seeded account is the one every other was created from. Only an unscoped caller
-        // may touch it, whatever their permissions otherwise say.
-        if (!unscoped && await users.IsSystemAccountAsync(targetUserId, ct))
-        {
-            return TypedResults.Problem(
-                title: "Not found", statusCode: StatusCodes.Status404NotFound);
-        }
-
-        if (!await users.CanAdministerAsync(targetUserId, caller.UserId, unscoped, ct))
-        {
-            return TypedResults.Problem(
-                title: "Not found", statusCode: StatusCodes.Status404NotFound);
-        }
-
-        return null;
-    }
-
     public static void MapUserEndpoints(this IEndpointRouteBuilder app)
     {
         var group = app.MapGroup("/api/v1/users").WithTags(ApiTags.Users).RequireAuthorization();
@@ -70,9 +41,12 @@ public static class UserEndpoints
           .RequirePermission("user.read")
           .WithSummary("List user accounts")
           .WithDescription(
-              "Every account with its username, display name, email and status. The directory a "
-              + "client draws an administration screen from. Password material is not part of "
-              + "the response type at all.");
+              "The accounts you may administer, each with its username, display name, email and "
+              + "status. The directory a client draws an administration screen from. Password "
+              + "material is not part of the response type at all.\n\n"
+              + "A scoped administrator sees only accounts within their organizational reach — "
+              + "not the seed account, not anyone held through an estate-wide group, not another "
+              + "department's users. An administrator unscoped for `user.read` sees everyone.");
 
         group.MapGet("/{id:guid}", GetAsync)
           .RequirePermission("user.read")
@@ -80,7 +54,9 @@ public static class UserEndpoints
           .WithDescription(
               "Profile and status for a single account. What the account can *do* is not here — "
               + "that comes from group membership, under `/users/{id}/groups` and "
-              + "`/users/{id}/permissions`.");
+              + "`/users/{id}/permissions`.\n\n"
+              + "An account outside your authority returns `404`, identical to one that does not "
+              + "exist — confirming an id is itself a disclosure.");
 
         group.MapGet("/{id:guid}/groups", GroupsAsync)
           .RequirePermission("user.read")
@@ -90,7 +66,9 @@ public static class UserEndpoints
               + "expired membership stops granting anything without anyone having to revoke it — "
               + "the intended way to give temporary access.\n\n"
               + "This is the only route to what a user is entitled to: permissions are never "
-              + "granted to an account directly.");
+              + "granted to an account directly. Requires authority over the account — otherwise "
+              + "`404`, so a scoped administrator cannot enumerate a higher administrator's "
+              + "entitlements.");
 
         // Effective permissions, for diagnosing "why can this person not see that camera".
         group.MapGet("/{id:guid}/permissions", PermissionsAsync)
@@ -102,7 +80,8 @@ public static class UserEndpoints
               + "nothing to write here; change membership instead.\n\n"
               + "This is the route for answering 'why can this person not see that camera'. Note "
               + "that a permission code alone does not say *where* it applies: scope comes from "
-              + "the grants on the groups that carried it, under `/access-groups/{id}`.");
+              + "the grants on the groups that carried it, under `/access-groups/{id}`.\n\n"
+              + "Requires authority over the account — otherwise `404`.");
 
         group.MapPost("/", CreateAsync)
           .RequirePermission("user.manage")
@@ -182,32 +161,54 @@ public static class UserEndpoints
     private static async Task<Ok<IReadOnlyList<UserResponse>>> ListAsync(
         UserRepository users, HttpContext http, CancellationToken ct)
     {
-        CallerContextFactory.From(http).Require("user.read");
-        var all = await users.ListAsync(ct);
+        var caller = CallerContextFactory.From(http);
+        caller.Require("user.read");
+        var all = await users.ListAsync(caller, ct);
         return TypedResults.Ok<IReadOnlyList<UserResponse>>([.. all.Select(ToResponse)]);
     }
 
-    private static async Task<Results<Ok<UserResponse>, NotFound>> GetAsync(
+    private static async Task<Results<Ok<UserResponse>, NotFound, ProblemHttpResult>> GetAsync(
         Guid id, UserRepository users, HttpContext http, CancellationToken ct)
     {
-        CallerContextFactory.From(http).Require("user.read");
+        var caller = CallerContextFactory.From(http);
+        caller.Require("user.read");
+
+        if (await UserAuthorityGuard.RefuseAsync(id, caller, "user.read", users, ct) is { } refused)
+        {
+            return refused;
+        }
+
         var user = await users.GetAsync(id, ct);
         return user is null ? TypedResults.NotFound() : TypedResults.Ok(ToResponse(user));
     }
 
-    private static async Task<Ok<IReadOnlyList<UserGroupResponse>>> GroupsAsync(
+    private static async Task<Results<Ok<IReadOnlyList<UserGroupResponse>>, ProblemHttpResult>> GroupsAsync(
         Guid id, UserRepository users, HttpContext http, CancellationToken ct)
     {
-        CallerContextFactory.From(http).Require("user.read");
+        var caller = CallerContextFactory.From(http);
+        caller.Require("user.read");
+
+        if (await UserAuthorityGuard.RefuseAsync(id, caller, "user.read", users, ct) is { } refused)
+        {
+            return refused;
+        }
+
         var groups = await users.ListGroupsAsync(id, ct);
         return TypedResults.Ok<IReadOnlyList<UserGroupResponse>>(
             [.. groups.Select(g => new UserGroupResponse(g.GroupId, g.Code, g.Name, g.ExpiresAt))]);
     }
 
-    private static async Task<Ok<IReadOnlyList<string>>> PermissionsAsync(
+    private static async Task<Results<Ok<IReadOnlyList<string>>, ProblemHttpResult>> PermissionsAsync(
         Guid id, UserRepository users, HttpContext http, CancellationToken ct)
     {
-        CallerContextFactory.From(http).Require("user.read");
+        var caller = CallerContextFactory.From(http);
+        caller.Require("user.read");
+
+        if (await UserAuthorityGuard.RefuseAsync(id, caller, "user.read", users, ct) is { } refused)
+        {
+            return refused;
+        }
+
         var permissions = await users.GetPermissionsAsync(id, ct);
         return TypedResults.Ok<IReadOnlyList<string>>([.. permissions.OrderBy(p => p, StringComparer.Ordinal)]);
     }
@@ -267,7 +268,7 @@ public static class UserEndpoints
             return TypedResults.NotFound();
         }
 
-        if (await RefuseIfBeyondAuthorityAsync(id, caller, users, ct) is { } refused)
+        if (await UserAuthorityGuard.RefuseAsync(id, caller, "user.manage", users, ct) is { } refused)
         {
             return refused;
         }
@@ -326,7 +327,7 @@ public static class UserEndpoints
 
         // Without this, user.manage alone was enough to reset the bootstrap administrator's
         // password and take the platform.
-        if (await RefuseIfBeyondAuthorityAsync(id, caller, users, ct) is { } refused)
+        if (await UserAuthorityGuard.RefuseAsync(id, caller, "user.manage", users, ct) is { } refused)
         {
             return refused;
         }
@@ -365,7 +366,7 @@ public static class UserEndpoints
             return TypedResults.NotFound();
         }
 
-        if (await RefuseIfBeyondAuthorityAsync(id, caller, users, ct) is { } refused)
+        if (await UserAuthorityGuard.RefuseAsync(id, caller, "user.manage", users, ct) is { } refused)
         {
             return refused;
         }
@@ -411,7 +412,7 @@ public static class UserEndpoints
         var caller = CallerContextFactory.From(http);
         caller.Require("user.manage");
 
-        if (await RefuseIfBeyondAuthorityAsync(id, caller, users, ct) is { } refused)
+        if (await UserAuthorityGuard.RefuseAsync(id, caller, "user.manage", users, ct) is { } refused)
         {
             return refused;
         }

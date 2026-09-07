@@ -37,11 +37,16 @@ public static class AccessGroupEndpoints
           .RequirePermission("group.read")
           .WithSummary("List access groups")
           .WithDescription(
-              "Every group with its role, the permissions that role carries, its scopes and how "
-              + "many members it has. A group pairs one role with one or more scopes, which is "
-              + "what keeps a single `CAMERA_OPERATOR` role reusable instead of spawning "
-              + "AhmedabadPoliceCameraOperator, SuratPoliceCameraOperator and so on without "
-              + "end.");
+              "The groups you may see, each with its role, the permissions that role carries, "
+              + "its scopes and how many members it has. A group pairs one role with one or more "
+              + "scopes, which is what keeps a single `CAMERA_OPERATOR` role reusable instead of "
+              + "spawning AhmedabadPoliceCameraOperator, SuratPoliceCameraOperator and so on "
+              + "without end.\n\n"
+              + "A group is listed only if you could grant it — its scopes are within your reach "
+              + "(the same rule as adding a user to it). A group with no organization or no "
+              + "geography scope reaches every department or area, so it is visible only to an "
+              + "administrator already unscoped on that dimension. The platform-admin group is "
+              + "therefore invisible to every scoped administrator.");
 
         group.MapGet("/{id:guid}", GetAsync)
           .RequirePermission("group.read")
@@ -51,7 +56,8 @@ public static class AccessGroupEndpoints
               + "apply. **A dimension with no scope row is unrestricted on that dimension** — a "
               + "group with geography scopes but no organization scope grants its permissions "
               + "across every department. Read the scope list, not just the permission list, "
-              + "before deciding what a group actually confers.");
+              + "before deciding what a group actually confers.\n\n"
+              + "A group outside your reach returns `404`, identical to one that does not exist.");
 
         group.MapGet("/{id:guid}/members", MembersAsync)
           .RequirePermission("group.read")
@@ -59,7 +65,10 @@ public static class AccessGroupEndpoints
           .WithDescription(
               "Who currently holds this grant, with each membership's expiry. The reverse of "
               + "`GET /users/{id}/groups`, and the route for answering 'who can do this' during "
-              + "a review. Membership is changed from the user side, not here.");
+              + "a review. Membership is changed from the user side, not here.\n\n"
+              + "A group you cannot see returns `404`. For a group you can see, the member list "
+              + "is still limited to accounts within your own reach — a cross-department group "
+              + "does not hand a single-department administrator its full roster.");
 
         group.MapPost("/", CreateAsync)
           .RequirePermission("group.manage")
@@ -122,24 +131,43 @@ public static class AccessGroupEndpoints
     private static async Task<Ok<IReadOnlyList<AccessGroupResponse>>> ListAsync(
         AccessGroupRepository repo, HttpContext http, CancellationToken ct)
     {
-        CallerContextFactory.From(http).Require("group.read");
-        var groups = await repo.ListAsync(ct);
+        var caller = CallerContextFactory.From(http);
+        caller.Require("group.read");
+        var groups = await repo.ListAsync(caller, ct);
         return TypedResults.Ok<IReadOnlyList<AccessGroupResponse>>([.. groups.Select(ToResponse)]);
     }
 
     private static async Task<Results<Ok<AccessGroupResponse>, NotFound>> GetAsync(
         Guid id, AccessGroupRepository repo, HttpContext http, CancellationToken ct)
     {
-        CallerContextFactory.From(http).Require("group.read");
+        var caller = CallerContextFactory.From(http);
+        caller.Require("group.read");
+
+        // A group outside the caller's reach is reported as absent, not forbidden — same rule as
+        // the list (it is simply omitted) and as out-of-scope user and camera reads.
+        if (!await repo.IsVisibleToAsync(id, caller, "group.read", ct))
+        {
+            return TypedResults.NotFound();
+        }
+
         var found = await repo.GetAsync(id, ct);
         return found is null ? TypedResults.NotFound() : TypedResults.Ok(ToResponse(found));
     }
 
-    private static async Task<Ok<IReadOnlyList<GroupMemberResponse>>> MembersAsync(
+    private static async Task<Results<Ok<IReadOnlyList<GroupMemberResponse>>, NotFound>> MembersAsync(
         Guid id, AccessGroupRepository repo, HttpContext http, CancellationToken ct)
     {
-        CallerContextFactory.From(http).Require("group.read");
-        var members = await repo.ListMembersAsync(id, ct);
+        var caller = CallerContextFactory.From(http);
+        caller.Require("group.read");
+
+        if (!await repo.IsVisibleToAsync(id, caller, "group.read", ct))
+        {
+            return TypedResults.NotFound();
+        }
+
+        // The group is visible; the member list is still filtered to accounts the caller could
+        // see in the user directory, so a cross-department group does not leak its full roster.
+        var members = await repo.ListMembersAsync(id, caller, ct);
         return TypedResults.Ok<IReadOnlyList<GroupMemberResponse>>(
             [.. members.Select(m => new GroupMemberResponse(m.UserId, m.Username, m.ExpiresAt))]);
     }
