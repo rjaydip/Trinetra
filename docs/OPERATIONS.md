@@ -175,6 +175,20 @@ runs on a key that is in the repository, with no runtime symptom at all.
 configuration-change history. Startup refuses a value below one month; `auth_audit` appears in
 `federation.retention_status` alongside the other partitioned tables.
 
+### Detection evidence
+
+```jsonc
+"Evidence": {
+  "RootPath": "evidence",         // where decoded snapshots are written; default "evidence"
+  "MaxSnapshotBytes": 4194304     // per-snapshot cap; default 4 MiB
+}
+```
+
+`POST /api/v1/detections` caps the whole request body at 8 MiB and `evidence.snapshotBase64`
+at `MaxSnapshotBytes` — an oversized or malformed value is a `400`, decided on the encoded
+string length before anything is allocated for the decode. Both have working code defaults, so
+neither key must be set.
+
 The daily maintenance pass runs `federation.ensure_audit_partitions()` before it drops anything,
 so partitions for the coming months always exist. It is **not optional**: with `Enabled: false`,
 or if the pass never runs, every audit and event row lands in the `*_default` partition, which

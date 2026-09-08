@@ -1,11 +1,18 @@
 # Implementation notes — hierarchy & RBAC lifecycle wave
 
-Working design for the build sequence
+Design for the build sequence
 `P3 → P1 → P2a → P11 → P12 → P8 → P5 → P6 → P13 → P7 → P10 → P2b`.
-No production code yet — this is the plan to implement against.
+**Status: shipped in `v1.12`** (2026-09-08). See "As-built deviations" at the end for where the
+code differs from this design.
 
 Scope: organization-unit / geographic-area edit + lifecycle, role lifecycle + DRAFT,
 access-group activation guard + status rename, cross-org unit move.
+
+Verification at ship: `dotnet build` clean (analyzers + warnings-as-errors); new
+`HierarchyRbacLifecycleTests` (23) green plus adjusted `RoleCrudTests` / `AuthorizationTests` /
+`HierarchyScopeTests` / `GeographyScopeTests` / `UnscopedReadScopeTests`; sabotage-checked the
+P2b unscoped guard and the P1 reparent-to-root guard. The 18 pre-existing `IntegrationTests`
+failures (camera `vendor_kind`, one apikey `DateTime` cast) are unrelated and predate this wave.
 
 ## 0. Shared facts the design leans on
 
@@ -626,3 +633,47 @@ so the destructive, unscoped-only operation is not hidden inside a general PUT),
 - P10: keep route `/disable` (recommended) vs rename `/deactivate`.
 - P6 list payload: `UsingGroups` on `GET /{id}` only (recommended) vs on list too.
 - Cross-org move authority: unscoped-only (recommended) vs two-ended reach check.
+
+---
+
+## As-built deviations (v1.12 ship, 2026-09-08)
+
+1. **Same-organization invariant → deferrable constraint trigger**, not "drop the assertion,
+   enforce in the repository" (design option 1). New `assert_org_unit_same_org()` +
+   `CREATE CONSTRAINT TRIGGER trg_org_unit_same_org ... DEFERRABLE INITIALLY IMMEDIATE`.
+   `assert_org_unit_acyclic()` keeps self-parent + cycle only. Reason: acceptance criterion
+   **P2b-AC5** requires the DB to still reject a malformed direct single-row `UPDATE` (org
+   changed, parent left behind); option 1 could not. `MoveUnitToOrganizationAsync` issues
+   `SET CONSTRAINTS ALL DEFERRED` (the named form doesn't resolve — the repo connection's
+   `search_path` isn't `federation`; the only other statement in the transaction is the audit
+   insert). `CREATE CONSTRAINT TRIGGER` takes no `UPDATE OF` column list, so it fires on every
+   `organization_units` row update — the function no-ops immediately for a root and is one
+   indexed lookup otherwise.
+
+2. **Out-of-reach re-parent destination returns 403, not 404** (design P1-R7 / P2a-R6 asked for
+   404). `OrganizationRepository` / `GeographyRepository` already throw `ForbiddenException`
+   (→403) for every out-of-reach write and existing tests assert it; splitting just the
+   re-parent path to 404 would break the convention.
+
+3. **Structural re-parent failures share one Problem title.** Self / descendant / different-org
+   / wrong-route all return **400 `Re-parent rejected`** with the specific reason in `detail`
+   (the string contains "its own parent" / "beneath itself" / "between organizations"), rather
+   than a distinct title per case. X-2 (never a raw 500) holds.
+
+4. **P6 permission metadata is additive.** `RoleResponse.permissions` stays the string-code
+   list (no client/test break); a new `permissionDetails: [{code,name,category,description}]`
+   was added alongside, rather than replacing `permissions` with objects + a `permissionCodes`.
+
+5. **P2b audit `before.parentUnitId` is `null`** — the repository result doesn't surface the
+   pre-move parent id. `before.organizationId` and every `after.*` field
+   (`subtreeUnitsMoved`, `affectedGroups`, `camerasFollowing`, `targetsFollowing`,
+   `confirmScopeImpact`) are accurate.
+
+6. **P11 / P12 endpoint-level 409 shaping and Problem Details are not covered by HTTP tests** —
+   the integration suite has no `WebApplicationFactory` (pre-existing, documented gap).
+   Repository-observable behaviour (`AccessGroupDetail.RoleStatus` / `GrantsEffective`, the
+   scope-presence helpers, the `updated_at` bump, role soft-delete semantics) is covered.
+
+7. **P8 has no `confirmInUse` gate.** Per the project-owner decision, a role in use is
+   soft-deleted with no confirmation flag and no change to the referencing access groups; they
+   keep their `role_id` and grant nothing while the role is `INACTIVE`.

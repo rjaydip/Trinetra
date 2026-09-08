@@ -1,8 +1,21 @@
 # API Plan — Hierarchy editing + Role / Access-group maintenance
 
-Status: **BA draft for review.** No code exists yet. This document turns the agreed plan items
-(P1, P2a, P2b, P3, P5–P13) into testable requirements with acceptance criteria, validation
-rules, Problem Details responses and audit expectations.
+Status: **Implemented in `v1.12`** (commit "review point based on front end requirement",
+2026-09-08). This document turns the agreed plan items (P1, P2a, P2b, P3, P5–P13) into testable
+requirements with acceptance criteria, validation rules, Problem Details responses and audit
+expectations. It stays as the contract of record; `docs/IMPL-NOTES-HIERARCHY-RBAC.md` §"As-built
+deviations" lists where the shipped code differs from the text below.
+
+Project-owner decisions taken before implementation (override the open-questions table):
+Q1 — P2b **built**, restricted to unscoped `organization.manage`, `confirmScopeImpact` flag,
+dedicated `POST /organization-units/{id}/move`. Q2 — historic event rows follow the live tree.
+Q3 — **`role.read` added** as a real permission (not "ratify group.read"). Q4 — soft-delete
+reuses `INACTIVE`, no `ARCHIVED`. Q5 — route stays `/disable`. Q6 — `roles.status` column
+default `DRAFT`. Q7 — geography re-parent gets the reach check. Q8 — `usedBy` filtered to
+caller-visible groups. Q9 — re-activating an ACTIVE group is an idempotent no-op. Q10 — a scope
+add/remove bumps `access_groups.updated_at`. **P8 further:** the `InUse` block is removed
+entirely — a role in use can be soft-deleted, its groups are left untouched and simply grant
+nothing onward (no `confirmInUse` flag).
 
 Scope: `PUT /api/v1/organization-units/{id}`, `PUT /api/v1/geographic-areas/{id}`, their new
 `/activate` routes, and the `/api/v1/roles` + `/api/v1/access-groups` surface.

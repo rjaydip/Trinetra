@@ -24,6 +24,13 @@ public static class DetectionEndpoints
     private const string VehicleTypeKey = "vehicleType";
     private const string PlateNumberKey = "plateNumber";
 
+    /// <summary>
+    /// Hard cap on the ingest request body, applied at the route. Comfortably above a 4 MB
+    /// base64 snapshot (~5.5 MB encoded) plus the JSON envelope, and far below Kestrel's 30 MB
+    /// default — a detection POST has no reason to be larger (finding 15-H2).
+    /// </summary>
+    private const long MaxIngestBodyBytes = 8L * 1024 * 1024;
+
     private static readonly System.Buffers.SearchValues<char> SafeIdChars =
         System.Buffers.SearchValues.Create(
             "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_");
@@ -46,6 +53,7 @@ public static class DetectionEndpoints
 
         group.MapPost("/", IngestAsync)
           .RequirePermission("observation.write")
+          .WithMetadata(new RequestSizeLimitAttribute(MaxIngestBodyBytes))
           .WithSummary("Submit a vehicle/plate/OCR detection")
           .WithDescription(
               "The ingest sink for Model 2's standalone AI worker. Idempotent on `id` — a "
@@ -57,9 +65,11 @@ public static class DetectionEndpoints
               + "to an organization without a known camera.\n\n"
               + "`evidence.snapshotBase64`, if present, is decoded and written under the "
               + "configured evidence root; otherwise `evidence.snapshotPath` (today's "
-              + "worker-local path) is stored verbatim as an opaque reference. Returns 202: "
-              + "ingest is fire-and-forget from the worker's perspective, matching its "
-              + "at-least-once, best-effort submit.");
+              + "worker-local path) is stored verbatim as an opaque reference. The snapshot is "
+              + "capped at `Evidence:MaxSnapshotBytes` (default 4 MB) and the whole request at "
+              + "8 MB — an oversized or malformed `snapshotBase64` is a 400. Returns 202: ingest "
+              + "is fire-and-forget from the worker's perspective, matching its at-least-once, "
+              + "best-effort submit.");
 
         group.MapGet("/", SearchAsync)
           .RequirePermission("observation.read")
@@ -102,7 +112,15 @@ public static class DetectionEndpoints
             ? null
             : PlateNormalizer.Normalize(plateRaw);
 
-        var snapshotReference = await ResolveSnapshotReferenceAsync(request, configuration, ct);
+        var (snapshotReference, evidenceError) =
+            await ResolveSnapshotReferenceAsync(request, configuration, ct);
+        if (evidenceError is not null)
+        {
+            return TypedResults.Problem(
+                title: "Invalid evidence",
+                detail: evidenceError,
+                statusCode: StatusCodes.Status400BadRequest);
+        }
 
         var evt = new DetectionEvent
         {
@@ -148,16 +166,29 @@ public static class DetectionEndpoints
     }
 
     /// <summary>
-    /// Base64 evidence, decoded and written under the evidence root, is the near-term direction
-    /// (the worker's next step per the user); a bare path string is what it sends today.
+    /// Resolves the snapshot reference stored on the detection row: a bare path when the worker
+    /// sends one, or the relative path of a base64 snapshot decoded under the evidence root.
     /// </summary>
-    private static async Task<string?> ResolveSnapshotReferenceAsync(
+    /// <remarks>
+    /// The second element is non-null when the caller-supplied <c>snapshotBase64</c> is rejected
+    /// — oversized or not valid base64 — which the endpoint turns into a 400 rather than letting
+    /// a <see cref="FormatException"/> or an unbounded decode reach the write (finding 15-H2).
+    /// </remarks>
+    private static async Task<(string? Reference, string? Error)> ResolveSnapshotReferenceAsync(
         DetectionEventRequest request, IConfiguration configuration, CancellationToken ct)
     {
         var base64 = request.Evidence?.GetValueOrDefault(SnapshotBase64Key);
         if (string.IsNullOrEmpty(base64))
         {
-            return request.Evidence?.GetValueOrDefault(SnapshotPathKey);
+            return (request.Evidence?.GetValueOrDefault(SnapshotPathKey), null);
+        }
+
+        var maxBytes = configuration.GetValue(
+            "Evidence:MaxSnapshotBytes", DetectionEvidence.DefaultMaxSnapshotBytes);
+
+        if (!DetectionEvidence.TryDecode(base64, maxBytes, out var snapshot, out var error))
+        {
+            return (null, error);
         }
 
         var root = Path.GetFullPath(configuration["Evidence:RootPath"] ?? "evidence");
@@ -173,9 +204,9 @@ public static class DetectionEndpoints
             throw new InvalidOperationException("Evidence path escaped the configured root.");
         }
 
-        await File.WriteAllBytesAsync(fullPath, Convert.FromBase64String(base64), ct);
+        await File.WriteAllBytesAsync(fullPath, snapshot, ct);
 
-        return Path.Combine(Path.GetFileName(root), fileName);
+        return (Path.Combine(Path.GetFileName(root), fileName), null);
     }
 
     private static async Task<Ok<IReadOnlyList<DetectionResponse>>> SearchAsync(

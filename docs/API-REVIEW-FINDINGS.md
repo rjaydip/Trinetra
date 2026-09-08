@@ -55,7 +55,7 @@ The **Priority Index & Implementation Sequence** below is the working order; the
 14. **8-H2** `api-keys` list unscoped → privilege map of every service account. ✅ PR5
 15. **9-H2** VMS hard-delete: no non-Active guard; silent `camera_status_history` orphan.
 16. **9-H3** VMS delete gated `vms.update` not a dedicated `vms.delete`.
-17. **15-H2** Detection base64: no try/catch (500) + no size / body cap (DoS / disk-fill).
+17. **15-H2** Detection base64: no try/catch (500) + no size / body cap (DoS / disk-fill). ✅ done 2026-09-08 (uncommitted)
 18. **4-H2** No MFA anywhere (incl. bootstrap admin) — likely compliance blocker.
 19. **4-H3** Auth events (login ok/fail, lockout, token issue, key use) bypass the audit trail. → PR7b
 20. **4-H4** Login is a timing oracle (unknown user skips PBKDF2) — defeats the stated
@@ -1224,8 +1224,15 @@ Review 2026-09-04.
   (`Path.GetFullPath` + prefix check).
 - **15-H2** `Convert.FromBase64String(base64)` — no try/catch (malformed → 500) AND no size limit.
   A worker (or anyone with the key) POSTs a 500 MB base64 blob → decoded fully into memory +
-  written to disk. No `MaxRequestBodySize` on the route. DoS / disk-fill. Cap the request body
-  and the decoded size; wrap the decode.
+  written to disk. No `MaxRequestBodySize` on the route. DoS / disk-fill.
+  **✅ FIXED (2026-09-08, uncommitted).** New `DetectionEvidence.TryDecode` — rejects on the
+  *encoded string length* (vs `Evidence:MaxSnapshotBytes`, default 4 MiB) before allocating,
+  decodes into a pooled fixed-size buffer via `Convert.TryFromBase64String` (malformed or
+  over-limit → `false`, mapped to 400, never a `FormatException`/500). `POST /api/v1/detections`
+  gets `RequestSizeLimitAttribute(8 MiB)`, honoured for minimal APIs by a new
+  `ApplyRequestSizeLimitAsync` middleware that reads `IRequestSizeLimitMetadata` →
+  `IHttpMaxRequestBodySizeFeature` (this host has no MVC). +6 unit tests (`DetectionEvidenceTests`),
+  both guards sabotage-checked. Docs: OPERATIONS.md §3 "Detection evidence".
 
 ### MEDIUM
 

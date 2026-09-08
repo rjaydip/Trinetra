@@ -1,12 +1,12 @@
 -- Trinetra — development sample data
 --
 -- Fills the database with a plausible estate so the frontend has something to render:
--- hierarchies, sites, users across every role, connector targets in every state, ~230
+-- hierarchies, geographic areas, users across every role, connector targets in every state, ~230
 -- federated cameras, 36 registered cameras (Model 1) with coverage optics / health / open
 -- maintenance and twelve reconciled to VMS rows, a week of health history, ~6,500 normalised
 -- events, audit trails.
 --
---     psql -U trinetra -d trinetra -f db/full-schema.sql          # schema first (v1..v1.6)
+--     psql -U trinetra -d trinetra -f db/full-schema.sql          # schema first (v1..v1.12)
 --     psql -U trinetra -d trinetra -f db/seed/dev-sample-data.sql # then this
 --
 -- NOT a schema version. It lives outside db/versions/ deliberately: version files are never
@@ -56,15 +56,10 @@ SELECT ensure_audit_partitions((date_trunc('month', CURRENT_DATE) - interval '3 
 -- ===========================================================================
 -- 1. geography
 -- ===========================================================================
--- Level registry first, so the UI can order levels and reject a district placed in a village.
-
-INSERT INTO geographic_area_types (code, name, level_order, status) VALUES
-    ('STATE',    'State',    1, 'ACTIVE'),
-    ('DISTRICT', 'District', 2, 'ACTIVE'),
-    ('ZONE',     'Zone',     3, 'ACTIVE'),
-    ('WARD',     'Ward',     4, 'ACTIVE')
-ON CONFLICT (code) DO UPDATE
-    SET name = EXCLUDED.name, level_order = EXCLUDED.level_order, status = EXCLUDED.status;
+-- The level registry (geographic_area_types) is seeded by v1.11 with a baseline
+-- — STATE 10, DISTRICT 30, ZONE 50, WARD 60, SECTOR 70, and more. This estate
+-- uses STATE -> DISTRICT -> ZONE -> WARD, with the former "sites" as SECTOR-level
+-- leaf areas. Nothing to seed here.
 
 -- Inserted parent-first: the acyclic trigger reads the parent row on INSERT.
 INSERT INTO geographic_areas (id, parent_area_id, code, name, area_type, status) VALUES
@@ -97,44 +92,42 @@ INSERT INTO geographic_areas (id, parent_area_id, code, name, area_type, status)
      'AHM-W-NARANPURA', 'Naranpura Ward', 'WARD', 'ACTIVE'),
     ('a0000000-0000-4000-8000-000000000011', 'a0000000-0000-4000-8000-000000000007',
      'SRT-W-ADAJAN', 'Adajan Ward', 'WARD', 'ACTIVE')
-ON CONFLICT (code) DO UPDATE
+ON CONFLICT (parent_area_id, code) DO UPDATE
     SET name = EXCLUDED.name, area_type = EXCLUDED.area_type, status = EXCLUDED.status;
 
-INSERT INTO sites (id, code, name, geographic_area_id, site_type, address, latitude, longitude, status) VALUES
-    ('d0000000-0000-4000-8000-000000000001', 'SITE-AHM-SG-JN', 'S.G. Highway Junction',
-     'a0000000-0000-4000-8000-000000000010', 'JUNCTION',
-     'S.G. Highway at Drive-In Road, Naranpura, Ahmedabad', 23.0388000, 72.5320000, 'ACTIVE'),
-    ('d0000000-0000-4000-8000-000000000002', 'SITE-AHM-MANI-SQ', 'Maninagar Square',
-     'a0000000-0000-4000-8000-000000000009', 'JUNCTION',
-     'Maninagar Cross Roads, Ahmedabad', 22.9967000, 72.6020000, 'ACTIVE'),
-    ('d0000000-0000-4000-8000-000000000003', 'SITE-AHM-CTRL', 'Ahmedabad City Control Room',
-     'a0000000-0000-4000-8000-000000000006', 'CONTROL_ROOM',
-     'Police Commissionerate, Shahibaug, Ahmedabad', 23.0225000, 72.5714000, 'ACTIVE'),
-    ('d0000000-0000-4000-8000-000000000004', 'SITE-AHM-KANKARIA', 'Kankaria Lakefront',
-     'a0000000-0000-4000-8000-000000000009', 'PUBLIC_SPACE',
-     'Kankaria Lake, Maninagar, Ahmedabad', 22.9930000, 72.6020000, 'ACTIVE'),
-    ('d0000000-0000-4000-8000-000000000005', 'SITE-SRT-RING', 'Ring Road Corridor',
-     'a0000000-0000-4000-8000-000000000011', 'CORRIDOR',
-     'Ring Road, Adajan, Surat', 21.1900000, 72.8180000, 'ACTIVE'),
-    ('d0000000-0000-4000-8000-000000000006', 'SITE-SRT-CTRL', 'Surat City Control Room',
-     'a0000000-0000-4000-8000-000000000007', 'CONTROL_ROOM',
-     'Police Commissionerate, Athwalines, Surat', 21.1702000, 72.8311000, 'ACTIVE'),
-    ('d0000000-0000-4000-8000-000000000007', 'SITE-VAD-ALKAPURI', 'Alkapuri Circle',
-     'a0000000-0000-4000-8000-000000000008', 'JUNCTION',
-     'Alkapuri, Vadodara', 22.3110000, 73.1750000, 'ACTIVE'),
-    ('d0000000-0000-4000-8000-000000000008', 'SITE-VAD-STN', 'Vadodara Railway Station',
-     'a0000000-0000-4000-8000-000000000008', 'TRANSIT_HUB',
-     'Sayajigunj, Vadodara', 22.3105000, 73.1810000, 'ACTIVE'),
-    ('d0000000-0000-4000-8000-000000000009', 'SITE-AMC-DEPOT', 'AMC Central Depot',
-     'a0000000-0000-4000-8000-000000000006', 'DEPOT',
-     'Municipal Depot, Naranpura, Ahmedabad', 23.0470000, 72.5600000, 'ACTIVE'),
-    ('d0000000-0000-4000-8000-000000000010', 'SITE-HQ-LAB', 'State HQ Integration Lab',
-     'a0000000-0000-4000-8000-000000000006', 'LAB',
-     'State Police Headquarters, Gandhinagar Road, Ahmedabad', 23.0300000, 72.5800000, 'ACTIVE')
-ON CONFLICT (code) DO UPDATE
-    SET name = EXCLUDED.name, geographic_area_id = EXCLUDED.geographic_area_id,
-        site_type = EXCLUDED.site_type, address = EXCLUDED.address,
-        latitude = EXCLUDED.latitude, longitude = EXCLUDED.longitude;
+-- The former "sites" — since v1.11 there is no site table. Each becomes a
+-- SECTOR-level leaf geographic area; a camera / VMS target attaches directly to
+-- one. Area codes are unique within a parent (v1.11), so ON CONFLICT keys on
+-- (parent_area_id, code).
+INSERT INTO geographic_areas (id, parent_area_id, code, name, area_type, status) VALUES
+    ('d0000000-0000-4000-8000-000000000001', 'a0000000-0000-4000-8000-000000000010', 'LOC-AHM-SG-JN',    'S.G. Highway Junction',        'SECTOR', 'ACTIVE'),
+    ('d0000000-0000-4000-8000-000000000002', 'a0000000-0000-4000-8000-000000000009', 'LOC-AHM-MANI-SQ',  'Maninagar Square',             'SECTOR', 'ACTIVE'),
+    ('d0000000-0000-4000-8000-000000000003', 'a0000000-0000-4000-8000-000000000006', 'LOC-AHM-CTRL',     'Ahmedabad City Control Room',  'SECTOR', 'ACTIVE'),
+    ('d0000000-0000-4000-8000-000000000004', 'a0000000-0000-4000-8000-000000000009', 'LOC-AHM-KANKARIA', 'Kankaria Lakefront',           'SECTOR', 'ACTIVE'),
+    ('d0000000-0000-4000-8000-000000000005', 'a0000000-0000-4000-8000-000000000011', 'LOC-SRT-RING',     'Ring Road Corridor',           'SECTOR', 'ACTIVE'),
+    ('d0000000-0000-4000-8000-000000000006', 'a0000000-0000-4000-8000-000000000007', 'LOC-SRT-CTRL',     'Surat City Control Room',      'SECTOR', 'ACTIVE'),
+    ('d0000000-0000-4000-8000-000000000007', 'a0000000-0000-4000-8000-000000000008', 'LOC-VAD-ALKAPURI', 'Alkapuri Circle',              'SECTOR', 'ACTIVE'),
+    ('d0000000-0000-4000-8000-000000000008', 'a0000000-0000-4000-8000-000000000008', 'LOC-VAD-STN',      'Vadodara Railway Station',     'SECTOR', 'ACTIVE'),
+    ('d0000000-0000-4000-8000-000000000009', 'a0000000-0000-4000-8000-000000000006', 'LOC-AMC-DEPOT',    'AMC Central Depot',            'SECTOR', 'ACTIVE'),
+    ('d0000000-0000-4000-8000-000000000010', 'a0000000-0000-4000-8000-000000000006', 'LOC-HQ-LAB',       'State HQ Integration Lab',     'SECTOR', 'ACTIVE')
+ON CONFLICT (parent_area_id, code) DO UPDATE
+    SET name = EXCLUDED.name, area_type = EXCLUDED.area_type, status = EXCLUDED.status;
+
+-- Centre coordinates for those leaf areas, so the camera generators below can
+-- still scatter cameras around a point (geographic_areas carry no lat/long).
+CREATE TEMP TABLE dev_area_centre (area_id uuid PRIMARY KEY, latitude numeric, longitude numeric)
+    ON COMMIT DROP;
+INSERT INTO dev_area_centre VALUES
+    ('d0000000-0000-4000-8000-000000000001', 23.0388000, 72.5320000),
+    ('d0000000-0000-4000-8000-000000000002', 22.9967000, 72.6020000),
+    ('d0000000-0000-4000-8000-000000000003', 23.0225000, 72.5714000),
+    ('d0000000-0000-4000-8000-000000000004', 22.9930000, 72.6020000),
+    ('d0000000-0000-4000-8000-000000000005', 21.1900000, 72.8180000),
+    ('d0000000-0000-4000-8000-000000000006', 21.1702000, 72.8311000),
+    ('d0000000-0000-4000-8000-000000000007', 22.3110000, 73.1750000),
+    ('d0000000-0000-4000-8000-000000000008', 22.3105000, 73.1810000),
+    ('d0000000-0000-4000-8000-000000000009', 23.0470000, 72.5600000),
+    ('d0000000-0000-4000-8000-000000000010', 23.0300000, 72.5800000);
 
 
 -- ===========================================================================
@@ -409,7 +402,7 @@ INSERT INTO access_groups (id, code, name, description, role_id, status, created
 
     ('a1000000-0000-4000-8000-000000000011', 'GRP-SMC-OPS-RETIRED', 'Surat Municipal Operators (retired)',
      'Superseded when the SMC estate moved onto the shared connector fleet.',
-     (SELECT id FROM roles WHERE code = 'VMS_OPERATOR'), 'DISABLED',
+     (SELECT id FROM roles WHERE code = 'VMS_OPERATOR'), 'INACTIVE',
      'e0000000-0000-4000-8000-000000000001')
 ON CONFLICT (code) DO UPDATE
     SET name = EXCLUDED.name, description = EXCLUDED.description,
@@ -484,7 +477,7 @@ ON CONFLICT (user_id, group_id) DO UPDATE
 -- and a UI that assumes one global value will look wrong the first time it meets a real estate.
 
 INSERT INTO connector_target (
-    id, code, organization_unit_id, site_id, display_name, vendor, runtime_class,
+    id, code, organization_unit_id, geographic_area_id, display_name, vendor, runtime_class,
     endpoint, credential_reference, verify_tls, state,
     rate_limit_per_second, rate_limit_burst, inventory_poll_seconds, status_poll_seconds,
     event_poll_seconds, max_concurrent_requests, expected_camera_count,
@@ -685,7 +678,7 @@ WITH counts(code, cam_count) AS (VALUES
     ('VMS-AMC-02',     40), ('VMS-SMC-01',     30), ('VMS-HQ-LAB-01',   6)
 )
 INSERT INTO federated_camera (
-    target_id, native_camera_id, camera_id, organization_unit_id, site_id,
+    target_id, native_camera_id, camera_id, organization_unit_id, geographic_area_id,
     name, vendor_model, firmware, latitude, longitude,
     is_enabled, is_recording, health, last_seen, stream_references, raw_reference,
     first_seen_at, updated_at)
@@ -694,7 +687,7 @@ SELECT
     'CH' || lpad(n::text, 3, '0'),
     NULL,
     t.organization_unit_id,
-    t.site_id,
+    t.geographic_area_id,
     format('%s — Channel %s', t.display_name, lpad(n::text, 2, '0')),
     CASE t.vendor
         WHEN 'Onvif'            THEN 'Generic ONVIF Profile S'
@@ -705,7 +698,7 @@ SELECT
         WHEN 'Simulator'        THEN 'Simulated Camera'
     END,
     format('%s.%s.%s', 5 + (n % 3), 1 + (n % 7), n % 10),
-    -- Spread around the site centre: several cameras at one junction sit on different poles.
+    -- Spread around the area centre: several cameras at one junction sit on different poles.
     COALESCE(s.latitude,  23.0225000) + ((n % 7) - 3) * 0.0009,
     COALESCE(s.longitude, 72.5714000) + ((n % 5) - 2) * 0.0011,
     t.state <> 'Disabled' AND n % 23 <> 0,
@@ -732,7 +725,7 @@ SELECT
     now() - interval '5 minutes'
 FROM connector_target t
 JOIN counts c ON c.code = t.code
-LEFT JOIN sites s ON s.id = t.site_id
+LEFT JOIN dev_area_centre s ON s.area_id = t.geographic_area_id
 CROSS JOIN LATERAL generate_series(1, c.cam_count) AS n
 ON CONFLICT (target_id, native_camera_id) DO UPDATE
     SET health = EXCLUDED.health, last_seen = EXCLUDED.last_seen,
@@ -882,7 +875,7 @@ ON CONFLICT (target_id, checked_at) DO NOTHING;
 
 WITH cam AS (
     SELECT row_number() OVER (ORDER BY fc.target_id, fc.native_camera_id) AS rn,
-           fc.target_id, fc.native_camera_id, fc.organization_unit_id, fc.site_id,
+           fc.target_id, fc.native_camera_id, fc.organization_unit_id, fc.geographic_area_id,
            fc.latitude, fc.longitude
     FROM federated_camera fc
     JOIN connector_target t ON t.id = fc.target_id
@@ -896,7 +889,7 @@ series AS (
 ev AS (
     SELECT s.i,
            s.occurred_at,
-           c.target_id, c.native_camera_id, c.organization_unit_id, c.site_id,
+           c.target_id, c.native_camera_id, c.organization_unit_id, c.geographic_area_id,
            c.latitude, c.longitude,
            (ARRAY[
                'MotionDetected','MotionDetected','MotionDetected',
@@ -913,7 +906,7 @@ ev AS (
 )
 INSERT INTO federation_event (
     event_id, source_vms_id, source_event_id, camera_id,
-    organization_unit_id, site_id, event_type, vendor_event_type, occurred_at, severity,
+    organization_unit_id, geographic_area_id, event_type, vendor_event_type, occurred_at, severity,
     object_reference, confidence, latitude, longitude,
     raw_reference, delivery_mode, trace_id, received_at)
 SELECT
@@ -922,7 +915,7 @@ SELECT
     'SRC-' || lpad(ev.i::text, 8, '0'),
     ev.native_camera_id,
     ev.organization_unit_id,
-    ev.site_id,
+    ev.geographic_area_id,
     ev.event_type,
     -- The vendor's own label is preserved even when the normalised type fits, because losing it
     -- is what makes an event unexplainable six months later.
@@ -1141,7 +1134,7 @@ FROM generate_series(1, 9) AS n;
 -- ===========================================================================
 -- 14. camera registry, health and maintenance  (Model 1, schema v1.6)
 -- ===========================================================================
--- 36 registered cameras across six sites: a mix of types, most with the optics a coverage
+-- 36 registered cameras across six areas: a mix of types, most with the optics a coverage
 -- sector needs (azimuth + horizontal_fov + effective_range), and a spread of operational,
 -- connectivity and maintenance states — one retired, a few under maintenance, a few flagged.
 -- Then health-history rows, open/closed maintenance records, and reconciliation of the first
@@ -1150,7 +1143,7 @@ FROM generate_series(1, 9) AS n;
 -- All ids are fixed (f1... cameras, f2... maintenance) and every statement is ON CONFLICT or
 -- NOT EXISTS guarded, so this section is re-runnable like the rest of the file.
 
-WITH place(seq, site_id, org_unit_id, tail) AS (VALUES
+WITH place(seq, geographic_area_id, org_unit_id, tail) AS (VALUES
     (0, 'd0000000-0000-4000-8000-000000000001'::uuid, 'c0000000-0000-4000-8000-000000000003'::uuid, 'AHM-SG'),
     (1, 'd0000000-0000-4000-8000-000000000002'::uuid, 'c0000000-0000-4000-8000-000000000003'::uuid, 'AHM-MANI'),
     (2, 'd0000000-0000-4000-8000-000000000004'::uuid, 'c0000000-0000-4000-8000-000000000002'::uuid, 'AHM-KANK'),
@@ -1159,11 +1152,11 @@ WITH place(seq, site_id, org_unit_id, tail) AS (VALUES
     (5, 'd0000000-0000-4000-8000-000000000008'::uuid, 'c0000000-0000-4000-8000-000000000007'::uuid, 'VAD-STN')
 ),
 gen AS (
-    SELECT p.seq, p.site_id, p.org_unit_id, p.tail, n, (p.seq * 10 + n) AS rn
+    SELECT p.seq, p.geographic_area_id, p.org_unit_id, p.tail, n, (p.seq * 10 + n) AS rn
     FROM place p CROSS JOIN generate_series(1, 6) AS n
 )
 INSERT INTO cameras (
-    id, camera_code, name, organization_unit_id, site_id, manufacturer, model, camera_type,
+    id, camera_code, name, organization_unit_id, geographic_area_id, manufacturer, model, camera_type,
     latitude, longitude, mounting_height, azimuth, tilt, horizontal_fov, vertical_fov,
     effective_range, ip_address, port, protocol,
     operational_status, connectivity_status, maintenance_status,
@@ -1172,7 +1165,7 @@ SELECT
     ('f1000000-0000-4000-8000-' || lpad(to_hex(g.rn), 12, '0'))::uuid,
     format('CAM-%s-%s', g.tail, lpad(g.n::text, 2, '0')),
     format('%s — Camera %s', g.tail, lpad(g.n::text, 2, '0')),
-    g.org_unit_id, g.site_id,
+    g.org_unit_id, g.geographic_area_id,
     -- Only vendors the platform actually integrates (see the vendor_kind enum in v1.sql):
     -- CP Plus units run the Dahua CGI adapter. Reconciled cameras below get their
     -- manufacturer/model corrected to the linked VMS target's vendor.
@@ -1203,7 +1196,7 @@ SELECT
     now() - ((g.rn % 30) * interval '1 minute'),
     'e0000000-0000-4000-8000-000000000001'::uuid,
     'e0000000-0000-4000-8000-000000000001'::uuid
-FROM gen g JOIN sites s ON s.id = g.site_id
+FROM gen g JOIN dev_area_centre s ON s.area_id = g.geographic_area_id
 ON CONFLICT (id) DO UPDATE SET
     operational_status  = EXCLUDED.operational_status,
     connectivity_status = EXCLUDED.connectivity_status,
@@ -1329,7 +1322,6 @@ COMMIT;
 --   SELECT 'organizations',      count(*) FROM federation.organizations
 --   UNION ALL SELECT 'org units', count(*) FROM federation.organization_units
 --   UNION ALL SELECT 'areas',     count(*) FROM federation.geographic_areas
---   UNION ALL SELECT 'sites',     count(*) FROM federation.sites
 --   UNION ALL SELECT 'users',     count(*) FROM federation.platform_users
 --   UNION ALL SELECT 'groups',    count(*) FROM federation.access_groups
 --   UNION ALL SELECT 'targets',   count(*) FROM federation.connector_target
@@ -1372,7 +1364,7 @@ COMMIT;
 -- DELETE FROM access_groups         WHERE id::text LIKE 'a1000000-%';
 -- DELETE FROM scopes                WHERE id::text LIKE 'f0000000-%';
 -- DELETE FROM platform_users        WHERE id::text LIKE 'e0000000-%';
--- DELETE FROM sites                 WHERE id::text LIKE 'd0000000-%';
+-- DELETE FROM geographic_areas      WHERE id::text LIKE 'd0000000-%';   -- the former sites
 -- DELETE FROM organization_units    WHERE id::text LIKE 'c0000000-%';
 -- DELETE FROM organizations         WHERE id::text LIKE 'b0000000-%';
 -- DELETE FROM geographic_areas      WHERE id::text LIKE 'a0000000-%';

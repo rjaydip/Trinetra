@@ -1,9 +1,11 @@
 # API changes since the `d/registry-ui` fork
 
 Everything the `d/registry-ui` frontend (`frontend/src/api/`) must adapt to when it rebases onto
-`main` + the uncommitted v1.11 work. Grouped **breaking → new → additive**. Each change names
-where it is documented: the live OpenAPI (`.WithSummary` / `.WithDescription` on every route,
-served at `/scalar` and `/openapi/v1.json`) plus the `docs/*.md` reference.
+`main`, through **`v1.11`** (drop sites, editable roles, group lifecycle) and **`v1.12`** (role
+& access-group status lifecycle, cross-organization unit move, `role.read`). Grouped
+**breaking → new → additive**. Each change names where it is documented: the live OpenAPI
+(`.WithSummary` / `.WithDescription` on every route, served at `/scalar` and
+`/openapi/v1.json`) plus the `docs/*.md` reference.
 
 The frontend client of record is `frontend/src/api/endpoints.ts` + `frontend/src/api/models.ts`.
 
@@ -79,42 +81,75 @@ when refused with `409`:
 
 ```diff
 - RoleResponse { id, code, name, description, isSystem }
-+ RoleResponse { id, code, name, description, isSystem, status, customized, permissions[] }
++ RoleResponse { id, code, name, description, isSystem, status, customized, permissions[],
++                permissionDetails?, usedBy? }
 ```
 
-`GET /api/v1/roles` still works (same path) but is now served by the new roles router and
-returns **every** role (active or not), each with its `permissions` array. `RolesPage` can drop
-its separate per-role permission fetch.
+- `status` is `DRAFT | ACTIVE | INACTIVE`. **A custom role is created `DRAFT`** and grants
+  nothing to any group until it is `PUT` to `ACTIVE`. Presets are seeded `ACTIVE`.
+- `permissionDetails` (name/category per code) and `usedBy` (the access groups on this role,
+  filtered to what the caller can see) are populated on `GET /api/v1/roles/{id}` only.
+- `GET /api/v1/roles` is now served by the roles router and returns **every** role, each with
+  its `permissions` array — `RolesPage` can drop its separate per-role permission fetch.
 
 - **Docs:** OpenAPI `GET /api/v1/roles`; `docs/RBAC-LOGICAL-FLOW.md` §9 / §15.
+
+### 1.6 `role.read` is a new permission — `group.read` no longer covers roles/permissions
+
+`GET /api/v1/roles`, `GET /api/v1/roles/{id}` and `GET /api/v1/permissions` now require
+**`role.read`**, not `group.read`. `v1.12` grants `role.read` to every role that already had
+`group.read` (STATE_ADMIN, DEPARTMENT_ADMIN, …) plus SUPER_ADMIN, so seeded groups are
+unaffected — but a **custom** group built on `group.read` alone will 403 on the role picker
+until `role.read` is added.
+
+- **Docs:** OpenAPI on the three routes; `docs/AUTHORIZATION.md` §4.
+
+### 1.7 Access-group status: `DISABLED` → `INACTIVE`
+
+`v1.12` renames the disabled state for consistency with roles / units / areas / users.
+
+```diff
+- access group status ∈ { DRAFT, ACTIVE, DISABLED }
++ access group status ∈ { DRAFT, ACTIVE, INACTIVE }
+```
+
+The route is still `POST /api/v1/access-groups/{id}/disable`; it now writes `INACTIVE`. Any UI
+that string-matches `"DISABLED"` in a status badge/filter must switch to `"INACTIVE"`.
+
+- **Docs:** OpenAPI `/disable`; `docs/RBAC-LOGICAL-FLOW.md` §25.
 
 ---
 
 ## 2. NEW ENDPOINTS the UI now needs
 
-### 2.1 Organization / geography editing
+### 2.1 Organization / geography editing + lifecycle
 
 | Route | Purpose |
 |---|---|
 | `GET /api/v1/organization-units/{id}` | read one unit (was list-only) |
 | `PUT /api/v1/organizations/{id}` | edit `code` / `name` / `organizationType` / `description`. Unscoped `organization.manage` only |
-| `PUT /api/v1/organization-units/{id}` | edit `code` / `name` / `unitType` / `description` / `geographicAreaId`. **Refuses a `parentUnitId` change with 400** — reparent via `/deactivate` `reparent` |
-| `PUT /api/v1/geographic-areas/{id}` | edit `code` / `name` / `areaType` / `description`. Same **400 on `parentAreaId` change** |
+| `PUT /api/v1/organization-units/{id}` | edit `code` / `name` / `unitType` / `description` / `geographicAreaId`. **`parentUnitId` MAY change** — the unit + its whole subtree re-parent within the same organization. Refused: parent = self or a descendant (400), inactive new parent (400), different-organization parent (400 — use `/move`), re-parent to root i.e. `parentUnitId: null` needs unscoped `organization.manage` (403). Editing an `INACTIVE` unit → 409, activate first |
+| `POST /api/v1/organization-units/{id}/activate` | `INACTIVE` → `ACTIVE`. 409 if the parent is itself `INACTIVE`. Does not cascade |
+| `POST /api/v1/organization-units/{id}/move` | Move a unit under a parent in a **different** organization; rewrites the whole subtree's organization. `MoveUnitRequest { newParentUnitId, confirmScopeImpact }` → `MoveUnitResponse { fromOrganizationId, toOrganizationId, subtreeSize, camerasFollowing, targetsFollowing, affectedGroups[] }`. Unscoped `organization.manage` only (403). If any access group's org scope points into the subtree, 409 with `affectedGroups` until re-sent with `confirmScopeImpact: true` |
+| `PUT /api/v1/geographic-areas/{id}` | edit `code` / `name` / `areaType` / `description`. **`parentAreaId` MAY change** (advisory-locked, same guard family: self/descendant 400, inactive parent 400, level-order containment 400) |
 
-`status` is never set through these — use `/deactivate`.
+`status` on the PUTs is left as-is — use `/activate` and `/deactivate`.
 
-- **Docs:** OpenAPI on each; `docs/DEPARTMENT-SCHEMA.md` (API Examples), `docs/GEOGRAPHY-SCHEMA.md`.
+- **Docs:** OpenAPI on each; `docs/API-PLAN-HIERARCHY-RBAC.md` (the P1/P2a/P2b contract),
+  `docs/IMPL-NOTES-HIERARCHY-RBAC.md` (as-built), `docs/DEPARTMENT-SCHEMA.md`,
+  `docs/GEOGRAPHY-SCHEMA.md`.
 
 ### 2.2 Access-group lifecycle + edit
 
 | Route | Purpose |
 |---|---|
 | `PUT /api/v1/access-groups/{id}` | edit `code` / `name` / `description` / `roleId`. Re-runs the escalation guard. `status` untouched |
-| `POST /api/v1/access-groups/{id}/activate` | `DRAFT` / `DISABLED` → `ACTIVE`. **403** if the group has no ORGANIZATION *or* no GEOGRAPHY scope and the caller is not unscoped for `group.manage` on that dimension |
-| `POST /api/v1/access-groups/{id}/disable` | → `DISABLED`; the grant stops immediately |
+| `POST /api/v1/access-groups/{id}/activate` | `DRAFT` / `INACTIVE` → `ACTIVE`. **403** if the group has no ORGANIZATION *or* no GEOGRAPHY scope and the caller is not unscoped for `group.manage` on that dimension. Re-activating an already-`ACTIVE` group is a 204 no-op |
+| `POST /api/v1/access-groups/{id}/disable` | → `INACTIVE` (was `DISABLED` — see 1.7); the grant stops immediately |
 
-`GET /api/v1/roles` **moved off** the access-groups router into the roles router — same path,
-same `group.read` permission, no client change needed beyond the response-shape note in 1.5.
+Adding or removing a scope now also bumps `updatedAt`. `AccessGroupResponse` gained
+`grantsEffective` (bool — true only when the group is `ACTIVE` **and** its role is `ACTIVE`, so a
+UI can show "assembled but not yet granting"), plus `createdAt` / `updatedAt`.
 
 - **Docs:** OpenAPI on each; `docs/RBAC-LOGICAL-FLOW.md`, `docs/AUTHORIZATION.md` §5.
 
@@ -122,21 +157,21 @@ same `group.read` permission, no client change needed beyond the response-shape 
 
 | Route | Purpose |
 |---|---|
-| `GET /api/v1/roles/{id}` | one role + its permission codes |
-| `POST /api/v1/roles` | `RoleWriteRequest { code, name, permissions[], description?, status? }` → creates a custom role |
-| `PUT /api/v1/roles/{id}` | replaces `name` / `description` / `status` and the **entire** permission set. `code` in the body is ignored |
-| `DELETE /api/v1/roles/{id}` | custom roles only |
+| `GET /api/v1/roles/{id}` | one role + permission codes + `permissionDetails` + `usedBy` |
+| `POST /api/v1/roles` | `RoleWriteRequest { code, name, permissions[], description?, status? }` → creates a custom role, **status `DRAFT`** unless overridden |
+| `PUT /api/v1/roles/{id}` | replaces `name` / `description` / `status` and the **entire** permission set. `code` in the body is ignored. Flip `status` to `ACTIVE` here to make the role grant |
+| `DELETE /api/v1/roles/{id}` | **soft-delete → `INACTIVE`** (preserves history). A preset cannot be deleted (409). A role in use is *not* blocked — it goes `INACTIVE` and its groups simply grant nothing onward |
 
-Gated on the new **`role.manage`** permission. Rules the UI should surface:
+Read routes need `role.read`; writes need **`role.manage`**. Rules the UI should surface:
 - `SUPER_ADMIN` → `409` on any edit/delete.
-- Editing/disabling/deleting a preset (`isSystem`) → `409` unless the caller holds `role.manage`
+- Editing/disabling a preset (`isSystem`) → `409` unless the caller holds `role.manage`
   **unscoped**. Scoped `role.manage` holders get custom roles only.
 - A permission the caller does not hold themselves → `403` naming the excess.
-- Deleting a role a group still uses → `409`.
 - Duplicate `code` → `409`.
 
 - **Docs:** OpenAPI on each route (the 409/403 reasons are in the descriptions);
-  `docs/RBAC-LOGICAL-FLOW.md` §9, `docs/AUTHORIZATION.md` §5, `docs/API-REVIEW-FINDINGS.md` F7.
+  `docs/RBAC-LOGICAL-FLOW.md` §9, `docs/AUTHORIZATION.md` §5, `docs/API-PLAN-HIERARCHY-RBAC.md`,
+  `docs/API-REVIEW-FINDINGS.md` F7.
 
 ### 2.4 Auth audit (optional for the UI)
 
