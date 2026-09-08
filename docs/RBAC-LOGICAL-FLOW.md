@@ -134,6 +134,14 @@ deleted, only disabled. An operator edit that actually changes a preset's name, 
 permission set stamps `roles.customized_at`; a later migration re-seeding preset data must skip
 customized rows so a deliberate change is not silently reverted.
 
+Role lifecycle is `DRAFT → ACTIVE → INACTIVE` (v1.12). A custom role is created **`DRAFT`** — it
+grants nothing until an operator composes it and flips it to `ACTIVE` via `PUT`. `DELETE` is a
+**soft-delete to `INACTIVE`**: the row and its permission rows are kept (a later `PUT status:
+ACTIVE` restores it), and a role still referenced by access groups can be soft-deleted — those
+groups keep their `role_id` and simply grant nothing onward. Presets are seeded `ACTIVE`; a role
+that has left `DRAFT` cannot return to it. Reads of roles and the permission catalogue are gated
+by a dedicated **`role.read`** permission.
+
 A Role should not contain geographic information.
 
 ### Permission
@@ -885,10 +893,13 @@ DRAFT
 ACTIVE
   |
   v
-DISABLED
+INACTIVE
 ```
 
-A disabled group grants no access.
+An inactive group grants no access. (`INACTIVE` was named `DISABLED` before v1.12; the
+`POST /api/v1/access-groups/{id}/disable` route keeps its verb but now writes `INACTIVE`.)
+Activation is refused (409) when the group's role is not `ACTIVE`, or when a scope dimension is
+unconstrained and the caller either is not unscoped there or has not sent `confirmUnscoped: true`.
 
 ## 26. User Group Membership
 

@@ -146,7 +146,7 @@ public sealed class AuthorizationTests : IClassFixture<PostgresFixture>, IAsyncL
     public async Task Section25_DisabledGroup_GrantsNothing()
     {
         await _fixture.ExecuteAsync(
-            $"UPDATE federation.access_groups SET status='DISABLED' WHERE id='{CamOpsGroup}';");
+            $"UPDATE federation.access_groups SET status='INACTIVE' WHERE id='{CamOpsGroup}';");
 
         (await CanAsync("camera.read", PostgresFixture.PoliceUnit, PostgresFixture.DistrictId))
             .ShouldBeFalse();
@@ -334,7 +334,7 @@ public sealed class AuthorizationTests : IClassFixture<PostgresFixture>, IAsyncL
     {
         await SeedScopedKeyAsync();
         await _fixture.ExecuteAsync(
-            $"UPDATE federation.access_groups SET status='DISABLED' WHERE id='{CamOpsGroup}';");
+            $"UPDATE federation.access_groups SET status='INACTIVE' WHERE id='{CamOpsGroup}';");
 
         (await KeyCanAsync("camera.read", PostgresFixture.PoliceUnit, PostgresFixture.DistrictId))
             .ShouldBeFalse();

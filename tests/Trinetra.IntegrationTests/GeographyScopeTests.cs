@@ -60,8 +60,8 @@ public sealed class GeographyScopeTests : IClassFixture<PostgresFixture>, IAsync
 
             -- A bespoke role carrying exactly the permissions these repositories exercise, so
             -- the test does not depend on which seeded role happens to carry which permission.
-            INSERT INTO federation.roles (code, name, description, is_system)
-            VALUES ('GEO_SCOPE_TEST', 'Geo Scope Test', 'Integration-test-only role', FALSE);
+            INSERT INTO federation.roles (code, name, description, is_system, status)
+            VALUES ('GEO_SCOPE_TEST', 'Geo Scope Test', 'Integration-test-only role', FALSE, 'ACTIVE');
             INSERT INTO federation.role_permissions (role_id, permission_code)
             SELECT r.id, p.code FROM federation.roles r, unnest(ARRAY[
                 'vms.read', 'vms.create', 'vms.update', 'vms.delete',

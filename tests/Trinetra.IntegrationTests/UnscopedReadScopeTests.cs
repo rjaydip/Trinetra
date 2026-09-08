@@ -101,8 +101,8 @@ public sealed class UnscopedReadScopeTests : IClassFixture<PostgresFixture>, IAs
             VALUES ('{OtherDistrict}', NULL, 'RS-OTH-DIST', 'RS Other District', 'DISTRICT');
 
             -- A bespoke role carrying exactly the read/manage permissions PR5's filters key on.
-            INSERT INTO federation.roles (code, name, description, is_system)
-            VALUES ('READ_SCOPE_TEST', 'Read Scope Test', 'Integration-test-only role', FALSE);
+            INSERT INTO federation.roles (code, name, description, is_system, status)
+            VALUES ('READ_SCOPE_TEST', 'Read Scope Test', 'Integration-test-only role', FALSE, 'ACTIVE');
             INSERT INTO federation.role_permissions (role_id, permission_code)
             SELECT r.id, p.code FROM federation.roles r, unnest(ARRAY[
                 'user.read', 'group.read', 'apikey.read', 'apikey.manage'
@@ -110,8 +110,8 @@ public sealed class UnscopedReadScopeTests : IClassFixture<PostgresFixture>, IAs
             WHERE r.code = 'READ_SCOPE_TEST';
 
             -- A role holding a permission the caller's role does not (camera.delete).
-            INSERT INTO federation.roles (code, name, description, is_system)
-            VALUES ('READ_SCOPE_TEST_BROAD', 'Read Scope Test Broad', 'Integration-test-only', FALSE);
+            INSERT INTO federation.roles (code, name, description, is_system, status)
+            VALUES ('READ_SCOPE_TEST_BROAD', 'Read Scope Test Broad', 'Integration-test-only', FALSE, 'ACTIVE');
             INSERT INTO federation.role_permissions (role_id, permission_code)
             SELECT r.id, 'camera.delete' FROM federation.roles r WHERE r.code = 'READ_SCOPE_TEST_BROAD';
 

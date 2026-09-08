@@ -265,7 +265,8 @@ Making the operator choose turns an invisible side effect into a visible decisio
 - Camera coordinates must be validated before storage.
 - Deactivating an area with active child areas is refused until the operator chooses `cascade` or `reparent`. Neither outcome is applied silently.
 - A reparent target must be active and must not be a descendant of the area being deactivated.
-- `PUT /api/v1/geographic-areas/{id}` edits `code` / `name` / `areaType` / `description`; it refuses a `parentAreaId` change (400) — reparenting is the `/deactivate` `reparent` flow.
+- `PUT /api/v1/geographic-areas/{id}` edits `code` / `name` / `areaType` / `description`, and `parentAreaId` **may** change: the area and its subtree move under the new parent. Re-parenting under the area itself or a descendant is refused (400); so is a parent that is not `ACTIVE`, or one whose level is not strictly coarser than this area's (`trg_geo_area_acyclic` — surfaces as 400). Re-parenting to root needs `geography.manage` held unscoped (403). Editing an `INACTIVE` area is refused (409) — reactivate it first via `POST /api/v1/geographic-areas/{id}/activate`. Scoped `geography.manage` holders must reach both the area and the new parent. The `/deactivate` `reparent` flow still exists.
+- `POST /api/v1/geographic-areas/{id}/activate` moves an `INACTIVE` area to `ACTIVE`; refused (409) if the area's parent is `INACTIVE`, and it does not cascade to child areas.
 
 ## API Examples
 

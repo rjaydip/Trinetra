@@ -25,7 +25,7 @@ public static class AccessGroupEndpoints
         [.. g.Scopes.Select(s => new ScopeResponse(
             s.Id, s.ScopeType, s.OrganizationUnitId, s.GeographicAreaId,
             s.ResourceType, s.ResourceId, s.Description))],
-        g.MemberCount);
+        g.MemberCount, g.GrantsEffective, g.CreatedAt, g.UpdatedAt);
 
     public static void MapAccessGroupEndpoints(this IEndpointRouteBuilder app)
     {
@@ -96,18 +96,20 @@ public static class AccessGroupEndpoints
           .RequirePermission("group.manage")
           .WithSummary("Activate an access group")
           .WithDescription(
-              "Moves a `DRAFT` or `DISABLED` group to `ACTIVE`, at which point its members hold "
-              + "the grant.\n\n"
+              "Moves a `DRAFT` or `INACTIVE` group to `ACTIVE`, at which point its members hold "
+              + "the grant. Re-activating an already-active group is a no-op.\n\n"
+              + "Refused (409) when the group's role is not `ACTIVE` — the group would grant "
+              + "nothing.\n\n"
               + "**A group missing an ORGANIZATION scope or a GEOGRAPHY scope is unrestricted on "
-              + "that dimension** — an estate-wide grant. Activating one is allowed only for a "
-              + "caller already unscoped for `group.manage` on that dimension; anyone else gets "
-              + "403 and must add the missing scope first.");
+              + "that dimension** — an estate-wide grant. A caller not unscoped for `group.manage` "
+              + "on that dimension is refused (409) and must add the missing scope. A caller who "
+              + "*is* unscoped there must acknowledge it: re-send with `confirmUnscoped: true`.");
 
         group.MapPost("/{id:guid}/disable", DisableAsync)
           .RequirePermission("group.manage")
           .WithSummary("Disable an access group")
           .WithDescription(
-              "Moves a group to `DISABLED`. The grant stops immediately for every member — the "
+              "Moves a group to `INACTIVE`. The grant stops immediately for every member — the "
               + "authorization functions only consider `ACTIVE` groups. Membership rows are left "
               + "intact, so re-activating restores the same roster.");
 
@@ -143,7 +145,7 @@ public static class AccessGroupEndpoints
         // Roles live at /api/v1/roles — see RoleEndpoints, which also owns their CRUD.
 
         app.MapGet("/api/v1/permissions", ListPermissionsAsync)
-          .RequireAuthorization().WithTags(ApiTags.AccessControl).RequirePermission("group.read")
+          .RequireAuthorization().WithTags(ApiTags.AccessControl).RequirePermission("role.read")
           .WithSummary("List every permission the platform defines")
           .WithDescription(
               "The catalogue behind the **Requires permission** line on each operation in this "
@@ -271,8 +273,8 @@ public static class AccessGroupEndpoints
     }
 
     private static async Task<Results<NoContent, NotFound, ProblemHttpResult>> ActivateAsync(
-        Guid id, AccessGroupRepository repo, NpgsqlDataSource db, HttpContext http,
-        CancellationToken ct)
+        Guid id, [FromBody] ActivateGroupRequest? request, AccessGroupRepository repo,
+        NpgsqlDataSource db, HttpContext http, CancellationToken ct)
     {
         var caller = CallerContextFactory.From(http);
         caller.Require("group.manage");
@@ -281,6 +283,12 @@ public static class AccessGroupEndpoints
             || await repo.GetAsync(id, ct) is not { } group)
         {
             return TypedResults.NotFound();
+        }
+
+        // Already active: idempotent no-op, no re-confirmation, no audit row (Q9).
+        if (group.Status == "ACTIVE")
+        {
+            return TypedResults.NoContent();
         }
 
         // Re-run the escalation guard on the group's effective permissions: a stale DRAFT may
@@ -299,24 +307,68 @@ public static class AccessGroupEndpoints
             }
         }
 
-        // An unconstrained dimension is an estate-wide grant. Activating such a group is a
-        // deliberate act only an already-unscoped administrator may take on that dimension.
-        if (!await repo.HasOrganizationScopeAsync(id, ct) && !caller.IsUnscopedFor("group.manage"))
+        // A group on a role that is not ACTIVE would grant nothing (P11). Block the activation
+        // rather than leave an "active" group that is silently inert.
+        if (group.RoleStatus != "ACTIVE")
         {
-            return UnscopedActivationProblem("organization");
+            return TypedResults.Problem(
+                title: "Role is not active",
+                detail: $"This group's role {group.RoleCode} is {group.RoleStatus}. Activate the "
+                      + "role, or repoint the group, before activating the group.",
+                statusCode: StatusCodes.Status409Conflict);
         }
 
-        if (!await repo.HasGeographyScopeAsync(id, ct)
-            && !caller.IsUnscopedForGeography("group.manage"))
+        // An unconstrained dimension is an estate-wide grant (P12).
+        var confirmUnscoped = request?.ConfirmUnscoped ?? false;
+        var unconstrained = new List<string>();
+
+        var hasOrg = await repo.HasOrganizationScopeAsync(id, ct);
+        var hasGeo = await repo.HasGeographyScopeAsync(id, ct);
+
+        if (!hasOrg)
         {
-            return UnscopedActivationProblem("geography");
+            if (!caller.IsUnscopedFor("group.manage"))
+            {
+                return UnrestrictedDimensionProblem("organization");
+            }
+
+            unconstrained.Add("organization");
+        }
+
+        if (!hasGeo)
+        {
+            if (!caller.IsUnscopedForGeography("group.manage"))
+            {
+                return UnrestrictedDimensionProblem("geography");
+            }
+
+            unconstrained.Add("geography");
+        }
+
+        if (unconstrained.Count > 0 && !confirmUnscoped)
+        {
+            return TypedResults.Problem(
+                title: "Confirm the estate-wide grant",
+                detail: "This group is unrestricted on "
+                      + $"{string.Join(" and ", unconstrained)}, so activating it grants its "
+                      + "permissions across every "
+                      + $"{string.Join(" and ", unconstrained.Select(d => d == "organization" ? "department" : "area"))}. "
+                      + "Re-send with confirmUnscoped: true to proceed.",
+                statusCode: StatusCodes.Status409Conflict,
+                extensions: new Dictionary<string, object?>
+                {
+                    ["unconstrainedDimensions"] = unconstrained,
+                });
         }
 
         await using var work = await UnitOfWork.BeginAsync(db, ct);
         await repo.SetStatusAsync(id, "ACTIVE", caller.UserId, work, ct);
 
         await work.AuditAsync(caller, "update", "access_group", id.ToString(),
-            before: new { status = group.Status }, after: new { status = "ACTIVE" },
+            before: new { status = group.Status },
+            after: unconstrained.Count > 0
+                ? new { status = "ACTIVE", confirmUnscoped = true, unconstrainedDimensions = unconstrained }
+                : (object)new { status = "ACTIVE" },
             organizationUnitId: null, ct);
         await work.CommitAsync(ct);
 
@@ -337,10 +389,10 @@ public static class AccessGroupEndpoints
         }
 
         await using var work = await UnitOfWork.BeginAsync(db, ct);
-        await repo.SetStatusAsync(id, "DISABLED", caller.UserId, work, ct);
+        await repo.SetStatusAsync(id, "INACTIVE", caller.UserId, work, ct);
 
         await work.AuditAsync(caller, "update", "access_group", id.ToString(),
-            before: new { status = group.Status }, after: new { status = "DISABLED" },
+            before: new { status = group.Status }, after: new { status = "INACTIVE" },
             organizationUnitId: null, ct);
         await work.CommitAsync(ct);
 
@@ -371,14 +423,14 @@ public static class AccessGroupEndpoints
                 statusCode: StatusCodes.Status403Forbidden);
     }
 
-    private static ProblemHttpResult UnscopedActivationProblem(string dimension) =>
+    private static ProblemHttpResult UnrestrictedDimensionProblem(string dimension) =>
         TypedResults.Problem(
             title: "Group is unrestricted on a dimension",
             detail: $"This group has no {dimension} scope, so activating it would grant its "
                   + $"permissions across every {(dimension == "organization" ? "department" : "area")}. "
-                  + $"Add a {dimension} scope first, or activate it as an administrator already "
-                  + $"unscoped for group.manage on that dimension.",
-            statusCode: StatusCodes.Status403Forbidden);
+                  + $"Add a {dimension} scope first — a caller not unscoped for group.manage on "
+                  + "that dimension cannot activate it.",
+            statusCode: StatusCodes.Status409Conflict);
 
     private static async Task<Results<Created<CreatedResponse>, NotFound, ProblemHttpResult>> AddScopeAsync(
         Guid id, [FromBody] AddScopeRequest request, AccessGroupRepository repo,
@@ -480,7 +532,7 @@ public static class AccessGroupEndpoints
     private static async Task<Ok<IReadOnlyList<PermissionResponse>>> ListPermissionsAsync(
         AccessGroupRepository repo, HttpContext http, CancellationToken ct)
     {
-        CallerContextFactory.From(http).Require("group.read");
+        CallerContextFactory.From(http).Require("role.read");
         var permissions = await repo.ListPermissionsAsync(ct);
         return TypedResults.Ok<IReadOnlyList<PermissionResponse>>(
             [.. permissions.Select(x => new PermissionResponse(x.Code, x.Name, x.Category, x.Description))]);

@@ -33,9 +33,22 @@ skipping intervening levels is fine), and it fires on `area_type` changes too.
 `organization_units.geographic_area_id` is a **descriptive** "home area" label only — validated
 for existence + ACTIVE, never a scope input (invariant 12). Hierarchy nodes
 (`organization_units`, `geographic_areas`, `geographic_area_types`) carry an optional
-`description`. `PUT /api/v1/organization-units/{id}` and `PUT /api/v1/geographic-areas/{id}`
-edit fields but refuse a parent change (400) — reparenting stays on the locked `/deactivate`
-`reparent` flow.
+`description`.
+
+**Hierarchy edit + lifecycle (`v1.12`).** `PUT /api/v1/organization-units/{id}` and
+`PUT /api/v1/geographic-areas/{id}` now **allow a same-hierarchy re-parent** (`parentUnitId` /
+`parentAreaId` may change — the subtree moves implicitly); illegal cases (self, descendant,
+different organization, inactive parent) return 400, re-parent-to-root needs the permission held
+unscoped (403), and editing an `INACTIVE` node returns 409. New
+`POST …/organization-units/{id}/activate` and `POST …/geographic-areas/{id}/activate`
+(`INACTIVE → ACTIVE`, refused 409 under an inactive parent, no cascade). New
+`POST /api/v1/organization-units/{id}/move` re-parents a unit into a **different organization**
+and rewrites the whole subtree's `organization_id` — unscoped `organization.manage` only (403),
+`confirmScopeImpact: true` required (409) when access-group scopes point into the subtree. The
+same-organization invariant is now a **deferrable** constraint trigger
+(`trg_org_unit_same_org`); `assert_org_unit_acyclic` keeps self-parent + cycle only. Re-parent
+paths take the same tree-wide `pg_advisory_xact_lock` the deactivate cascade uses. The
+`/deactivate` `reparent` flow still exists.
 
 **Editable roles (`v1.11`).** The seeded roles are **presets**, not a locked set: `role.manage`
 (new permission) allows renaming and re-composing them and creating custom roles via
@@ -44,8 +57,21 @@ escalation guard as access groups — a caller not unscoped for `role.manage` ca
 permission into a role they don't hold. `roles.customized_at` marks an edited preset; **a future
 migration that re-seeds preset name/description/permissions must scope its writes to
 `WHERE customized_at IS NULL`** (the `SUPER_ADMIN` permission backfill stays unconditional).
-Access groups gained `PUT /{id}` + `/activate` + `/disable` (activating a scope-incomplete group
-needs unscoped `group.manage`).
+
+**Role + access-group lifecycle (`v1.12`).** `roles.status` is now `DRAFT → ACTIVE → INACTIVE`
+(column default `DRAFT`); the API creates a custom role `DRAFT` (grants nothing until activated),
+`DELETE /api/v1/roles/{id}` **soft-deletes to `INACTIVE`** (row + `role_permissions` kept; preset
+/ `SUPER_ADMIN` still 409; escalation guard still applies; a role in use is *not* blocked — the
+group keeps its `role_id` and grants nothing), and a role that has left `DRAFT` cannot return.
+New permission **`role.read`** gates `GET /roles`, `GET /roles/{id}` and `GET /permissions`
+(v1.12 grants it to every role that held `group.read`). `GET /roles` defaults to `ACTIVE` only —
+`?includeInactive=true` adds `DRAFT`/`INACTIVE`. `RoleResponse` gained timestamps, `usageCount`,
+`usedBy` (caller-visible groups, `GET /{id}` only) and permission metadata.
+`access_groups.status` renamed `DISABLED → INACTIVE` (route `/disable` keeps its verb).
+`POST /access-groups/{id}/activate` now takes `{ confirmUnscoped }`: an unconstrained scope
+dimension is 409 unless the caller is unscoped there **and** sends `confirmUnscoped: true` (was
+403); it is also 409 when the group's role is not `ACTIVE`. `AccessGroupResponse` gained
+`createdAt` / `updatedAt` / `grantsEffective`; a scope add/remove bumps `updated_at`.
 
 Stack: **.NET 10 / ASP.NET Core minimal API**, PostgreSQL (no extensions — see below), Kafka,
 OpenSearch, deployed on **on-prem bare metal** with systemd — no Kubernetes. Scale target is **80,000

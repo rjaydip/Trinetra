@@ -59,6 +59,13 @@ public sealed record GeographicAreaRequest(
 /// </remarks>
 public sealed record DeactivateRequest(string? ChildStrategy = null, Guid? NewParentId = null);
 
+/// <summary>
+/// Moves an organization unit under a parent in a different organization. The whole subtree's
+/// organization is rewritten. <c>confirmScopeImpact</c> must be <c>true</c> when access groups
+/// have an organization scope pointing into the subtree.
+/// </summary>
+public sealed record MoveUnitRequest(Guid NewParentUnitId, bool ConfirmScopeImpact = false);
+
 public sealed record ConnectorTargetRequest(
     string Code,
     Guid OrganizationUnitId,
@@ -145,6 +152,13 @@ public sealed record CreateGroupRequest(
     string? Description = null, string? Status = null);
 
 /// <summary>
+/// Body for <c>POST /access-groups/{id}/activate</c>. When a scope dimension has no scope row the
+/// group is unrestricted on it (an estate-wide grant); activating one requires the caller be
+/// unscoped for <c>group.manage</c> on that dimension <b>and</b> pass <c>confirmUnscoped: true</c>.
+/// </summary>
+public sealed record ActivateGroupRequest(bool ConfirmUnscoped = false);
+
+/// <summary>
 /// Edits an access group's code, name, description and role. <c>status</c> is not touched here —
 /// use the activate / disable routes. Switching the role re-runs the escalation guard.
 /// </summary>
@@ -154,8 +168,10 @@ public sealed record UpdateGroupRequest(
 /// <summary>
 /// Creates or replaces a role — a named set of permission codes. On <c>PUT</c> the
 /// <c>permissions</c> list fully replaces the role's current set. <c>code</c> is ignored on
-/// <c>PUT</c> (a role's code never changes). <c>status</c> is <c>ACTIVE</c> or <c>INACTIVE</c>;
-/// an <c>INACTIVE</c> role grants nothing to any group that uses it.
+/// <c>PUT</c> (a role's code never changes). <c>status</c> is <c>DRAFT</c>, <c>ACTIVE</c> or
+/// <c>INACTIVE</c>; only an <c>ACTIVE</c> role grants anything to a group that uses it. A custom
+/// role is created <c>DRAFT</c> when <c>status</c> is omitted. A role that has left <c>DRAFT</c>
+/// cannot be set back to it.
 /// </summary>
 public sealed record RoleWriteRequest(
     string Code, string Name, IReadOnlyList<string> Permissions,

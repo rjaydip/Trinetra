@@ -84,9 +84,13 @@ Do not store department names directly in the camera table.
 
 ## Important Rules
 
-- Organization and organization-unit IDs are immutable.
+- Organization and organization-unit IDs (primary keys) are immutable.
 - Organization units cannot form circular parent relationships.
-- A child unit must belong to the same organization as its parent.
+- A child unit must belong to the same organization as its parent. This is enforced by a
+  **deferrable** constraint trigger (`trg_org_unit_same_org`, v1.12) so that
+  `POST /organization-units/{id}/move` can rewrite a whole subtree's `organization_id` in one
+  transaction and have it re-checked, consistently, at commit. A direct single-row `UPDATE` that
+  changes `organization_id` while leaving the parent behind still fails immediately.
 - Prefer deactivation over destructive deletion when historical records exist.
 - Organization codes should be unique.
 - Geography must remain a separate hierarchy.
@@ -128,12 +132,28 @@ GET  /api/v1/organizations/{id}/units
 
 GET  /api/v1/organization-units/{id}
 PUT  /api/v1/organization-units/{id}          # edit fields + description + geographicAreaId;
-                                             # refuses a parentUnitId change (400)
+                                             # parentUnitId MAY change (same-org re-parent)
+POST /api/v1/organization-units/{id}/activate     # INACTIVE -> ACTIVE
+POST /api/v1/organization-units/{id}/move         # re-parent into another organization
 POST /api/v1/organization-units/{id}/deactivate
 ```
 
 `PUT` on an organization or unit replaces its editable fields; `status` is left as-is when
-omitted (deactivate through `/deactivate`, not by clearing a field). A unit's `organizationId`
-is immutable and a `parentUnitId` change through `PUT` is refused (400) — re-parenting is the
-`/deactivate` `reparent` flow. Editing an organization needs `organization.manage` held
-unscoped.
+omitted (use `/activate` and `/deactivate`, not a field). Editing an `INACTIVE` unit through
+`PUT` is refused (409) — reactivate it first.
+
+`parentUnitId` **may** change through `PUT`: the unit and its whole subtree move under the new
+parent **in the same organization** (descendants keep their `parent_unit_id` and move
+implicitly). Re-parenting under the unit itself or one of its descendants is refused (400); so is
+a parent that is not `ACTIVE` (400) or in a different organization (400). Re-parenting to root
+(`parentUnitId: null`) needs `organization.manage` held unscoped (403). The `/deactivate`
+`reparent` flow still exists — it is no longer the only way to re-parent.
+
+A unit's `organizationId` is **no longer immutable**: `POST /organization-units/{id}/move`
+re-parents a unit under a parent in a different organization and rewrites the whole subtree's
+`organization_id` in one transaction. It requires `organization.manage` held unscoped (403
+otherwise) and, when access groups have an `ORGANIZATION` scope pointing into the subtree, an
+explicit `confirmScopeImpact: true` (409 with the affected groups listed otherwise). Cameras,
+VMS targets and historic events reference the unit id and resolve organization through the live
+tree, so they follow the move automatically. Editing an organization needs `organization.manage`
+held unscoped.

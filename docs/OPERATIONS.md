@@ -343,6 +343,26 @@ JOIN federation.geographic_areas c ON c.id = d.id AND c.status = 'ACTIVE'
 WHERE p.status = 'INACTIVE';
 ```
 
+### A cross-organization unit move changed who can see a subtree
+
+`POST /api/v1/organization-units/{id}/move` re-parents a unit under another organization and
+rewrites the whole subtree's `organization_id`. Access-group `ORGANIZATION` scopes keep pointing
+at the moved unit ids, so any group scoped near either attachment point silently gains or loses
+that subtree. The move itself is one `config_audit` row carrying `subtreeUnitsMoved`,
+`affectedGroups`, `camerasFollowing` and `targetsFollowing` — review it after the fact. The
+access change applies as caches lapse: the API-key grant cache (~45s) and user access tokens
+(~15 min, on next refresh), same as any other scope edit. To see which groups a pending move
+would touch without applying it, send it without `confirmScopeImpact` and read the 409 body.
+
+```sql
+-- Access groups whose ORGANIZATION scope points into a unit subtree (blast radius of a move).
+SELECT ag.id, ag.code, ag.status
+FROM federation.access_groups ag
+JOIN federation.group_scopes gs ON gs.group_id = ag.id
+JOIN federation.scopes s ON s.id = gs.scope_id AND s.scope_type = 'ORGANIZATION'
+WHERE s.organization_unit_id IN (SELECT id FROM federation.org_unit_descendants('<unit-id>'));
+```
+
 ### The AI worker gets 403 or 404 resolving a stream credential
 
 `GET /api/v1/vms/{id}/credential/resolve` needs the `credential.resolve` permission, which only

@@ -231,12 +231,16 @@ Some things are refused on purpose, and look like gaps until you know why.
 | An API key administering users | Administering people is a human act. Fail-closed |
 | A scoped caller creating an organization | It creates a root no existing scope reaches — territory outside anyone's oversight, including their own administrator's |
 | A scoped caller creating a root org unit or root area | Same: it answers to no existing scope |
-| Re-parenting into a subtree being deactivated | Detaches it from the root and makes it unreachable to every scope query |
+| Re-parenting a unit or area beneath itself or one of its descendants | Detaches that subtree from the root and makes it unreachable to every scope query. `PUT /organization-units/{id}` and `PUT /geographic-areas/{id}` **do** allow an ordinary re-parent (same organization); the illegal cases return 400 |
+| Re-parenting a unit or area to root (`parent…Id: null`) by a scoped caller | A root answers to no existing scope — same rule as create. 403 |
+| Moving a unit to another organization (`POST /organization-units/{id}/move`) by anyone not unscoped for `organization.manage` | The move places a subtree under an organization the caller may have no standing in, and silently re-points every access-group scope inside it. Unscoped-only, and blocked (409) with the affected groups listed until the caller sends `confirmScopeImpact: true` |
+| Editing an `INACTIVE` organization unit or geographic area through `PUT` | Reactivate it first (`POST …/activate`). 409 |
 | Widening a group beyond the caller's own reach | Escalation by another route: granting access to a department they cannot themselves see |
+| Activating an access group whose role is not `ACTIVE` (`DRAFT` / `INACTIVE`) | The group would grant nothing. 409 |
 | A scoped `role.manage` holder touching a permission they lack (on the new set or the role's existing set) | Same escalation, one step earlier: put the permission in a role, attach a group in your scope, add yourself. Unscoped `role.manage` is exempt. Checked against the `FOR UPDATE` row |
 | A **scoped** `role.manage` holder editing, disabling or deleting a **preset** (`is_system`) role | A role is global; a preset change hits every group on it in every department. Preset writes require `role.manage` held unscoped; scoped holders get custom roles only |
 | Editing or deleting `SUPER_ADMIN` at all | It is the recovery role the first-start backfill and the platform-admin group depend on. Every other preset is editable (unscoped); presets cannot be deleted, only disabled |
-| Activating an access group with no organization *or* no geography scope | An unconstrained dimension is an estate-wide grant. Only an administrator already unscoped for `group.manage` on that dimension may do it |
+| Activating an access group with no organization *or* no geography scope | An unconstrained dimension is an estate-wide grant. The caller must be unscoped for `group.manage` on that dimension **and** send `confirmUnscoped: true`; anyone else gets 409 (changed from 403 in v1.12) |
 
 Out-of-scope reads return **404, not 403**. Distinguishing "does not exist" from "exists but is
 not yours" tells an unauthorised caller which ids are real. This holds for the user, access-group
@@ -325,3 +329,13 @@ The first is a choice; the two after it are gaps.
 - **The audit `before` snapshot is read outside the transaction.** If another writer changes the
   row in that window, the recorded `before` is stale. Rare, but it is the remaining inaccuracy in
   the trail.
+- **Role and permission reads have their own permission `role.read` (v1.12).**
+  `GET /api/v1/roles`, `GET /api/v1/roles/{id}` and `GET /api/v1/permissions` are gated by
+  `role.read`, not `group.read`. v1.12 grants `role.read` to every role that held `group.read`,
+  so no existing reader loses access. Role lifecycle is `DRAFT → ACTIVE → INACTIVE`: the API
+  creates a custom role `DRAFT` (grants nothing until activated), `DELETE /api/v1/roles/{id}`
+  soft-deletes to `INACTIVE` (the row and its `role_permissions` survive; a preset and
+  `SUPER_ADMIN` still cannot be deleted; the escalation guard still applies), and a role that has
+  left `DRAFT` cannot be set back to it. An access group on an `INACTIVE`/`DRAFT` role keeps its
+  `role_id` and simply grants nothing — `AccessGroupResponse.grantsEffective` reports whether the
+  pairing is live.

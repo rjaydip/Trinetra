@@ -36,6 +36,15 @@ public sealed record GeographicAreaResponse(
 /// <summary>An operator-declared level in the geographic hierarchy.</summary>
 public sealed record AreaTypeResponse(string Code, string Name, int LevelOrder);
 
+/// <summary>An access group affected by a cross-organization unit move.</summary>
+public sealed record AffectedGroupResponse(Guid Id, string Code, int MemberCount);
+
+/// <summary>Result of a cross-organization unit move.</summary>
+public sealed record MoveUnitResponse(
+    Guid FromOrganizationId, Guid ToOrganizationId, int SubtreeSize,
+    int CamerasFollowing, int TargetsFollowing,
+    IReadOnlyList<AffectedGroupResponse> AffectedGroups);
+
 /// <summary>A platform user. Never carries password material.</summary>
 public sealed record UserResponse(
     Guid Id, string Username, string DisplayName, string? Email,
@@ -54,19 +63,47 @@ public sealed record ScopeResponse(
     string? ResourceType, Guid? ResourceId, string? Description);
 
 /// <summary>An access group with its role, permissions and scopes resolved.</summary>
+/// <remarks>
+/// <see cref="Permissions"/> is the permission codes this group's <b>role</b> composes — not a
+/// live grant. The group actually confers them only when <see cref="GrantsEffective"/> is true
+/// (the group is <c>ACTIVE</c> and its role is <c>ACTIVE</c>). Read <see cref="Scopes"/> too: a
+/// dimension with no scope row is unrestricted on that dimension.
+/// </remarks>
 public sealed record AccessGroupResponse(
     Guid Id, string Code, string Name, string? Description, string Status,
     string RoleCode, IReadOnlyList<string> Permissions,
-    IReadOnlyList<ScopeResponse> Scopes, int MemberCount);
+    IReadOnlyList<ScopeResponse> Scopes, int MemberCount,
+    bool GrantsEffective,
+    DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt);
+
+/// <summary>One permission a role composes, with its vocabulary metadata.</summary>
+public sealed record RolePermissionDetailResponse(
+    string Code, string Name, string Category, string? Description);
+
+/// <summary>An access group that references a role.</summary>
+public sealed record RoleUsedByResponse(Guid Id, string Code, string Name, string Status);
 
 /// <summary>
 /// A role with the permission codes it composes. <see cref="IsSystem"/> marks a preset shipped
 /// with the platform — editable, but its <c>code</c> is fixed and it cannot be deleted.
-/// <see cref="Customized"/> is true once an operator has edited a preset.
+/// <see cref="Customized"/> is true once an operator has edited a preset. Lifecycle is
+/// <c>DRAFT -&gt; ACTIVE -&gt; INACTIVE</c>; a role that is not <c>ACTIVE</c> grants nothing to
+/// any group on it.
 /// </summary>
+/// <remarks>
+/// <see cref="Permissions"/> is the role's composed code list. <see cref="PermissionDetails"/>
+/// (metadata) and <see cref="UsedBy"/> (the access groups on this role, filtered to the ones the
+/// caller may see) are populated only on the single-role read; the list read leaves them null
+/// and carries <see cref="UsageCount"/> — a true total — only.
+/// </remarks>
 public sealed record RoleResponse(
     Guid Id, string Code, string Name, string? Description, bool IsSystem, string Status,
-    bool Customized, IReadOnlyList<string> Permissions);
+    bool Customized,
+    DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt, DateTimeOffset? CustomizedAt,
+    int UsageCount,
+    IReadOnlyList<string> Permissions,
+    IReadOnlyList<RolePermissionDetailResponse>? PermissionDetails,
+    IReadOnlyList<RoleUsedByResponse>? UsedBy);
 
 /// <summary>A permission in the vocabulary.</summary>
 public sealed record PermissionResponse(

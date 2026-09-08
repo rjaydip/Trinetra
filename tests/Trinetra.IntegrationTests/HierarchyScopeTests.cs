@@ -86,9 +86,9 @@ public sealed class HierarchyScopeTests : IClassFixture<PostgresFixture>, IAsync
                 WHERE id IN ('{AreaLeaf}', '{AreaInactive}', '{OtherArea}');
 
             -- Bespoke roles: one with the full hierarchy set, one read-only WITHOUT geography.read.
-            INSERT INTO federation.roles (code, name, description, is_system)
-            VALUES ('HIER_SCOPE_TEST', 'Hierarchy Scope Test', 'Integration-test-only role', FALSE),
-                   ('HIER_READ_TEST', 'Hierarchy Read Test', 'Integration-test-only role', FALSE);
+            INSERT INTO federation.roles (code, name, description, is_system, status)
+            VALUES ('HIER_SCOPE_TEST', 'Hierarchy Scope Test', 'Integration-test-only role', FALSE, 'ACTIVE'),
+                   ('HIER_READ_TEST', 'Hierarchy Read Test', 'Integration-test-only role', FALSE, 'ACTIVE');
             INSERT INTO federation.role_permissions (role_id, permission_code)
             SELECT r.id, p.code FROM federation.roles r, unnest(ARRAY[
                 'organization.read', 'organization.manage', 'geography.read', 'geography.manage'

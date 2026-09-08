@@ -223,43 +223,133 @@ public sealed class RoleCrudTests : IClassFixture<PostgresFixture>, IAsyncLifeti
     public async Task Delete_APreset_IsRefused()
     {
         await using var work = await BeginAsync();
-        (await Repo.DeleteAsync(TestPreset, work, CancellationToken.None))
+        (await Repo.DeleteAsync(TestPreset, Unscoped(), work, CancellationToken.None))
             .Error.ShouldBe(RoleWriteError.PresetShapeFixed);
     }
 
     [Fact]
-    public async Task Delete_ACustomRoleInUse_IsRefused_ButAnUnusedOneSucceeds()
+    public async Task Delete_SoftDeletesToInactive_KeepsPermissionRows_AndIsIdempotent()
     {
-        Guid usedId, freeId;
+        Guid id;
+        await using (var work = await BeginAsync())
+        {
+            id = (await Repo.CreateAsync(
+                "ROLE-TEST-SOFT", "Soft", null, "ACTIVE", ["vms.read"], Unscoped(), work,
+                CancellationToken.None)).Id;
+            await work.CommitAsync(CancellationToken.None);
+        }
+
+        await using (var work = await BeginAsync())
+        {
+            (await Repo.DeleteAsync(id, Unscoped(), work, CancellationToken.None))
+                .Error.ShouldBe(RoleWriteError.None);
+            await work.CommitAsync(CancellationToken.None);
+        }
+
+        var after = await Repo.GetAsync(id, CancellationToken.None);
+        after.ShouldNotBeNull();
+        after!.Status.ShouldBe("INACTIVE");
+        after.Permissions.ShouldBe(["vms.read"]);
+
+        // Idempotent on an already-INACTIVE role.
+        await using (var work = await BeginAsync())
+        {
+            (await Repo.DeleteAsync(id, Unscoped(), work, CancellationToken.None))
+                .Error.ShouldBe(RoleWriteError.None);
+            await work.CommitAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task Delete_ACustomRoleInUse_SoftDeletes_GroupKeepsRoleButGrantsNothing()
+    {
+        Guid usedId;
         await using (var work = await BeginAsync())
         {
             usedId = (await Repo.CreateAsync(
-                "ROLE-TEST-USED", "Used", null, null, ["vms.read"], Unscoped(), work,
-                CancellationToken.None)).Id;
-            freeId = (await Repo.CreateAsync(
-                "ROLE-TEST-FREE", "Free", null, null, ["vms.read"], Unscoped(), work,
+                "ROLE-TEST-USED", "Used", null, "ACTIVE", ["vms.read"], Unscoped(), work,
                 CancellationToken.None)).Id;
             await work.CommitAsync(CancellationToken.None);
         }
 
         await _fixture.ExecuteAsync($"""
             INSERT INTO federation.access_groups (code, name, role_id, status)
-            VALUES ('ROLE-TEST-GRP', 'Uses the used role', '{usedId}', 'DRAFT');
+            VALUES ('ROLE-TEST-GRP', 'Uses the used role', '{usedId}', 'ACTIVE');
             """);
 
         await using (var work = await BeginAsync())
         {
-            (await Repo.DeleteAsync(usedId, work, CancellationToken.None))
-                .Error.ShouldBe(RoleWriteError.InUse);
-        }
-
-        await using (var work = await BeginAsync())
-        {
-            (await Repo.DeleteAsync(freeId, work, CancellationToken.None))
+            (await Repo.DeleteAsync(usedId, Unscoped(), work, CancellationToken.None))
                 .Error.ShouldBe(RoleWriteError.None);
             await work.CommitAsync(CancellationToken.None);
         }
 
-        (await Repo.GetAsync(freeId, CancellationToken.None)).ShouldBeNull();
+        (await Repo.GetAsync(usedId, CancellationToken.None))!.Status.ShouldBe("INACTIVE");
+
+        var stillReferenced = await _fixture.ScalarAsync<string>(
+            $"SELECT status FROM federation.access_groups WHERE role_id = '{usedId}';");
+        stillReferenced.ShouldBe("ACTIVE");
+
+        var granted = await _fixture.ScalarAsync<long>($"""
+            SELECT count(*) FROM federation.access_groups ag
+            JOIN federation.roles r ON r.id = ag.role_id
+            WHERE ag.role_id = '{usedId}' AND r.status = 'ACTIVE';
+            """);
+        granted.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task Delete_ByScopedCaller_ExceedingTheirGrant_IsEscalation()
+    {
+        Guid id;
+        await using (var work = await BeginAsync())
+        {
+            id = (await Repo.CreateAsync(
+                "ROLE-TEST-DESC", "Desc", null, "ACTIVE", ["vms.read", "credential.write"],
+                Unscoped(), work, CancellationToken.None)).Id;
+            await work.CommitAsync(CancellationToken.None);
+        }
+
+        await using var work2 = await BeginAsync();
+        var r = await Repo.DeleteAsync(id, Scoped("vms.read"), work2, CancellationToken.None);
+        r.Error.ShouldBe(RoleWriteError.Escalation);
+        r.Exceeding.ShouldBe(["credential.write"]);
+    }
+
+    [Fact]
+    public async Task Create_DefaultsToDraft_AndDraftGrantsNothing()
+    {
+        Guid id;
+        await using (var work = await BeginAsync())
+        {
+            id = (await Repo.CreateAsync(
+                "ROLE-TEST-DRAFT", "Draft", null, null, ["vms.read"], Unscoped(), work,
+                CancellationToken.None)).Id;
+            await work.CommitAsync(CancellationToken.None);
+        }
+
+        (await Repo.GetAsync(id, CancellationToken.None))!.Status.ShouldBe("DRAFT");
+
+        // Hidden from the default list, visible with includeInactive.
+        (await Repo.ListAsync(false, CancellationToken.None)).ShouldNotContain(r => r.Id == id);
+        (await Repo.ListAsync(true, CancellationToken.None)).ShouldContain(r => r.Id == id);
+    }
+
+    [Fact]
+    public async Task Update_CannotReturnALiveRoleToDraft()
+    {
+        Guid id;
+        await using (var work = await BeginAsync())
+        {
+            id = (await Repo.CreateAsync(
+                "ROLE-TEST-NOBACK", "NoBack", null, "ACTIVE", ["vms.read"], Unscoped(), work,
+                CancellationToken.None)).Id;
+            await work.CommitAsync(CancellationToken.None);
+        }
+
+        await using var work2 = await BeginAsync();
+        (await Repo.UpdateAsync(
+            id, "NoBack", null, "DRAFT", ["vms.read"], Unscoped(), work2, CancellationToken.None))
+            .Error.ShouldBe(RoleWriteError.InvalidStatus);
     }
 }

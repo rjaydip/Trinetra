@@ -115,6 +115,40 @@ public sealed class GeographyRepository
 
         var c = work.Connection;
 
+        // Re-parent of an existing area (P2a): serialize against cascade-deactivate on the same
+        // hierarchy-wide advisory lock the deactivate path uses, re-read FOR UPDATE, and give the
+        // descendant-as-parent case a meaningful message. Cycle and level-order containment are
+        // enforced by trg_geo_area_acyclic and surface as 400.
+        if (parentIsChanging && area.Id != Guid.Empty)
+        {
+            await c.ExecuteAsync(new CommandDefinition(
+                "SELECT pg_advisory_xact_lock(hashtext('federation.geographic_areas.deactivate'));",
+                transaction: work.Transaction, cancellationToken: ct)).ConfigureAwait(false);
+
+            await c.ExecuteScalarAsync<string?>(new CommandDefinition(
+                "SELECT status FROM federation.geographic_areas WHERE id = @Id FOR UPDATE;",
+                new { area.Id }, work.Transaction, cancellationToken: ct)).ConfigureAwait(false);
+
+            if (area.ParentAreaId is { } newParent)
+            {
+                if (newParent == area.Id)
+                {
+                    throw new InvalidOperationException("An area cannot be its own parent.");
+                }
+
+                var wouldDetach = await c.ExecuteScalarAsync<bool>(new CommandDefinition("""
+                    SELECT EXISTS (SELECT 1 FROM federation.geographic_area_descendants(@Id) d
+                                   WHERE d.id = @newParent);
+                    """, new { area.Id, newParent }, work.Transaction, cancellationToken: ct))
+                    .ConfigureAwait(false);
+
+                if (wouldDetach)
+                {
+                    throw new InvalidOperationException("Cannot re-parent an area beneath itself.");
+                }
+            }
+        }
+
         if (!Geo(caller, "geography.manage"))
         {
             // Both the area and its parent: without the parent check a scoped caller could
@@ -248,6 +282,70 @@ public sealed class GeographyRepository
                 """, new { areaId }, work.Transaction, cancellationToken: ct));
         }
         return null;
+    }
+
+    /// <summary>
+    /// Moves an INACTIVE area back to ACTIVE (P3). Refused when the area's parent is INACTIVE.
+    /// </summary>
+    public async Task<ActivateResult> ActivateAreaAsync(
+        Guid areaId, CallerContext caller, UnitOfWork work, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(caller);
+        caller.Require("geography.manage");
+
+        var c = work.Connection;
+
+        await c.ExecuteAsync(new CommandDefinition(
+            "SELECT pg_advisory_xact_lock(hashtext('federation.geographic_areas.deactivate'));",
+            transaction: work.Transaction, cancellationToken: ct)).ConfigureAwait(false);
+
+        var status = await c.ExecuteScalarAsync<string?>(new CommandDefinition("""
+            SELECT status FROM federation.geographic_areas WHERE id = @areaId FOR UPDATE;
+            """, new { areaId }, work.Transaction, cancellationToken: ct)).ConfigureAwait(false);
+
+        if (status is null)
+        {
+            return ActivateResult.NotFound;
+        }
+
+        var parentAreaId = await c.ExecuteScalarAsync<Guid?>(new CommandDefinition("""
+            SELECT parent_area_id FROM federation.geographic_areas WHERE id = @areaId;
+            """, new { areaId }, work.Transaction, cancellationToken: ct)).ConfigureAwait(false);
+
+        if (!Geo(caller, "geography.manage"))
+        {
+            if (parentAreaId is null)
+            {
+                throw new ForbiddenException("geography.manage");
+            }
+
+            await RequireAreaAsync(c, work.Transaction, caller, areaId, ct).ConfigureAwait(false);
+        }
+
+        if (status == "ACTIVE")
+        {
+            return ActivateResult.AlreadyActive;
+        }
+
+        if (parentAreaId is { } parent)
+        {
+            var parentActive = await c.ExecuteScalarAsync<bool>(new CommandDefinition("""
+                SELECT EXISTS (SELECT 1 FROM federation.geographic_areas
+                               WHERE id = @parent AND status = 'ACTIVE');
+                """, new { parent }, work.Transaction, cancellationToken: ct)).ConfigureAwait(false);
+
+            if (!parentActive)
+            {
+                return ActivateResult.ParentInactive;
+            }
+        }
+
+        await c.ExecuteAsync(new CommandDefinition("""
+            UPDATE federation.geographic_areas
+            SET status = 'ACTIVE', updated_at = now() WHERE id = @areaId;
+            """, new { areaId }, work.Transaction, cancellationToken: ct)).ConfigureAwait(false);
+
+        return ActivateResult.Activated;
     }
 
     /// <summary>Operator-defined level names, used to render and validate the hierarchy.</summary>

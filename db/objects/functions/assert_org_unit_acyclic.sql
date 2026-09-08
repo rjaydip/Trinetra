@@ -11,13 +11,11 @@ BEGIN
         RAISE EXCEPTION 'Organization unit % cannot be its own parent.', NEW.id;
     END IF;
 
-    -- A child must sit in the same organization as its parent, per DEPARTMENT-SCHEMA.md.
-    IF (SELECT organization_id FROM organization_units WHERE id = NEW.parent_unit_id)
-       IS DISTINCT FROM NEW.organization_id THEN
-        RAISE EXCEPTION
-            'Organization unit % must belong to the same organization as its parent.', NEW.id;
-    END IF;
-
+    -- Same-organization-as-parent is enforced by trg_org_unit_same_org (a
+    -- DEFERRABLE constraint trigger), not here (v1.12). A cross-organization
+    -- move rewrites organization_id across a whole subtree in one statement; a
+    -- per-row BEFORE trigger fires in arbitrary order and would reject the
+    -- legitimate half-applied batch. Cycle prevention stays here.
     IF EXISTS (
         WITH RECURSIVE ancestors(id) AS (
             SELECT parent_unit_id FROM organization_units
@@ -34,4 +32,3 @@ BEGIN
 
     RETURN NEW;
 END $function$
-

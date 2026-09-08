@@ -27,7 +27,16 @@ namespace Trinetra.Federation.Api.Endpoints;
 public static class RoleEndpoints
 {
     private static RoleResponse ToResponse(RoleDetail r) =>
-        new(r.Id, r.Code, r.Name, r.Description, r.IsSystem, r.Status, r.Customized, r.Permissions);
+        new(r.Id, r.Code, r.Name, r.Description, r.IsSystem, r.Status, r.Customized,
+            r.CreatedAt, r.UpdatedAt, r.CustomizedAt, r.UsageCount,
+            r.Permissions,
+            r.PermissionDetails is null
+                ? null
+                : [.. r.PermissionDetails.Select(d =>
+                    new RolePermissionDetailResponse(d.Code, d.Name, d.Category, d.Description))],
+            r.UsingGroups is null
+                ? null
+                : [.. r.UsingGroups.Select(g => new RoleUsedByResponse(g.Id, g.Code, g.Name, g.Status))]);
 
     public static void MapRoleEndpoints(this IEndpointRouteBuilder app)
     {
@@ -36,24 +45,30 @@ public static class RoleEndpoints
                        .RequireAuthorization();
 
         group.MapGet("/", ListAsync)
-          .RequirePermission("group.read")
+          .RequirePermission("role.read")
           .WithSummary("List roles")
           .WithDescription(
-              "Every role with the permission codes it grants. `isSystem` marks a preset shipped "
-              + "with the platform; `customized` is true once someone has edited one. Roles carry "
-              + "no scope of their own — scope is attached to the group.");
+              "Roles with the permission codes each grants and a `usageCount` of the access "
+              + "groups on it. `isSystem` marks a preset shipped with the platform; `customized` "
+              + "is true once someone has edited one. Defaults to `ACTIVE` roles only — pass "
+              + "`includeInactive=true` to also see `DRAFT` and `INACTIVE` roles. Roles carry no "
+              + "scope of their own — scope is attached to the group.");
 
         group.MapGet("/{id:guid}", GetAsync)
-          .RequirePermission("group.read")
+          .RequirePermission("role.read")
           .WithSummary("Read one role")
-          .WithDescription("The role and the exact set of permission codes it composes.");
+          .WithDescription(
+              "The role, the permission codes it composes plus their metadata, its lifecycle "
+              + "timestamps, and `usedBy` — the access groups on this role that you may see "
+              + "(`usageCount` is the true total regardless of visibility).");
 
         group.MapPost("/", CreateAsync)
           .RequirePermission("role.manage")
           .WithSummary("Create a custom role")
           .WithDescription(
               "Composes a new role from a set of permission codes (see `GET /api/v1/permissions`). "
-              + "Always created as a non-preset role.\n\n"
+              + "Always a non-preset role, and **created as `DRAFT`** unless `status` is given — "
+              + "compose it, then flip it to `ACTIVE` with `PUT`. A `DRAFT` role grants nothing.\n\n"
               + "A caller who is not unscoped for `role.manage` cannot include a permission they "
               + "do not themselves hold — 403 naming the excess.");
 
@@ -70,26 +85,30 @@ public static class RoleEndpoints
 
         group.MapDelete("/{id:guid}", DeleteAsync)
           .RequirePermission("role.manage")
-          .WithSummary("Delete a custom role")
+          .WithSummary("Soft-delete a custom role")
           .WithDescription(
-              "Removes a role and its permission rows. **A preset cannot be deleted** (409) — "
-              + "disable it instead. A role still referenced by an access group cannot be deleted "
-              + "either (409); repoint or remove those groups first.");
+              "Sets the role to `INACTIVE`. The row and its permission rows are kept, so a later "
+              + "`PUT status: ACTIVE` restores it. **A preset cannot be deleted** (409) — disable "
+              + "it instead — and **`SUPER_ADMIN` cannot be touched** (409). A role still "
+              + "referenced by access groups **can** be soft-deleted: those groups keep their "
+              + "`roleId` and simply grant nothing onward. Idempotent on an already-`INACTIVE` "
+              + "role.");
     }
 
     private static async Task<Ok<IReadOnlyList<RoleResponse>>> ListAsync(
-        RoleRepository repo, HttpContext http, CancellationToken ct)
+        bool? includeInactive, RoleRepository repo, HttpContext http, CancellationToken ct)
     {
-        CallerContextFactory.From(http).Require("group.read");
-        var roles = await repo.ListAsync(ct);
+        CallerContextFactory.From(http).Require("role.read");
+        var roles = await repo.ListAsync(includeInactive ?? false, ct);
         return TypedResults.Ok<IReadOnlyList<RoleResponse>>([.. roles.Select(ToResponse)]);
     }
 
     private static async Task<Results<Ok<RoleResponse>, NotFound>> GetAsync(
         Guid id, RoleRepository repo, HttpContext http, CancellationToken ct)
     {
-        CallerContextFactory.From(http).Require("group.read");
-        var role = await repo.GetAsync(id, ct);
+        var caller = CallerContextFactory.From(http);
+        caller.Require("role.read");
+        var role = await repo.GetAsync(id, caller, ct);
         return role is null ? TypedResults.NotFound() : TypedResults.Ok(ToResponse(role));
     }
 
@@ -127,7 +146,7 @@ public static class RoleEndpoints
 
         await using var work = await UnitOfWork.BeginAsync(db, ct);
 
-        var prior = await repo.GetAsync(id, ct);
+        var prior = await repo.GetAsync(id, caller, ct);
         var result = await repo.UpdateAsync(
             id, request.Name, request.Description, request.Status,
             request.Permissions, caller, work, ct);
@@ -142,7 +161,7 @@ public static class RoleEndpoints
             return problem;
         }
 
-        var updated = await repo.GetAsync(id, ct);
+        var updated = await repo.GetAsync(id, caller, ct);
         await work.AuditAsync(caller, "update", "role", id.ToString(),
             before: prior is null ? null : ToResponse(prior), after: request,
             organizationUnitId: null, ct);
@@ -157,10 +176,10 @@ public static class RoleEndpoints
         var caller = CallerContextFactory.From(http);
         caller.Require("role.manage");
 
-        var prior = await repo.GetAsync(id, ct);
+        var prior = await repo.GetAsync(id, caller, ct);
 
         await using var work = await UnitOfWork.BeginAsync(db, ct);
-        var result = await repo.DeleteAsync(id, work, ct);
+        var result = await repo.DeleteAsync(id, caller, work, ct);
 
         if (result.Error == RoleWriteError.NotFound)
         {
@@ -173,7 +192,8 @@ public static class RoleEndpoints
         }
 
         await work.AuditAsync(caller, "delete", "role", id.ToString(),
-            before: prior is null ? null : ToResponse(prior), after: null,
+            before: prior is null ? null : ToResponse(prior),
+            after: new { status = "INACTIVE" },
             organizationUnitId: null, ct);
         await work.CommitAsync(ct);
 
@@ -222,6 +242,12 @@ public static class RoleEndpoints
             title: "Unknown permission",
             detail: "One of the supplied permission codes is not in the vocabulary. See "
                   + "GET /api/v1/permissions.",
+            statusCode: StatusCodes.Status400BadRequest),
+
+        RoleWriteError.InvalidStatus => TypedResults.Problem(
+            title: "Invalid role status",
+            detail: "status must be DRAFT, ACTIVE or INACTIVE, and a role that has left DRAFT "
+                  + "cannot be returned to it.",
             statusCode: StatusCodes.Status400BadRequest),
 
         _ => null,

@@ -18,7 +18,12 @@ public sealed record ScopeSummary(
 public sealed record AccessGroupDetail(
     Guid Id, string Code, string Name, string? Description, string Status,
     string RoleCode, IReadOnlyList<string> Permissions, IReadOnlyList<ScopeSummary> Scopes,
-    int MemberCount);
+    int MemberCount, string RoleStatus,
+    DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt)
+{
+    /// <summary>The group confers its permissions only when both it and its role are ACTIVE.</summary>
+    public bool GrantsEffective => Status == "ACTIVE" && RoleStatus == "ACTIVE";
+}
 
 /// <summary>Access groups, roles, permissions and scopes.</summary>
 // CA1822 fires on the write methods now that they take their connection from the UnitOfWork
@@ -209,6 +214,7 @@ public sealed class AccessGroupRepository
 
         var sql = $"""
             SELECT ag.id, ag.code, ag.name, ag.description, ag.status, r.code AS role_code,
+                   r.status AS role_status, ag.created_at, ag.updated_at,
                    (SELECT count(*) FROM federation.user_groups ug
                      WHERE ug.group_id = ag.id AND ug.status = 'ACTIVE') AS member_count
             FROM federation.access_groups ag
@@ -258,7 +264,7 @@ public sealed class AccessGroupRepository
                 [.. scopes[g.Id].Select(x => new ScopeSummary(
                     x.Id, x.ScopeType, x.OrganizationUnitId, x.GeographicAreaId,
                     x.ResourceType, x.ResourceId, x.Description))],
-                g.MemberCount)),
+                g.MemberCount, g.RoleStatus, g.CreatedAt, g.UpdatedAt)),
         ];
     }
 
@@ -283,7 +289,7 @@ public sealed class AccessGroupRepository
     }
 
     /// <summary>
-    /// Sets a group's lifecycle status — <c>DRAFT</c>, <c>ACTIVE</c> or <c>DISABLED</c>. Returns
+    /// Sets a group's lifecycle status — <c>DRAFT</c>, <c>ACTIVE</c> or <c>INACTIVE</c>. Returns
     /// <see langword="false"/> if the group does not exist.
     /// </summary>
     /// <remarks>
@@ -335,6 +341,12 @@ public sealed class AccessGroupRepository
             INSERT INTO federation.group_scopes (group_id, scope_id)
             VALUES (@groupId, @scopeId) ON CONFLICT DO NOTHING;
             """, new { groupId, scopeId }, work.Transaction, cancellationToken: ct));
+
+        // A scope change alters what the group confers — bump the group's updated_at (P13).
+        await c.ExecuteAsync(new CommandDefinition(
+            "UPDATE federation.access_groups SET updated_at = now() WHERE id = @groupId;",
+            new { groupId }, work.Transaction, cancellationToken: ct));
+
         return scopeId;
     }
 
@@ -346,6 +358,15 @@ public sealed class AccessGroupRepository
             DELETE FROM federation.group_scopes WHERE group_id = @groupId AND scope_id = @scopeId;
             DELETE FROM federation.scopes WHERE id = @scopeId;
             """, new { groupId, scopeId }, work.Transaction, cancellationToken: ct));
+
+        if (affected > 0)
+        {
+            // Removing a scope widens the group — bump updated_at (P13).
+            await c.ExecuteAsync(new CommandDefinition(
+                "UPDATE federation.access_groups SET updated_at = now() WHERE id = @groupId;",
+                new { groupId }, work.Transaction, cancellationToken: ct));
+        }
+
         return affected > 0;
     }
 
@@ -581,6 +602,9 @@ public sealed class AccessGroupRepository
         public string? Description { get; init; }
         public string Status { get; init; } = "";
         public string RoleCode { get; init; } = "";
+        public string RoleStatus { get; init; } = "";
         public int MemberCount { get; init; }
+        public DateTimeOffset CreatedAt { get; init; }
+        public DateTimeOffset UpdatedAt { get; init; }
     }
 }

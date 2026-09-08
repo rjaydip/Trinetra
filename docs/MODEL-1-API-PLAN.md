@@ -1073,7 +1073,32 @@ Decisions taken from §10 before coding. This section governs where it differs f
 - Reconciliation: `ReconciliationRepository`; `GET /cameras/unreconciled` (keyset), `POST /cameras/{id}/reconcile` (idempotent; 409 on relink), `POST /cameras/from-federated` (create + link in one call)
 - `CameraScope` shared predicate helper; `CameraRepository.FindLiveIdByCodeAsync`
 
+**Hierarchy + RBAC lifecycle wave — shipped (`v1.12`; see docs/API-PLAN-HIERARCHY-RBAC.md,
+docs/IMPL-NOTES-HIERARCHY-RBAC.md):**
+
+- `db/versions/v1.12.sql` + `db/objects/`: `role.read` permission (backfilled to every
+  `group.read` holder); `roles.status` CHECK `DRAFT/ACTIVE/INACTIVE` (default `DRAFT`);
+  `access_groups.status` `DISABLED → INACTIVE`; `assert_org_unit_acyclic` relaxed to
+  self-parent + cycle only, same-organization moved to the deferrable constraint trigger
+  `trg_org_unit_same_org` (+ `db/objects/functions/assert_org_unit_same_org.sql`).
+- Hierarchy: `PUT /organization-units/{id}` and `PUT /geographic-areas/{id}` allow a
+  same-hierarchy re-parent (illegal cases 400; to-root 403; editing an INACTIVE node 409);
+  `POST …/activate` on both; `POST /organization-units/{id}/move` (cross-org subtree move,
+  unscoped-only, `confirmScopeImpact`). Re-parent paths take the deactivate advisory lock with
+  `FOR UPDATE` re-reads.
+- Roles: `?includeInactive` on the list; `DELETE` soft-deletes to `INACTIVE` (no InUse block);
+  `RoleResponse` enriched (timestamps, `usageCount`, `usedBy`, permission metadata);
+  `role.read` on `GET /roles*` and `GET /permissions`.
+- Access groups: `activate` takes `{ confirmUnscoped }` and returns 409 (was 403) for an
+  unconstrained dimension and for a non-`ACTIVE` role; `disable` writes `INACTIVE`;
+  `AccessGroupResponse` gained `createdAt` / `updatedAt` / `grantsEffective`; scope add/remove
+  bumps `updated_at`.
+- Tests: `tests/Trinetra.IntegrationTests/HierarchyRbacLifecycleTests.cs` (23) + adjustments to
+  `RoleCrudTests`, `AuthorizationTests`, `HierarchyScopeTests`, `GeographyScopeTests`,
+  `UnscopedReadScopeTests`.
+
 **Not yet built:**
 
-- Integration tests: scope matrix, `camera_code` uniqueness, reconcile 409, bulk partial-failure, maintenance→status transitions, audit-row-per-mutation (need Postgres/Docker — not available in the current environment)
+- Camera-registry integration tests: scope matrix, `camera_code` uniqueness, reconcile 409, bulk partial-failure, maintenance→status transitions, audit-row-per-mutation
 - `GET /gis/gaps` real implementation (PostGIS — deliberately deferred)
+- Endpoint-level (HTTP) tests for the P11/P12 activate 409 shaping — the suite has no `WebApplicationFactory`; covered at the repository level instead

@@ -92,12 +92,40 @@ public static class HierarchyEndpoints
           .RequirePermission("organization.manage")
           .WithSummary("Update an organization unit")
           .WithDescription(
-              "Edits `code`, `name` and `unitType`; `status` is left as-is when omitted. "
-              + "`organizationId` in the body is ignored (a unit cannot move between "
-              + "organizations) and `parentUnitId` must match the current parent — re-parenting "
-              + "has its own locked flow (`/deactivate` with `childStrategy: \"reparent\"`) and a "
-              + "PUT that changes it is refused with 400. 404 if the id is unknown or out of the "
-              + "caller's reach.");
+              "Edits `code`, `name`, `unitType` and `description`; `status` is left as-is when "
+              + "omitted (use `/activate` and `/deactivate`). `organizationId` in the body is "
+              + "ignored — moving a unit to another organization is the separate `/move` route.\n\n"
+              + "`parentUnitId` **may** change: the unit and its whole subtree move under the new "
+              + "parent in the same organization. Re-parenting under the unit itself or one of its "
+              + "descendants is refused (400), as is a new parent that is not ACTIVE (400) or in a "
+              + "different organization (400). Re-parenting to root (`parentUnitId: null`) needs "
+              + "unscoped `organization.manage` (403). Editing an `INACTIVE` unit is refused (409) "
+              + "— reactivate it first. 404 if the id is unknown or out of the caller's reach.");
+
+        app.MapPost("/api/v1/organization-units/{id:guid}/activate", ActivateUnitAsync)
+          .RequireAuthorization().WithTags(ApiTags.Organizations)
+          .RequirePermission("organization.manage")
+          .WithSummary("Activate an organization unit")
+          .WithDescription(
+              "Moves an `INACTIVE` unit back to `ACTIVE`. Refused (409) when the unit's parent is "
+              + "itself `INACTIVE` — that would leave an active node under a retired one. "
+              + "Activation does **not** cascade: each child is activated on its own. Activating "
+              + "an already-active unit is a no-op (204, no audit row).");
+
+        app.MapPost("/api/v1/organization-units/{id:guid}/move", MoveUnitAsync)
+          .RequireAuthorization().WithTags(ApiTags.Organizations)
+          .RequirePermission("organization.manage")
+          .WithSummary("Move an organization unit to another organization")
+          .WithDescription(
+              "Re-parents a unit under a parent in a **different** organization and rewrites the "
+              + "whole subtree's organization to match, in one transaction. Requires "
+              + "`organization.manage` held unscoped (403 otherwise).\n\n"
+              + "When any access group has an organization scope pointing into the subtree, the "
+              + "move is refused (409) with the affected groups in the body until the caller "
+              + "re-sends with `confirmScopeImpact: true` — those scopes keep pointing at the "
+              + "moved units and will then grant inside the new organization. Cameras, VMS "
+              + "targets and historic events follow the move automatically (they resolve "
+              + "organization through the live tree); the response reports how many.");
 
         app.MapPost("/api/v1/organization-units/{id:guid}/deactivate", DeactivateUnitAsync)
           .RequireAuthorization().WithTags(ApiTags.Organizations)
@@ -179,12 +207,23 @@ public static class HierarchyEndpoints
           .WithSummary("Update a geographic area")
           .WithDescription(
               "Edits `code`, `name`, `areaType` and `description`; `status` is left as-is when "
-              + "omitted. `areaType` must be a code from `GET /geographic-areas/types`, and "
-              + "changing it to a level equal to or coarser than this area's parent — or coarser "
-              + "than one of its own children — is refused with 400. `parentAreaId` must match "
-              + "the current parent — re-parenting has its own locked flow (`/deactivate` with "
-              + "`childStrategy: \"reparent\"`) and a PUT that changes it is refused with 400. "
-              + "404 if the id is unknown or out of the caller's reach.");
+              + "omitted (use `/activate` and `/deactivate`). `areaType` must be a code from "
+              + "`GET /geographic-areas/types`, and changing it to a level equal to or coarser "
+              + "than this area's parent — or coarser than one of its own children — is refused "
+              + "with 400.\n\n"
+              + "`parentAreaId` **may** change: the area and its subtree move under the new "
+              + "parent. Re-parenting under the area itself or a descendant is refused (400); so "
+              + "is a new parent that is not ACTIVE, and one whose level is not coarser than this "
+              + "area's. Re-parenting to root needs unscoped `geography.manage` (403). Editing an "
+              + "`INACTIVE` area is refused (409). 404 if the id is unknown or out of reach.");
+
+        areas.MapPost("/{id:guid}/activate", ActivateAreaAsync)
+          .RequirePermission("geography.manage")
+          .WithSummary("Activate a geographic area")
+          .WithDescription(
+              "Moves an `INACTIVE` area back to `ACTIVE`. Refused (409) when the area's parent is "
+              + "itself `INACTIVE`. Activation does not cascade to child areas. Activating an "
+              + "already-active area is a no-op (204, no audit row).");
 
         areas.MapPost("/{id:guid}/deactivate", DeactivateAreaAsync)
           .RequirePermission("geography.manage")
@@ -369,26 +408,28 @@ public static class HierarchyEndpoints
             return TypedResults.NotFound();
         }
 
-        // Re-parenting is structural, not a field edit: it moves a whole subtree and everyone's
-        // view of it, and has its own locked flow. A PUT that tries to change the parent is
-        // refused and pointed there.
-        if (request.ParentUnitId != prior.ParentUnitId)
+        if (prior.Status == "INACTIVE")
         {
             return TypedResults.Problem(
-                title: "Cannot re-parent through this route",
-                detail: "Changing parentUnitId moves the unit and everything beneath it. Use "
-                      + "POST /api/v1/organization-units/{id}/deactivate with "
-                      + "childStrategy 'reparent', or deactivate and recreate.",
-                statusCode: StatusCodes.Status400BadRequest);
+                title: "Reactivate the unit first",
+                detail: "This unit is INACTIVE. Activate it with "
+                      + "POST /api/v1/organization-units/{id}/activate before editing it.",
+                statusCode: StatusCodes.Status409Conflict);
         }
+
+        // parentUnitId may now change — it moves the unit and its whole subtree. The repo runs
+        // the structural pre-checks (self / descendant / different-organization / inactive parent)
+        // and the scoped-caller reach checks; a structural failure surfaces as
+        // InvalidOperationException.
+        var parentIsChanging = request.ParentUnitId != prior.ParentUnitId;
 
         await using var work = await UnitOfWork.BeginAsync(db, ct);
 
         var updated = new OrganizationUnit
         {
             Id = id,
-            OrganizationId = prior.OrganizationId,   // a unit never moves between organizations
-            ParentUnitId = prior.ParentUnitId,
+            OrganizationId = prior.OrganizationId,   // cross-org moves go through /move
+            ParentUnitId = request.ParentUnitId,
             Code = request.Code,
             Name = request.Name,
             UnitType = request.UnitType,
@@ -396,15 +437,137 @@ public static class HierarchyEndpoints
             GeographicAreaId = request.GeographicAreaId,   // descriptive "home area" only (invariant 12)
             Status = request.Status ?? prior.Status,
         };
-        // parentIsChanging: false — the 400 guard above proved the parent is unchanged, so a
-        // rename must not be blocked by an INACTIVE current parent.
-        await repo.UpsertUnitAsync(updated, caller, work, ct, parentIsChanging: false);
+
+        try
+        {
+            await repo.UpsertUnitAsync(updated, caller, work, ct, parentIsChanging: parentIsChanging);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return TypedResults.Problem(
+                title: "Re-parent rejected", detail: ex.Message,
+                statusCode: StatusCodes.Status400BadRequest);
+        }
 
         await work.AuditAsync(caller, "update", "organization_unit", id.ToString(),
             before: ToResponse(prior), after: ToResponse(updated), organizationUnitId: id, ct);
         await work.CommitAsync(ct);
 
         return TypedResults.Ok(ToResponse(updated));
+    }
+
+    private static async Task<Results<NoContent, NotFound, ProblemHttpResult>> ActivateUnitAsync(
+        Guid id, OrganizationRepository repo, NpgsqlDataSource db, HttpContext http,
+        CancellationToken ct)
+    {
+        var caller = CallerContextFactory.From(http);
+        caller.Require("organization.manage");
+
+        await using var work = await UnitOfWork.BeginAsync(db, ct);
+        var result = await repo.ActivateUnitAsync(id, caller, work, ct);
+
+        switch (result)
+        {
+            case ActivateResult.NotFound:
+                return TypedResults.NotFound();
+            case ActivateResult.AlreadyActive:
+                return TypedResults.NoContent();
+            case ActivateResult.ParentInactive:
+                return TypedResults.Problem(
+                    title: "Parent is inactive",
+                    detail: "Activating this unit under a retired parent would leave it "
+                          + "unreachable to every scope query. Activate the parent first.",
+                    statusCode: StatusCodes.Status409Conflict);
+        }
+
+        await work.AuditAsync(caller, "update", "organization_unit", id.ToString(),
+            before: new { status = "INACTIVE" }, after: new { status = "ACTIVE" },
+            organizationUnitId: id, ct);
+        await work.CommitAsync(ct);
+
+        return TypedResults.NoContent();
+    }
+
+    private static async Task<Results<Ok<MoveUnitResponse>, NotFound, ProblemHttpResult>> MoveUnitAsync(
+        Guid id, [FromBody] MoveUnitRequest request, OrganizationRepository repo,
+        NpgsqlDataSource db, HttpContext http, CancellationToken ct)
+    {
+        var caller = CallerContextFactory.From(http);
+        caller.Require("organization.manage");
+
+        await using var work = await UnitOfWork.BeginAsync(db, ct);
+        var result = await repo.MoveUnitToOrganizationAsync(
+            id, request.NewParentUnitId, request.ConfirmScopeImpact, caller, work, ct);
+
+        switch (result.Error)
+        {
+            case MoveOrgError.UnitNotFound:
+                return TypedResults.NotFound();
+            case MoveOrgError.NotUnscoped:
+                return TypedResults.Problem(
+                    title: "Cross-organization moves require unscoped organization.manage",
+                    detail: "A cross-organization move places a subtree under an organization the "
+                          + "caller may have no standing in. It is limited to an administrator "
+                          + "holding organization.manage without an organization scope.",
+                    statusCode: StatusCodes.Status403Forbidden);
+            case MoveOrgError.ParentNotFound:
+            case MoveOrgError.ParentInactive:
+                return TypedResults.Problem(
+                    title: "New parent unit is not available",
+                    detail: "The destination parent must exist and be ACTIVE, and so must its "
+                          + "organization.",
+                    statusCode: StatusCodes.Status400BadRequest);
+            case MoveOrgError.SourceInactive:
+                return TypedResults.Problem(
+                    title: "Reactivate the unit first",
+                    detail: "An INACTIVE unit cannot be moved. Activate it first.",
+                    statusCode: StatusCodes.Status409Conflict);
+            case MoveOrgError.SameOrganization:
+                return TypedResults.Problem(
+                    title: "Not a cross-organization move",
+                    detail: "The destination parent is in the same organization. Use "
+                          + "PUT /api/v1/organization-units/{id} to re-parent within an organization.",
+                    statusCode: StatusCodes.Status400BadRequest);
+            case MoveOrgError.ReparentUnderSelfOrDescendant:
+                return TypedResults.Problem(
+                    title: "Cannot re-parent a unit beneath itself",
+                    detail: "The destination parent is the unit itself or one of its descendants.",
+                    statusCode: StatusCodes.Status400BadRequest);
+            case MoveOrgError.NeedsConfirmation:
+                return TypedResults.Problem(
+                    title: "Move affects existing access-group scopes",
+                    detail: "Access groups have an organization scope pointing into this subtree. "
+                          + "Those scopes will grant inside the destination organization after "
+                          + "the move. Re-send with confirmScopeImpact: true to proceed.",
+                    statusCode: StatusCodes.Status409Conflict,
+                    extensions: new Dictionary<string, object?>
+                    {
+                        ["affectedGroups"] = result.AffectedGroups
+                            .Select(g => new { g.Id, g.Code, g.MemberCount }).ToList(),
+                        ["camerasFollowing"] = result.CamerasFollowing,
+                        ["targetsFollowing"] = result.TargetsFollowing,
+                    });
+        }
+
+        await work.AuditAsync(caller, "update", "organization_unit", id.ToString(),
+            before: new { parentUnitId = (Guid?)null, organizationId = result.FromOrganizationId },
+            after: new
+            {
+                parentUnitId = request.NewParentUnitId,
+                organizationId = result.ToOrganizationId,
+                subtreeUnitsMoved = result.SubtreeSize,
+                camerasFollowing = result.CamerasFollowing,
+                targetsFollowing = result.TargetsFollowing,
+                affectedGroups = result.AffectedGroups.Select(g => new { g.Id, g.Code }).ToList(),
+                confirmScopeImpact = request.ConfirmScopeImpact,
+            },
+            organizationUnitId: id, ct);
+        await work.CommitAsync(ct);
+
+        return TypedResults.Ok(new MoveUnitResponse(
+            result.FromOrganizationId, result.ToOrganizationId, result.SubtreeSize,
+            result.CamerasFollowing, result.TargetsFollowing,
+            [.. result.AffectedGroups.Select(g => new AffectedGroupResponse(g.Id, g.Code, g.MemberCount))]));
     }
 
     private static async Task<Ok<IReadOnlyList<OrganizationUnitResponse>>> ListUnitsAsync(
@@ -554,40 +717,79 @@ public static class HierarchyEndpoints
             return TypedResults.NotFound();
         }
 
-        // Re-parenting is structural — it moves a whole subtree and everyone's view of it — and
-        // has its own locked flow. A PUT that tries to change the parent is refused and pointed
-        // there.
-        if (request.ParentAreaId != prior.ParentAreaId)
+        if (prior.Status == "INACTIVE")
         {
             return TypedResults.Problem(
-                title: "Cannot re-parent through this route",
-                detail: "Changing parentAreaId moves the area and everything beneath it. Use "
-                      + "POST /api/v1/geographic-areas/{id}/deactivate with "
-                      + "childStrategy 'reparent', or deactivate and recreate.",
-                statusCode: StatusCodes.Status400BadRequest);
+                title: "Reactivate the area first",
+                detail: "This area is INACTIVE. Activate it with "
+                      + "POST /api/v1/geographic-areas/{id}/activate before editing it.",
+                statusCode: StatusCodes.Status409Conflict);
         }
+
+        var parentIsChanging = request.ParentAreaId != prior.ParentAreaId;
 
         await using var work = await UnitOfWork.BeginAsync(db, ct);
 
         var updated = new GeographicArea
         {
             Id = id,
-            ParentAreaId = prior.ParentAreaId,
+            ParentAreaId = request.ParentAreaId,
             Code = request.Code,
             Name = request.Name,
             AreaType = request.AreaType,
             Description = request.Description,
             Status = request.Status ?? prior.Status,
         };
-        // parentIsChanging: false — the 400 guard above proved the parent is unchanged, so a
-        // rename must not be blocked by an INACTIVE current parent. An areaType change is still
-        // level-order checked (against parent and children) by trg_geo_area_acyclic → 400.
-        await repo.UpsertAreaAsync(updated, caller, work, ct, parentIsChanging: false);
+
+        // The repo runs the reach + descendant pre-checks; cycle and level-order containment are
+        // enforced by trg_geo_area_acyclic and surface as 400 through the constraint handler.
+        try
+        {
+            await repo.UpsertAreaAsync(updated, caller, work, ct, parentIsChanging: parentIsChanging);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return TypedResults.Problem(
+                title: "Re-parent rejected", detail: ex.Message,
+                statusCode: StatusCodes.Status400BadRequest);
+        }
 
         await work.AuditAsync(caller, "update", "geographic_area", id.ToString(),
             before: ToResponse(prior), after: ToResponse(updated), organizationUnitId: null, ct);
         await work.CommitAsync(ct);
 
         return TypedResults.Ok(ToResponse(updated));
+    }
+
+    private static async Task<Results<NoContent, NotFound, ProblemHttpResult>> ActivateAreaAsync(
+        Guid id, GeographyRepository repo, NpgsqlDataSource db, HttpContext http,
+        CancellationToken ct)
+    {
+        var caller = CallerContextFactory.From(http);
+        caller.Require("geography.manage");
+
+        await using var work = await UnitOfWork.BeginAsync(db, ct);
+        var result = await repo.ActivateAreaAsync(id, caller, work, ct);
+
+        switch (result)
+        {
+            case ActivateResult.NotFound:
+                return TypedResults.NotFound();
+            case ActivateResult.AlreadyActive:
+                return TypedResults.NoContent();
+            case ActivateResult.ParentInactive:
+                return TypedResults.Problem(
+                    title: "Parent is inactive",
+                    detail: "Activating this area under a retired parent would leave it "
+                          + "unreachable to every containment query. Activate the parent first.",
+                    statusCode: StatusCodes.Status409Conflict);
+        }
+
+        await work.AuditAsync(caller, "update", "geographic_area", id.ToString(),
+            before: new { status = "INACTIVE" }, after: new { status = "ACTIVE" },
+            organizationUnitId: null, ct);
+        await work.CommitAsync(ct);
+
+        return TypedResults.NoContent();
     }
 }

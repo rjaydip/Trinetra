@@ -182,6 +182,51 @@ public sealed class OrganizationRepository
 
         var c = work.Connection;
 
+        // Re-parent of an existing unit (P1). Serialize against cascade-deactivate on the same
+        // hierarchy-wide advisory lock the deactivate path uses, re-read both ends FOR UPDATE,
+        // then run the structural pre-checks with a meaningful message each. Same-organization
+        // and cycle are also caught by the DB triggers as a backstop.
+        if (parentIsChanging && unit.Id != Guid.Empty)
+        {
+            await c.ExecuteAsync(new CommandDefinition(
+                "SELECT pg_advisory_xact_lock(hashtext('federation.organization_units.deactivate'));",
+                transaction: work.Transaction, cancellationToken: ct)).ConfigureAwait(false);
+
+            await c.ExecuteScalarAsync<string?>(new CommandDefinition(
+                "SELECT status FROM federation.organization_units WHERE id = @Id FOR UPDATE;",
+                new { unit.Id }, work.Transaction, cancellationToken: ct)).ConfigureAwait(false);
+
+            if (unit.ParentUnitId is { } newParent)
+            {
+                if (newParent == unit.Id)
+                {
+                    throw new InvalidOperationException("A unit cannot be its own parent.");
+                }
+
+                var parentOrg = await c.ExecuteScalarAsync<Guid?>(new CommandDefinition(
+                    "SELECT organization_id FROM federation.organization_units WHERE id = @newParent FOR UPDATE;",
+                    new { newParent }, work.Transaction, cancellationToken: ct)).ConfigureAwait(false);
+
+                if (parentOrg is { } po && po != unit.OrganizationId)
+                {
+                    throw new InvalidOperationException(
+                        "A unit cannot move between organizations through this route. Use the "
+                        + "cross-organization move (POST /api/v1/organization-units/{id}/move).");
+                }
+
+                var wouldDetach = await c.ExecuteScalarAsync<bool>(new CommandDefinition("""
+                    SELECT EXISTS (SELECT 1 FROM federation.org_unit_descendants(@Id) d
+                                   WHERE d.id = @newParent);
+                    """, new { unit.Id, newParent }, work.Transaction, cancellationToken: ct))
+                    .ConfigureAwait(false);
+
+                if (wouldDetach)
+                {
+                    throw new InvalidOperationException("Cannot re-parent a unit beneath itself.");
+                }
+            }
+        }
+
         if (!caller.IsUnscopedFor("organization.manage"))
         {
             await RequireReachAsync(c, work.Transaction, caller, unit.ParentUnitId, ct).ConfigureAwait(false);
@@ -189,6 +234,13 @@ public sealed class OrganizationRepository
             if (unit.Id != Guid.Empty)
             {
                 await RequireReachAsync(c, work.Transaction, caller, unit.Id, ct).ConfigureAwait(false);
+
+                // Re-parenting an existing unit to a root answers to no existing scope, the same
+                // as creating a root — refuse it for a scoped caller (P1).
+                if (parentIsChanging && unit.ParentUnitId is null)
+                {
+                    throw new ForbiddenException("organization.manage");
+                }
             }
             else if (unit.ParentUnitId is null)
             {
@@ -351,6 +403,219 @@ public sealed class OrganizationRepository
         await c.ExecuteAsync(new CommandDefinition(sql, new { unitId }, work.Transaction, cancellationToken: ct));
         return null;
     }
+    /// <summary>
+    /// Moves an INACTIVE unit back to ACTIVE (P3). Refused when the unit's parent is INACTIVE —
+    /// that would recreate the ACTIVE-under-retired-parent orphan the deactivate flow prevents.
+    /// </summary>
+    public async Task<ActivateResult> ActivateUnitAsync(
+        Guid unitId, CallerContext caller, UnitOfWork work, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(caller);
+        caller.Require("organization.manage");
+
+        var c = work.Connection;
+
+        // Order against a concurrent cascade-deactivate on the same tree-wide lock.
+        await c.ExecuteAsync(new CommandDefinition(
+            "SELECT pg_advisory_xact_lock(hashtext('federation.organization_units.deactivate'));",
+            transaction: work.Transaction, cancellationToken: ct)).ConfigureAwait(false);
+
+        var status = await c.ExecuteScalarAsync<string?>(new CommandDefinition("""
+            SELECT status FROM federation.organization_units WHERE id = @unitId FOR UPDATE;
+            """, new { unitId }, work.Transaction, cancellationToken: ct)).ConfigureAwait(false);
+
+        if (status is null)
+        {
+            return ActivateResult.NotFound;
+        }
+
+        var parentUnitId = await c.ExecuteScalarAsync<Guid?>(new CommandDefinition("""
+            SELECT parent_unit_id FROM federation.organization_units WHERE id = @unitId;
+            """, new { unitId }, work.Transaction, cancellationToken: ct)).ConfigureAwait(false);
+
+        if (!caller.IsUnscopedFor("organization.manage"))
+        {
+            if (parentUnitId is null)
+            {
+                // A root unit answers to no existing scope — same rule as create.
+                throw new ForbiddenException("organization.manage");
+            }
+
+            await RequireReachAsync(c, work.Transaction, caller, unitId, ct).ConfigureAwait(false);
+        }
+
+        if (status == "ACTIVE")
+        {
+            return ActivateResult.AlreadyActive;
+        }
+
+        if (parentUnitId is { } parent)
+        {
+            var parentActive = await c.ExecuteScalarAsync<bool>(new CommandDefinition("""
+                SELECT EXISTS (SELECT 1 FROM federation.organization_units
+                               WHERE id = @parent AND status = 'ACTIVE');
+                """, new { parent }, work.Transaction, cancellationToken: ct)).ConfigureAwait(false);
+
+            if (!parentActive)
+            {
+                return ActivateResult.ParentInactive;
+            }
+        }
+
+        await c.ExecuteAsync(new CommandDefinition("""
+            UPDATE federation.organization_units
+            SET status = 'ACTIVE', updated_at = now() WHERE id = @unitId;
+            """, new { unitId }, work.Transaction, cancellationToken: ct)).ConfigureAwait(false);
+
+        return ActivateResult.Activated;
+    }
+
+    /// <summary>
+    /// Cross-organization subtree move (P2b): re-parents a unit under a parent in a different
+    /// organization and rewrites <c>organization_id</c> across the whole subtree in one
+    /// transaction. Unscoped <c>organization.manage</c> only; when access groups have an
+    /// ORGANIZATION scope pointing into the subtree the caller must pass
+    /// <paramref name="confirmScopeImpact"/>.
+    /// </summary>
+    public async Task<MoveOrgResult> MoveUnitToOrganizationAsync(
+        Guid unitId, Guid newParentUnitId, bool confirmScopeImpact,
+        CallerContext caller, UnitOfWork work, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(caller);
+        caller.Require("organization.manage");
+
+        if (!caller.IsUnscopedFor("organization.manage"))
+        {
+            return MoveOrgResult.Fail(MoveOrgError.NotUnscoped);
+        }
+
+        var c = work.Connection;
+
+        await c.ExecuteAsync(new CommandDefinition(
+            "SELECT pg_advisory_xact_lock(hashtext('federation.organization_units.deactivate'));",
+            transaction: work.Transaction, cancellationToken: ct)).ConfigureAwait(false);
+
+        var sourceStatus = await c.ExecuteScalarAsync<string?>(new CommandDefinition("""
+            SELECT status FROM federation.organization_units WHERE id = @unitId FOR UPDATE;
+            """, new { unitId }, work.Transaction, cancellationToken: ct)).ConfigureAwait(false);
+
+        if (sourceStatus is null)
+        {
+            return MoveOrgResult.Fail(MoveOrgError.UnitNotFound);
+        }
+
+        if (sourceStatus != "ACTIVE")
+        {
+            return MoveOrgResult.Fail(MoveOrgError.SourceInactive);
+        }
+
+        var sourceOrg = await c.ExecuteScalarAsync<Guid>(new CommandDefinition(
+            "SELECT organization_id FROM federation.organization_units WHERE id = @unitId;",
+            new { unitId }, work.Transaction, cancellationToken: ct)).ConfigureAwait(false);
+
+        var destOrg = await c.ExecuteScalarAsync<Guid?>(new CommandDefinition("""
+            SELECT u.organization_id
+            FROM federation.organization_units u
+            WHERE u.id = @newParentUnitId
+              AND u.status = 'ACTIVE'
+              AND EXISTS (SELECT 1 FROM federation.organizations o
+                          WHERE o.id = u.organization_id AND o.status = 'ACTIVE')
+            FOR UPDATE OF u;
+            """, new { newParentUnitId }, work.Transaction, cancellationToken: ct)).ConfigureAwait(false);
+
+        var parentExists = await c.ExecuteScalarAsync<bool>(new CommandDefinition(
+            "SELECT EXISTS (SELECT 1 FROM federation.organization_units WHERE id = @newParentUnitId);",
+            new { newParentUnitId }, work.Transaction, cancellationToken: ct)).ConfigureAwait(false);
+
+        if (!parentExists)
+        {
+            return MoveOrgResult.Fail(MoveOrgError.ParentNotFound);
+        }
+
+        if (destOrg is not { } toOrg)
+        {
+            return MoveOrgResult.Fail(MoveOrgError.ParentInactive);
+        }
+
+        if (toOrg == sourceOrg)
+        {
+            return MoveOrgResult.Fail(MoveOrgError.SameOrganization);
+        }
+
+        if (newParentUnitId == unitId)
+        {
+            return MoveOrgResult.Fail(MoveOrgError.ReparentUnderSelfOrDescendant);
+        }
+
+        var wouldDetach = await c.ExecuteScalarAsync<bool>(new CommandDefinition("""
+            SELECT EXISTS (SELECT 1 FROM federation.org_unit_descendants(@unitId) d
+                           WHERE d.id = @newParentUnitId);
+            """, new { unitId, newParentUnitId }, work.Transaction, cancellationToken: ct))
+            .ConfigureAwait(false);
+
+        if (wouldDetach)
+        {
+            return MoveOrgResult.Fail(MoveOrgError.ReparentUnderSelfOrDescendant);
+        }
+
+        var subtree = (await c.QueryAsync<Guid>(new CommandDefinition(
+            "SELECT id FROM federation.org_unit_descendants(@unitId);",
+            new { unitId }, work.Transaction, cancellationToken: ct)).ConfigureAwait(false)).ToList();
+
+        var affected = (await c.QueryAsync<AffectedGroup>(new CommandDefinition("""
+            SELECT ag.id AS Id, ag.code AS Code,
+                   (SELECT count(*)::int FROM federation.user_groups ug
+                     WHERE ug.group_id = ag.id AND ug.status = 'ACTIVE') AS MemberCount
+            FROM federation.access_groups ag
+            WHERE EXISTS (
+                SELECT 1 FROM federation.group_scopes gs
+                JOIN federation.scopes s ON s.id = gs.scope_id
+                WHERE gs.group_id = ag.id AND s.scope_type = 'ORGANIZATION'
+                  AND s.organization_unit_id = ANY (@subtree))
+            ORDER BY ag.code;
+            """, new { subtree }, work.Transaction, cancellationToken: ct)).ConfigureAwait(false)).ToList();
+
+        var cameras = await c.ExecuteScalarAsync<int>(new CommandDefinition(
+            "SELECT count(*) FROM federation.cameras WHERE organization_unit_id = ANY (@subtree);",
+            new { subtree }, work.Transaction, cancellationToken: ct)).ConfigureAwait(false);
+
+        var targets = await c.ExecuteScalarAsync<int>(new CommandDefinition(
+            "SELECT count(*) FROM federation.connector_target WHERE organization_unit_id = ANY (@subtree);",
+            new { subtree }, work.Transaction, cancellationToken: ct)).ConfigureAwait(false);
+
+        if (affected.Count > 0 && !confirmScopeImpact)
+        {
+            return MoveOrgResult.NeedsConfirmation(
+                sourceOrg, toOrg, subtree.Count, cameras, targets, affected);
+        }
+
+        // Defer the same-organization constraint: the batch below is transiently mixed-org and a
+        // per-row check cannot see the final state. It re-validates the whole subtree at commit.
+        // ALL rather than the constraint name — the constraint trigger's name resolves through
+        // search_path, which this connection does not set to federation.
+        await c.ExecuteAsync(new CommandDefinition(
+            "SET CONSTRAINTS ALL DEFERRED;",
+            transaction: work.Transaction, cancellationToken: ct)).ConfigureAwait(false);
+
+        await c.ExecuteAsync(new CommandDefinition("""
+            UPDATE federation.organization_units
+            SET parent_unit_id = @newParentUnitId, organization_id = @ToOrg, updated_at = now()
+            WHERE id = @unitId;
+            """, new { unitId, newParentUnitId, ToOrg = toOrg }, work.Transaction, cancellationToken: ct))
+            .ConfigureAwait(false);
+
+        await c.ExecuteAsync(new CommandDefinition("""
+            UPDATE federation.organization_units
+            SET organization_id = @ToOrg, updated_at = now()
+            WHERE id IN (SELECT id FROM federation.org_unit_descendants(@unitId))
+              AND id <> @unitId;
+            """, new { unitId, ToOrg = toOrg }, work.Transaction, cancellationToken: ct))
+            .ConfigureAwait(false);
+
+        return new MoveOrgResult(
+            MoveOrgError.None, sourceOrg, toOrg, subtree.Count, cameras, targets, affected);
+    }
+
     /// <summary>Throws unless the caller administers the given unit.</summary>
     /// <remarks>
     /// A null unit id passes: it means "no unit supplied", which the callers above treat
