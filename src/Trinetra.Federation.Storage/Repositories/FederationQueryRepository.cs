@@ -222,7 +222,7 @@ public sealed class FederationQueryRepository
     /// Estate counts, scoped to the caller on <b>both</b> dimensions (invariant 12) — the same
     /// organization + geography predicate <see cref="ConnectorTargetRepository"/> applies to the
     /// target list, so the counters here can never exceed what <c>GET /vms</c> shows the same
-    /// caller. A target with no site is not geo-constrained.
+    /// caller. A target with no area is not geo-constrained.
     /// </summary>
     public async Task<EstateOverviewRow> OverviewAsync(CallerContext caller, CancellationToken ct)
     {
@@ -240,8 +240,7 @@ public sealed class FederationQueryRepository
                           FROM federation.authorized_org_units(
                                    p_user_id => @UserId, p_api_key_id => @ApiKeyId,
                                    p_permission => 'vms.read')))
-                  AND (@UnscopedGeo OR t.site_id IS NULL OR (
-                          SELECT s.geographic_area_id FROM federation.sites s WHERE s.id = t.site_id) IN (
+                  AND (@UnscopedGeo OR t.geographic_area_id IS NULL OR t.geographic_area_id IN (
                           SELECT geographic_area_id
                           FROM federation.authorized_geographic_areas(
                                    p_user_id => @UserId, p_api_key_id => @ApiKeyId,

@@ -12,7 +12,7 @@ public sealed record UnreconciledCameraRow
     public string? VendorModel { get; init; }
     public string? Firmware { get; init; }
     public Guid OrganizationUnitId { get; init; }
-    public Guid? SiteId { get; init; }
+    public Guid? GeographicAreaId { get; init; }
     public double? Latitude { get; init; }
     public double? Longitude { get; init; }
     public DateTimeOffset? LastSeen { get; init; }
@@ -71,7 +71,7 @@ public sealed class ReconciliationRepository
 
         var rows = await c.QueryAsync<UnreconciledCameraRow>(new CommandDefinition($"""
             SELECT fc.target_id, fc.native_camera_id, fc.name, fc.vendor_model, fc.firmware,
-                   fc.organization_unit_id, fc.site_id, fc.latitude, fc.longitude,
+                   fc.organization_unit_id, fc.geographic_area_id, fc.latitude, fc.longitude,
                    fc.last_seen, fc.stream_references
             FROM federation.federated_camera fc
             WHERE fc.camera_id IS NULL
@@ -79,8 +79,8 @@ public sealed class ReconciliationRepository
               AND (@UnscopedOrg OR fc.organization_unit_id IN (
                    SELECT organization_unit_id FROM federation.authorized_org_units(
                        p_user_id => @UserId, p_api_key_id => @ApiKeyId, p_permission => 'camera.reconcile')))
-              AND (@UnscopedGeo OR fc.site_id IS NULL OR
-                   (SELECT s.geographic_area_id FROM federation.sites s WHERE s.id = fc.site_id) IN (
+              AND (@UnscopedGeo OR fc.geographic_area_id IS NULL OR
+                   fc.geographic_area_id IN (
                    SELECT geographic_area_id FROM federation.authorized_geographic_areas(
                        p_user_id => @UserId, p_api_key_id => @ApiKeyId, p_permission => 'camera.reconcile')))
               AND (@CursorTarget::uuid IS NULL
@@ -111,7 +111,7 @@ public sealed class ReconciliationRepository
 
         return await c.QuerySingleOrDefaultAsync<UnreconciledCameraRow>(new CommandDefinition("""
             SELECT fc.target_id, fc.native_camera_id, fc.name, fc.vendor_model, fc.firmware,
-                   fc.organization_unit_id, fc.site_id, fc.latitude, fc.longitude,
+                   fc.organization_unit_id, fc.geographic_area_id, fc.latitude, fc.longitude,
                    fc.last_seen, fc.stream_references
             FROM federation.federated_camera fc
             WHERE fc.target_id = @targetId AND fc.native_camera_id = @nativeCameraId
@@ -119,8 +119,8 @@ public sealed class ReconciliationRepository
               AND (@UnscopedOrg OR fc.organization_unit_id IN (
                    SELECT organization_unit_id FROM federation.authorized_org_units(
                        p_user_id => @UserId, p_api_key_id => @ApiKeyId, p_permission => 'camera.reconcile')))
-              AND (@UnscopedGeo OR fc.site_id IS NULL OR
-                   (SELECT s.geographic_area_id FROM federation.sites s WHERE s.id = fc.site_id) IN (
+              AND (@UnscopedGeo OR fc.geographic_area_id IS NULL OR
+                   fc.geographic_area_id IN (
                    SELECT geographic_area_id FROM federation.authorized_geographic_areas(
                        p_user_id => @UserId, p_api_key_id => @ApiKeyId, p_permission => 'camera.reconcile')));
             """, new
@@ -158,15 +158,15 @@ public sealed class ReconciliationRepository
         }
 
         var fed = await c.QuerySingleOrDefaultAsync<FederatedLinkRow>(new CommandDefinition($"""
-            SELECT fc.camera_id, fc.organization_unit_id, fc.site_id,
+            SELECT fc.camera_id, fc.organization_unit_id, fc.geographic_area_id,
                    fc.stream_references, fc.target_id
             FROM federation.federated_camera fc
             WHERE fc.target_id = @targetId AND fc.native_camera_id = @nativeCameraId
               AND (@UnscopedOrg OR fc.organization_unit_id IN (
                    SELECT organization_unit_id FROM federation.authorized_org_units(
                        p_user_id => @UserId, p_api_key_id => @ApiKeyId, p_permission => 'camera.reconcile')))
-              AND (@UnscopedGeo OR fc.site_id IS NULL OR
-                   (SELECT s.geographic_area_id FROM federation.sites s WHERE s.id = fc.site_id) IN (
+              AND (@UnscopedGeo OR fc.geographic_area_id IS NULL OR
+                   fc.geographic_area_id IN (
                    SELECT geographic_area_id FROM federation.authorized_geographic_areas(
                        p_user_id => @UserId, p_api_key_id => @ApiKeyId, p_permission => 'camera.reconcile')));
             """, new
@@ -219,7 +219,7 @@ public sealed class ReconciliationRepository
     {
         public Guid? CameraId { get; init; }
         public Guid OrganizationUnitId { get; init; }
-        public Guid? SiteId { get; init; }
+        public Guid? GeographicAreaId { get; init; }
         public string[] StreamReferences { get; init; } = [];
         public Guid TargetId { get; init; }
     }

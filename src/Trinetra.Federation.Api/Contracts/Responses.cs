@@ -17,24 +17,24 @@ public sealed record CreatedResponse(Guid Id);
 public sealed record OrganizationResponse(
     Guid Id, string Code, string Name, string OrganizationType, string? Description, string Status);
 
-/// <summary>A node in an organization's hierarchy.</summary>
+/// <summary>
+/// A node in an organization's hierarchy. <see cref="GeographicAreaId"/> is a descriptive
+/// "home area" only — never an authorization input (invariant 12).
+/// </summary>
 public sealed record OrganizationUnitResponse(
     Guid Id, Guid OrganizationId, Guid? ParentUnitId,
-    string Code, string Name, string UnitType, string Status);
+    string Code, string Name, string UnitType,
+    string? Description, Guid? GeographicAreaId, string Status);
 
 /// <summary>
 /// A node in the geographic hierarchy. <see cref="AreaType"/> is operator-defined, not an enum.
 /// </summary>
 public sealed record GeographicAreaResponse(
-    Guid Id, Guid? ParentAreaId, string Code, string Name, string AreaType, string Status);
+    Guid Id, Guid? ParentAreaId, string Code, string Name, string AreaType,
+    string? Description, string Status);
 
 /// <summary>An operator-declared level in the geographic hierarchy.</summary>
 public sealed record AreaTypeResponse(string Code, string Name, int LevelOrder);
-
-/// <summary>A physical installation location.</summary>
-public sealed record SiteResponse(
-    Guid Id, string Code, string Name, Guid GeographicAreaId,
-    string? SiteType, string? Address, double? Latitude, double? Longitude, string Status);
 
 /// <summary>A platform user. Never carries password material.</summary>
 public sealed record UserResponse(
@@ -59,9 +59,14 @@ public sealed record AccessGroupResponse(
     string RoleCode, IReadOnlyList<string> Permissions,
     IReadOnlyList<ScopeResponse> Scopes, int MemberCount);
 
-/// <summary>A role and whether it ships with the platform.</summary>
+/// <summary>
+/// A role with the permission codes it composes. <see cref="IsSystem"/> marks a preset shipped
+/// with the platform — editable, but its <c>code</c> is fixed and it cannot be deleted.
+/// <see cref="Customized"/> is true once an operator has edited a preset.
+/// </summary>
 public sealed record RoleResponse(
-    Guid Id, string Code, string Name, string? Description, bool IsSystem);
+    Guid Id, string Code, string Name, string? Description, bool IsSystem, string Status,
+    bool Customized, IReadOnlyList<string> Permissions);
 
 /// <summary>A permission in the vocabulary.</summary>
 public sealed record PermissionResponse(
@@ -78,7 +83,7 @@ public sealed record ApiKeyResponse(
 
 /// <summary>A connector target — one VMS the platform federates.</summary>
 public sealed record VmsResponse(
-    Guid Id, string Code, Guid OrganizationUnitId, Guid? SiteId, string DisplayName,
+    Guid Id, string Code, Guid OrganizationUnitId, Guid? GeographicAreaId, string DisplayName,
     string Vendor, string RuntimeClass, string Endpoint, string CredentialReference,
     bool VerifyTls, string State, int? ExpectedCameraCount);
 
@@ -148,8 +153,7 @@ public sealed record ConnectionTestSummary(
 
 /// <summary>Confirms a deactivation was refused, and what it would have affected.</summary>
 public sealed record DeactivationConflictResponse(
-    IReadOnlyList<string> AffectedAreas, IReadOnlyList<string> AffectedSites,
-    IReadOnlyList<string> Resolutions);
+    IReadOnlyList<string> AffectedChildren, IReadOnlyList<string> Resolutions);
 
 /// <summary>Whether a credential is provisioned. Reports presence only, never content.</summary>
 public sealed record CredentialExistsResponse(string Reference, bool Exists);

@@ -5,7 +5,7 @@ CREATE TABLE federation.connector_target (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     code character varying(100) NOT NULL,
     organization_unit_id uuid NOT NULL,
-    site_id uuid,
+    geographic_area_id uuid,
     display_name character varying(255) NOT NULL,
     vendor federation.vendor_kind NOT NULL,
     runtime_class federation.runtime_class DEFAULT 'Managed'::federation.runtime_class NOT NULL,
@@ -68,10 +68,10 @@ CREATE INDEX ix_target_leased_by ON federation.connector_target USING btree (lea
 CREATE INDEX ix_target_org ON federation.connector_target USING btree (organization_unit_id);
 
 --
--- Name: ix_target_site; Type: INDEX; Schema: federation; Owner: -
+-- Name: ix_target_geo_area; Type: INDEX; Schema: federation; Owner: -
 --
 
-CREATE INDEX ix_target_site ON federation.connector_target USING btree (site_id);
+CREATE INDEX ix_target_geo_area ON federation.connector_target USING btree (geographic_area_id);
 
 --
 -- Name: connector_target connector_target_created_by_fkey; Type: FK CONSTRAINT; Schema: federation; Owner: -
@@ -88,11 +88,11 @@ ALTER TABLE ONLY federation.connector_target
     ADD CONSTRAINT connector_target_organization_unit_id_fkey FOREIGN KEY (organization_unit_id) REFERENCES federation.organization_units(id);
 
 --
--- Name: connector_target connector_target_site_id_fkey; Type: FK CONSTRAINT; Schema: federation; Owner: -
+-- Name: connector_target connector_target_geographic_area_id_fkey; Type: FK CONSTRAINT; Schema: federation; Owner: -
 --
 
 ALTER TABLE ONLY federation.connector_target
-    ADD CONSTRAINT connector_target_site_id_fkey FOREIGN KEY (site_id) REFERENCES federation.sites(id);
+    ADD CONSTRAINT connector_target_geographic_area_id_fkey FOREIGN KEY (geographic_area_id) REFERENCES federation.geographic_areas(id);
 
 --
 -- Name: connector_target connector_target_updated_by_fkey; Type: FK CONSTRAINT; Schema: federation; Owner: -

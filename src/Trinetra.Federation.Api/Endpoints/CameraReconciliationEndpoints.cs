@@ -49,10 +49,10 @@ public static class CameraReconciliationEndpoints
           .RequirePermission("camera.reconcile")
           .WithSummary("Register a camera from an unreconciled VMS row and link it")
           .WithDescription(
-              "Creates a registry record using the VMS row for what it can supply (owner, site, "
+              "Creates a registry record using the VMS row for what it can supply (owner, area, "
               + "coordinates, name) and the body for what it cannot (`cameraCode`, `cameraType`, "
               + "optics), then links the two — one call. Needs `camera.create` as well. "
-              + "`siteId` must be supplied if the VMS row has no site.");
+              + "`geographicAreaId` must be supplied if the VMS row has no area.");
     }
 
     private static async Task<Ok<UnreconciledPage>> UnreconciledAsync(
@@ -79,7 +79,7 @@ public static class CameraReconciliationEndpoints
         return TypedResults.Ok(new UnreconciledPage(
             [.. items.Select(r => new UnreconciledCameraResponse(
                 r.TargetId, r.NativeCameraId, r.Name, r.VendorModel, r.Firmware,
-                r.OrganizationUnitId, r.SiteId, r.Latitude, r.Longitude, r.LastSeen,
+                r.OrganizationUnitId, r.GeographicAreaId, r.Latitude, r.Longitude, r.LastSeen,
                 r.StreamReferences ?? []))],
             next));
     }
@@ -146,10 +146,10 @@ public static class CameraReconciliationEndpoints
             return TypedResults.NotFound();
         }
 
-        var siteId = request.SiteId ?? fed.SiteId;
-        if (siteId is null)
+        var geographicAreaId = request.GeographicAreaId ?? fed.GeographicAreaId;
+        if (geographicAreaId is null)
         {
-            return Bad("siteId is required: the VMS row has no site.");
+            return Bad("geographicAreaId is required: the VMS row has no area.");
         }
 
         var latitude = request.Latitude ?? fed.Latitude;
@@ -176,7 +176,7 @@ public static class CameraReconciliationEndpoints
             Code = request.CameraCode.Trim(),
             Name = string.IsNullOrWhiteSpace(request.Name) ? fed.Name ?? request.CameraCode.Trim() : request.Name.Trim(),
             OrganizationUnitId = request.OrganizationUnitId ?? fed.OrganizationUnitId,
-            SiteId = siteId.Value,
+            GeographicAreaId = geographicAreaId.Value,
             CameraType = cameraType,
             Latitude = latitude.Value,
             Longitude = longitude.Value,

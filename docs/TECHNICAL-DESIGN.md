@@ -186,7 +186,6 @@ per-endpoint detail and the RBAC permission each requires):
 # Org / geography hierarchy
 /api/v1/organizations  /organizations/{id}/units  /organization-units/{id}/deactivate
 /api/v1/geographic-areas  /geographic-areas/{id}/children  /geographic-areas/{id}/ancestors
-/api/v1/sites
 
 # RBAC administration
 /api/v1/users  /access-groups  /access-groups/{id}/scopes  /access-groups/{id}/members

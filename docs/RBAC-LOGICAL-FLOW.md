@@ -113,6 +113,27 @@ ANALYST
 VIEWER
 ```
 
+The roles above ship as **presets** — a starting point, not a fixed set. `role.manage` (a new
+permission) allows creating custom roles and re-composing the presets, via
+`POST` / `PUT` / `DELETE /api/v1/roles`. Three rules protect the platform:
+
+- **`SUPER_ADMIN` is immutable** through the API — it is the recovery role the first-start
+  backfill and the platform-admin group depend on.
+- A role is a **global** object with no scope of its own, so editing a preset changes every
+  access group built on it in every organization. **Editing, disabling or deleting a preset
+  (`is_system`) therefore requires `role.manage` held _unscoped_** — a scoped department admin
+  cannot re-compose or disable a role the whole estate uses. Scoped `role.manage` holders are
+  limited to custom roles.
+- A caller who is **not** unscoped for `role.manage` may only touch a permission the caller
+  already holds — on the new set *and* on the role's existing set. Otherwise `role.manage` would
+  be "grant yourself anything": compose the permission into a role, attach a group in your own
+  scope, add yourself. The check runs against the role row read `FOR UPDATE`.
+
+A preset's `code` never changes (migrations reference presets by code) and a preset cannot be
+deleted, only disabled. An operator edit that actually changes a preset's name, description or
+permission set stamps `roles.customized_at`; a later migration re-seeding preset data must skip
+customized rows so a deliberate change is not silently reverted.
+
 A Role should not contain geographic information.
 
 ### Permission
@@ -561,6 +582,10 @@ MAINTENANCE_OPERATOR
 ANALYST
 VIEWER
 ```
+
+Custom roles are for a genuinely new *combination of responsibilities* — "shift supervisor" =
+camera operation + alert acknowledgement + read-only VMS — not for a location. A responsibility
+that already has a role, in a new place, is still an Access Group, never a new role.
 
 and create reusable Access Groups:
 

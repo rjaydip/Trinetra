@@ -23,6 +23,7 @@ internal static class ApiEndpointExtensions
         app.MapHierarchyEndpoints();
         app.MapUserEndpoints();
         app.MapAccessGroupEndpoints();
+        app.MapRoleEndpoints();
         app.MapVmsEndpoints();
         app.MapCameraEndpoints();
         app.MapCameraHealthEndpoints();

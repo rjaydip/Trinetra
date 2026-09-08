@@ -30,11 +30,11 @@ public sealed class CameraUpsertTests : IClassFixture<PostgresFixture>, IAsyncLi
 
         await _fixture.ExecuteAsync($"""
             INSERT INTO federation.connector_target
-                (id, code, organization_unit_id, site_id, display_name, vendor, runtime_class,
+                (id, code, organization_unit_id, geographic_area_id, display_name, vendor, runtime_class,
                  endpoint, credential_reference, rate_limit_per_second, rate_limit_burst,
                  max_concurrent_requests, expected_camera_count)
             VALUES ('{TargetId}', 'TGT-1', '{PostgresFixture.PoliceUnit}',
-                    '{PostgresFixture.SiteId}', 'Ring Road NVR',
+                    '{PostgresFixture.VillageId}', 'Ring Road NVR',
                     'Hikvision'::federation.vendor_kind,
                     'Managed'::federation.runtime_class,
                     'https://10.0.0.1:443', 'vault://vms/1', 7.5, 15, 6, 128);
@@ -58,7 +58,7 @@ public sealed class CameraUpsertTests : IClassFixture<PostgresFixture>, IAsyncLi
             TargetId = TargetId,
             NativeCameraId = nativeId,
             OrganizationUnitId = PostgresFixture.PoliceUnit,
-            SiteId = PostgresFixture.SiteId,
+            GeographicAreaId = PostgresFixture.VillageId,
             Name = name,
             VendorModel = vendorModel,
             Firmware = firmware,

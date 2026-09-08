@@ -23,14 +23,8 @@ internal static class Lookup
     public static Task<Guid> GeographicAreaAsync(NpgsqlDataSource db, string code, CancellationToken ct) =>
         ResolveAsync(db, "federation.geographic_areas", code, "geographic area", "area list", ct);
 
-    public static Task<Guid> SiteAsync(NpgsqlDataSource db, string code, CancellationToken ct) =>
-        ResolveAsync(db, "federation.sites", code, "site", "site list", ct);
-
     public static Task<Guid> RoleAsync(NpgsqlDataSource db, string code, CancellationToken ct) =>
         ResolveAsync(db, "federation.roles", code, "role", "role list", ct);
-
-    public static async Task<Guid?> OptionalSiteAsync(NpgsqlDataSource db, string? code, CancellationToken ct) =>
-        string.IsNullOrWhiteSpace(code) ? null : await SiteAsync(db, code, ct);
 
     public static async Task<Guid?> OptionalUnitAsync(NpgsqlDataSource db, string? code, CancellationToken ct) =>
         string.IsNullOrWhiteSpace(code) ? null : await OrganizationUnitAsync(db, code, ct);
@@ -44,10 +38,20 @@ internal static class Lookup
     {
         await using var connection = await db.OpenConnectionAsync(ct);
 
-        var id = await connection.ExecuteScalarAsync<Guid?>(new CommandDefinition(
-            $"SELECT id FROM {table} WHERE code = @code;", new { code }, cancellationToken: ct));
+        // geographic_areas.code is unique per parent, not globally (v1.11) — a code can recur
+        // under different parents, so take up to two and reject an ambiguous match.
+        var ids = (await connection.QueryAsync<Guid>(new CommandDefinition(
+            $"SELECT id FROM {table} WHERE code = @code LIMIT 2;",
+            new { code }, cancellationToken: ct))).ToList();
 
-        return id ?? throw new CommandFailedException(
-            $"No {what} with code '{code}'. List them with: trinetra-admin {listCommand}");
+        return ids.Count switch
+        {
+            0 => throw new CommandFailedException(
+                $"No {what} with code '{code}'. List them with: trinetra-admin {listCommand}"),
+            1 => ids[0],
+            _ => throw new CommandFailedException(
+                $"'{code}' matches more than one {what} (codes are unique only within a parent). "
+                + $"List them with: trinetra-admin {listCommand}"),
+        };
     }
 }

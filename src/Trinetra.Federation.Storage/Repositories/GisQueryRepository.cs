@@ -40,8 +40,7 @@ public sealed record CoverageBucketRow
 /// </remarks>
 public sealed class GisQueryRepository
 {
-    private const string SiteArea =
-        "(SELECT s.geographic_area_id FROM federation.sites s WHERE s.id = c.site_id)";
+    private const string GeoArea = "c.geographic_area_id";
 
     private readonly NpgsqlDataSource _dataSource;
 
@@ -124,7 +123,7 @@ public sealed class GisQueryRepository
                 FROM federation.cameras c
                 WHERE c.deleted_at IS NULL
                   AND (@GeographicAreaId::uuid IS NULL
-                       OR {SiteArea} IN (
+                       OR {GeoArea} IN (
                            SELECT id FROM federation.geographic_area_descendants(@GeographicAreaId)))
                   AND (@OrganizationUnitId::uuid IS NULL
                        OR c.organization_unit_id IN (
@@ -155,7 +154,7 @@ public sealed class GisQueryRepository
         (@UnscopedOrg OR c.organization_unit_id IN (
             SELECT organization_unit_id FROM federation.authorized_org_units(
                 p_user_id => @UserId, p_api_key_id => @ApiKeyId, p_permission => @Perm)))
-        AND (@UnscopedGeo OR {SiteArea} IN (
+        AND (@UnscopedGeo OR {GeoArea} IN (
             SELECT geographic_area_id FROM federation.authorized_geographic_areas(
                 p_user_id => @UserId, p_api_key_id => @ApiKeyId, p_permission => @Perm)))
         """;

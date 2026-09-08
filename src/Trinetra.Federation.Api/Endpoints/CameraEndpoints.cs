@@ -26,7 +26,7 @@ namespace Trinetra.Federation.Api.Endpoints;
 /// </para>
 /// <para>
 /// Every route is scoped on both dimensions — the camera's owning organization unit and its
-/// site's geographic area, ANDed. A camera the caller cannot reach is <b>404, not 403</b>.
+/// its geographic area, ANDed. A camera the caller cannot reach is <b>404, not 403</b>.
 /// </para>
 /// </remarks>
 public static class CameraEndpoints
@@ -44,7 +44,7 @@ public static class CameraEndpoints
           .WithSummary("Register a camera")
           .WithDescription(
               "Manual onboarding: creates one authoritative registry record. `cameraCode` must "
-              + "be unique among live cameras; `organizationUnitId` and `siteId` must both be "
+              + "be unique among live cameras; `organizationUnitId` and `geographicAreaId` must both be "
               + "within the caller's scope, or the request is refused. Coordinates are required "
               + "and validated. Optics (`azimuth`, `horizontalFov`, `effectiveRange`) are "
               + "optional but all three are needed before a coverage sector can be drawn.");
@@ -54,7 +54,7 @@ public static class CameraEndpoints
           .WithSummary("List the registry, paged and filtered")
           .WithDescription(
               "Every camera within the caller's organization-and-geography scope, ordered by "
-              + "`cameraCode`. Filter with `organizationUnitId` (includes descendants), `siteId`, "
+              + "`cameraCode`. Filter with `organizationUnitId` (includes descendants), "
               + "`geographicAreaId` (includes descendants), `cameraType`, the three status axes, "
               + "`bbox` (`minLon,minLat,maxLon,maxLat`) and `q` (prefix match on code and name). "
               + "Retired cameras are hidden unless `includeRetired=true`.\n\n"
@@ -82,7 +82,7 @@ public static class CameraEndpoints
           .WithDescription(
               "A full replacement: every field is taken from the body and an omitted optional "
               + "field reverts to null/default. Read the camera first and send it back modified. "
-              + "Moving the camera to a different unit or site requires the caller to be scoped "
+              + "Moving the camera to a different unit or area requires the caller to be scoped "
               + "to both the old and the new placement. `maintenanceStatus` cannot be set to or "
               + "away from `RETIRED` here — use DELETE.");
 
@@ -145,7 +145,7 @@ public static class CameraEndpoints
 
     private static async Task<Results<Ok<CameraPage>, ProblemHttpResult>> ListAsync(
         int? limit, string? cursor, bool? includeRetired,
-        Guid? organizationUnitId, Guid? siteId, Guid? geographicAreaId,
+        Guid? organizationUnitId, Guid? geographicAreaId,
         string? cameraType, string? operationalStatus, string? connectivityStatus,
         string? maintenanceStatus, string? q, string? bbox,
         CameraRepository repo, HttpContext http, CancellationToken ct)
@@ -168,7 +168,7 @@ public static class CameraEndpoints
         var rows = await repo.ListAsync(
             new CameraQuery(
                 pageSize + 1, DecodeCursor(cursor), includeRetired ?? false,
-                organizationUnitId, siteId, geographicAreaId, cameraType,
+                organizationUnitId, geographicAreaId, cameraType,
                 Upper(operationalStatus), Upper(connectivityStatus), Upper(maintenanceStatus),
                 q, box),
             caller, ct);
@@ -266,7 +266,7 @@ public static class CameraEndpoints
             {
                 failed++;
                 results.Add(new BulkRowResult(i, code, "error", null,
-                    "organization_unit or site not in scope"));
+                    "organization_unit or geographic_area not in scope"));
             }
         }
 
@@ -437,9 +437,9 @@ public static class CameraEndpoints
             errors.Add("organizationUnitId is required.");
         }
 
-        if (r.SiteId == Guid.Empty)
+        if (r.GeographicAreaId == Guid.Empty)
         {
-            errors.Add("siteId is required.");
+            errors.Add("geographicAreaId is required.");
         }
 
         if (r.Latitude is < -90 or > 90)
@@ -508,7 +508,7 @@ public static class CameraEndpoints
             Code = r.CameraCode.Trim(),
             Name = r.Name.Trim(),
             OrganizationUnitId = r.OrganizationUnitId,
-            SiteId = r.SiteId,
+            GeographicAreaId = r.GeographicAreaId,
             Manufacturer = Trim(r.Manufacturer),
             Model = Trim(r.Model),
             CameraType = cameraType!,
@@ -579,8 +579,8 @@ public static class CameraEndpoints
                 case "organizationUnitId":
                     built.Set("organization_unit_id", "p_org", RequireGuid(prop.Value, "organizationUnitId", errors));
                     break;
-                case "siteId":
-                    built.Set("site_id", "p_site", RequireGuid(prop.Value, "siteId", errors));
+                case "geographicAreaId":
+                    built.Set("geographic_area_id", "p_area", RequireGuid(prop.Value, "geographicAreaId", errors));
                     break;
                 case "latitude":
                     built.Set("latitude", "p_lat", RequireDouble(prop.Value, "latitude", -90, 90, errors));
@@ -844,7 +844,7 @@ public static class CameraEndpoints
         Convert.ToBase64String(Encoding.UTF8.GetBytes(code));
 
     private static CameraResponse ToResponse(Camera c) => new(
-        c.Id, c.Code, c.Name, c.OrganizationUnitId, c.SiteId, c.CameraType,
+        c.Id, c.Code, c.Name, c.OrganizationUnitId, c.GeographicAreaId, c.CameraType,
         c.Latitude, c.Longitude, c.Manufacturer, c.Model, c.SerialNumber,
         c.Altitude, c.MountingHeight, c.Azimuth, c.Tilt, c.HorizontalFov,
         c.VerticalFov, c.EffectiveRange, c.IpAddress, c.Port, c.Protocol,
@@ -856,7 +856,7 @@ public static class CameraEndpoints
     /// <summary>Audit projection. Records the credential <i>reference</i>, never a secret.</summary>
     private static object Redact(Camera c) => new
     {
-        c.Code, c.Name, c.OrganizationUnitId, c.SiteId, c.CameraType,
+        c.Code, c.Name, c.OrganizationUnitId, c.GeographicAreaId, c.CameraType,
         c.Latitude, c.Longitude, c.Azimuth, c.HorizontalFov, c.EffectiveRange,
         c.VmsId, c.CredentialReference,
         c.OperationalStatus, c.ConnectivityStatus, c.MaintenanceStatus,

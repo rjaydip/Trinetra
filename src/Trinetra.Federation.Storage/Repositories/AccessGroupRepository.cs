@@ -282,6 +282,25 @@ public sealed class AccessGroupRepository
             work.Transaction, cancellationToken: ct));
     }
 
+    /// <summary>
+    /// Sets a group's lifecycle status — <c>DRAFT</c>, <c>ACTIVE</c> or <c>DISABLED</c>. Returns
+    /// <see langword="false"/> if the group does not exist.
+    /// </summary>
+    /// <remarks>
+    /// The scope-completeness check that guards activation (an unscoped group is an estate-wide
+    /// grant) is in the endpoint, next to the identical check on group creation.
+    /// </remarks>
+    public async Task<bool> SetStatusAsync(
+        Guid groupId, string status, Guid? actorId, UnitOfWork work, CancellationToken ct)
+    {
+        var affected = await work.Connection.ExecuteAsync(new CommandDefinition("""
+            UPDATE federation.access_groups
+            SET status = @status, updated_by = @actorId, updated_at = now()
+            WHERE id = @groupId;
+            """, new { groupId, status, actorId }, work.Transaction, cancellationToken: ct));
+        return affected > 0;
+    }
+
     // ---- Scopes ------------------------------------------------------------
 
     // A group's scopes are returned as part of GetAsync's AccessGroupDetail (which is behind

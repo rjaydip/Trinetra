@@ -212,6 +212,14 @@ the length of the deploy**, because the old binaries keep running against the ne
 they are replaced. Additive changes during the window; anything destructive is a separate, later
 change once the fleet is uniform.
 
+**Editing the seeded preset roles.** Since `v1.11` the seeded roles are editable presets. If a
+future migration re-seeds a preset's name, description or permission set, it **must** scope those
+writes to `WHERE customized_at IS NULL` — a non-NULL `customized_at` means an operator
+deliberately changed that preset and the change must not be silently reverted on upgrade. A
+genuinely new permission a preset should carry is added with an explicit unconditional statement
+(like the `SUPER_ADMIN` backfill), with a comment saying why it overrides customization. The
+`SUPER_ADMIN` permission backfill is always unconditional — that role is never customizable.
+
 
 ### Rolling a worker fleet
 

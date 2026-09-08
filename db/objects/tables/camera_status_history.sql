@@ -10,7 +10,7 @@ CREATE TABLE federation.camera_status_history (
     native_camera_id text NOT NULL,
     changed_at timestamp with time zone NOT NULL,
     organization_unit_id uuid NOT NULL,
-    site_id uuid,
+    geographic_area_id uuid,
     previous_health federation.health_status,
     health federation.health_status NOT NULL,
     previous_enabled boolean,

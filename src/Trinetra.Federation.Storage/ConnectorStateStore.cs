@@ -212,7 +212,7 @@ public sealed class ConnectorStateStore
                 native_camera_id     TEXT    NOT NULL,
                 camera_id            UUID,
                 organization_unit_id UUID    NOT NULL,
-                site_id              UUID,
+                geographic_area_id   UUID,
                 name                 TEXT,
                 vendor_model         TEXT,
                 firmware             TEXT,
@@ -231,7 +231,7 @@ public sealed class ConnectorStateStore
         await using (var writer = await connection.BeginBinaryImportAsync("""
             COPY staged_camera (
                 ordinal, target_id, native_camera_id, camera_id,
-                organization_unit_id, site_id,
+                organization_unit_id, geographic_area_id,
                 name, vendor_model, firmware,
                 is_enabled, is_recording, health, last_seen, stream_references, raw_reference
             ) FROM STDIN (FORMAT BINARY)
@@ -247,7 +247,7 @@ public sealed class ConnectorStateStore
                 await writer.WriteAsync(c.NativeCameraId, NpgsqlDbType.Text, cancellationToken).ConfigureAwait(false);
                 await WriteNullableAsync(writer, c.CameraId, NpgsqlDbType.Uuid, cancellationToken).ConfigureAwait(false);
                 await writer.WriteAsync(c.OrganizationUnitId, NpgsqlDbType.Uuid, cancellationToken).ConfigureAwait(false);
-                await WriteNullableAsync(writer, c.SiteId, NpgsqlDbType.Uuid, cancellationToken).ConfigureAwait(false);
+                await WriteNullableAsync(writer, c.GeographicAreaId, NpgsqlDbType.Uuid, cancellationToken).ConfigureAwait(false);
                 await WriteNullableAsync(writer, c.Name, NpgsqlDbType.Text, cancellationToken).ConfigureAwait(false);
                 await WriteNullableAsync(writer, c.VendorModel, NpgsqlDbType.Text, cancellationToken).ConfigureAwait(false);
                 await WriteNullableAsync(writer, c.Firmware, NpgsqlDbType.Text, cancellationToken).ConfigureAwait(false);
@@ -275,11 +275,11 @@ public sealed class ConnectorStateStore
         // occurrence, matching that behaviour.
         const string merge = """
             INSERT INTO federation.federated_camera
-                (target_id, native_camera_id, camera_id, organization_unit_id, site_id,
+                (target_id, native_camera_id, camera_id, organization_unit_id, geographic_area_id,
                  name, vendor_model, firmware,
                  is_enabled, is_recording, health, last_seen, stream_references, raw_reference)
             SELECT DISTINCT ON (target_id, native_camera_id)
-                   target_id, native_camera_id, camera_id, organization_unit_id, site_id,
+                   target_id, native_camera_id, camera_id, organization_unit_id, geographic_area_id,
                    name, vendor_model, firmware,
                    is_enabled, is_recording, health::federation.health_status, last_seen,
                    stream_references, raw_reference

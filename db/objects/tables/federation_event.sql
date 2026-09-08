@@ -7,7 +7,7 @@ CREATE TABLE federation.federation_event (
     source_event_id text,
     camera_id text NOT NULL,
     organization_unit_id uuid NOT NULL,
-    site_id uuid,
+    geographic_area_id uuid,
     event_type text NOT NULL,
     vendor_event_type text,
     occurred_at timestamp with time zone NOT NULL,

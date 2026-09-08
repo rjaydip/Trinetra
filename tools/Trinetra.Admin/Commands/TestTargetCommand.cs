@@ -333,7 +333,7 @@ internal static class TestTargetCommand
         // Looked up by the human code, because that is what an operator has in front of them.
         // Everything downstream then works from the immutable id.
         var row = await connection.QuerySingleOrDefaultAsync<TargetRow>(new CommandDefinition("""
-            SELECT id, code, organization_unit_id, site_id, display_name,
+            SELECT id, code, organization_unit_id, geographic_area_id, display_name,
                    vendor::text AS vendor, runtime_class::text AS runtime_class,
                    endpoint, credential_reference, verify_tls, state::text AS state,
                    rate_limit_per_second, rate_limit_burst, max_concurrent_requests,
@@ -353,7 +353,7 @@ internal static class TestTargetCommand
             Id = row.Id,
             Code = row.Code,
             OrganizationUnitId = row.OrganizationUnitId,
-            SiteId = row.SiteId,
+            GeographicAreaId = row.GeographicAreaId,
             DisplayName = row.DisplayName,
             Vendor = Enum.Parse<VendorKind>(row.Vendor),
             RuntimeClass = Enum.Parse<RuntimeClass>(row.RuntimeClass),
@@ -373,7 +373,7 @@ internal static class TestTargetCommand
         public Guid Id { get; init; }
         public string Code { get; init; } = "";
         public Guid OrganizationUnitId { get; init; }
-        public Guid? SiteId { get; init; }
+        public Guid? GeographicAreaId { get; init; }
         public string DisplayName { get; init; } = "";
         public string Vendor { get; init; } = "";
         public string RuntimeClass { get; init; } = "";

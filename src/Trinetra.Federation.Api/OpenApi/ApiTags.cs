@@ -51,11 +51,11 @@ internal static class ApiTags
             + "the districts they were granted."),
 
         (Geography,
-            "The geographic dimension of scope: the area hierarchy (state, district, zone, ward) "
-            + "and the physical sites that sit inside it. A site is where a VMS target is "
-            + "installed. Read routes need `geography.read`; changing the hierarchy needs "
-            + "`geography.manage`, because a reparent moves everything below it into a different "
-            + "scope."),
+            "The geographic dimension of scope: an operator-defined area hierarchy (state, "
+            + "district, zone, ward, or whatever levels a deployment defines) with no fixed "
+            + "bottom tier — a camera or VMS target attaches to an area at any level. Read routes "
+            + "need `geography.read`; changing the hierarchy needs `geography.manage`, because a "
+            + "reparent moves everything below it into a different scope."),
 
         (Users,
             "Accounts, their profile and status, their group membership, and the effective "

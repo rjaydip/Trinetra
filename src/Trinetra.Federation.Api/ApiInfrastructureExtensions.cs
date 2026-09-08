@@ -56,6 +56,7 @@ internal static class ApiInfrastructureExtensions
         services.AddSingleton<MaintenanceRepository>();
         services.AddScoped<SecretWriter>();
         services.AddScoped<AccessGroupRepository>();
+        services.AddScoped<RoleRepository>();
         services.AddScoped<DetectionRepository>();
         services.AddScoped<WatchlistRepository>();
         services.AddScoped<AiWorkerHealthRepository>();

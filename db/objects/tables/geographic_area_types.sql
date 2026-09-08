@@ -5,6 +5,7 @@ CREATE TABLE federation.geographic_area_types (
     code character varying(50) NOT NULL,
     name character varying(255) NOT NULL,
     level_order integer NOT NULL,
+    description text,
     status character varying(20) DEFAULT 'ACTIVE'::character varying NOT NULL,
     CONSTRAINT geographic_area_types_status_check CHECK (((status)::text = ANY ((ARRAY['ACTIVE'::character varying, 'INACTIVE'::character varying])::text[])))
 );

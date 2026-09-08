@@ -12,7 +12,7 @@ namespace Trinetra.Federation.Core.Model;
 /// <para>
 /// Identity follows <c>CAMERA-SCHEMA.md</c>: an immutable <see cref="Id"/> for the system and a
 /// human-facing <see cref="Code"/> for people. Ownership (<see cref="OrganizationUnitId"/>) and
-/// location (<see cref="SiteId"/>) are independent dimensions and both are always set — a
+/// location (<see cref="GeographicAreaId"/>) are independent dimensions and both are always set — a
 /// registered camera always has an owner and a place.
 /// </para>
 /// <para>
@@ -34,8 +34,8 @@ public sealed record Camera
     /// <summary>Owner/operator. Answers "whose is it", never "where is it".</summary>
     public required Guid OrganizationUnitId { get; init; }
 
-    /// <summary>Physical installation site. Its geographic area is the camera's geo-scope dimension.</summary>
-    public required Guid SiteId { get; init; }
+    /// <summary>Geographic area the camera sits in, at any level — the camera's geo-scope dimension.</summary>
+    public required Guid GeographicAreaId { get; init; }
 
     public string? Manufacturer { get; init; }
     public string? Model { get; init; }

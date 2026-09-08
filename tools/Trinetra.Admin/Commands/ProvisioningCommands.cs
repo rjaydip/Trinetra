@@ -158,6 +158,7 @@ internal static class ProvisioningCommands
             Name = args.Require("name"),
             // Operator-defined. No enum, so a deployment using Zone/Sector/Block needs no change.
             AreaType = args.Require("type"),
+            Description = args.Get("description"),
         }, Caller, work, ct);
 
         await work.AuditAsync(Caller, "create", "geographic_area", areaId.ToString(),
@@ -192,54 +193,6 @@ internal static class ProvisioningCommands
                 Print(lookup, a.Id, depth + 1);
             }
         }
-    }
-
-    public static async Task<int> AddSiteAsync(
-        Args args, GeographyRepository repo, NpgsqlDataSource db, CancellationToken ct)
-    {
-        var code = args.Require("code");
-        var areaId = await Lookup.GeographicAreaAsync(db, args.Require("area"), ct);
-
-        await using var work = await UnitOfWork.BeginAsync(db, ct);
-
-        var siteId = await repo.UpsertSiteAsync(new Site
-        {
-            Code = code,
-            Name = args.Require("name"),
-            GeographicAreaId = areaId,
-            SiteType = args.Get("type"),
-            Address = args.Get("address"),
-            Latitude = ParseCoordinate(args.Get("lat"), "lat", -90, 90),
-            Longitude = ParseCoordinate(args.Get("lon"), "lon", -180, 180),
-        }, Caller, work, ct);
-
-        await work.AuditAsync(Caller, "create", "site", siteId.ToString(),
-            before: null, after: new { code, area = args.Require("area") }, organizationUnitId: null, ct);
-        await work.CommitAsync(ct);
-
-        Out.Ok($"Site {code} in {args.Require("area")}");
-        return 0;
-    }
-
-    public static async Task<int> ListSitesAsync(GeographyRepository repo, CancellationToken ct)
-    {
-        var sites = await repo.ListSitesAsync(null, Caller, ct);
-
-        if (sites.Count == 0)
-        {
-            Out.Warn("No sites configured.");
-            return 0;
-        }
-
-        Out.Info($"{"CODE",-20} {"TYPE",-14} {"LAT",10} {"LON",11}  NAME");
-        foreach (var s in sites)
-        {
-            Out.Info($"{s.Code,-20} {s.SiteType ?? "-",-14} "
-                   + $"{s.Latitude?.ToString("F5", System.Globalization.CultureInfo.InvariantCulture) ?? "-",10} "
-                   + $"{s.Longitude?.ToString("F5", System.Globalization.CultureInfo.InvariantCulture) ?? "-",11}  {s.Name}");
-        }
-
-        return 0;
     }
 
     // ---- Secrets -----------------------------------------------------------
@@ -286,7 +239,7 @@ internal static class ProvisioningCommands
 
         var code = args.Require("code");
         var unitId = await Lookup.OrganizationUnitAsync(db, args.Require("unit"), ct);
-        var siteId = await Lookup.OptionalSiteAsync(db, args.Get("site"), ct);
+        var areaId = await Lookup.OptionalAreaAsync(db, args.Get("area"), ct);
         var verifyTls = !args.Has("no-verify-tls");
 
         if (!verifyTls)
@@ -295,11 +248,11 @@ internal static class ProvisioningCommands
                    + "accepted certificate is logged on every connection.");
         }
 
-        if (siteId is null)
+        if (areaId is null)
         {
-            // Not fatal, but worth saying: without a site the target has no place in the
+            // Not fatal, but worth saying: without an area the target has no place in the
             // geographic hierarchy, so geographically-scoped users will not see it.
-            Out.Warn("No --site given. This target cannot be reached by geographic scope.");
+            Out.Warn("No --area given. This target cannot be reached by geographic scope.");
         }
 
         await using var work = await UnitOfWork.BeginAsync(db, ct);
@@ -309,7 +262,7 @@ internal static class ProvisioningCommands
             Id = Guid.Empty,
             Code = code,
             OrganizationUnitId = unitId,
-            SiteId = siteId,
+            GeographicAreaId = areaId,
             DisplayName = args.Get("name") ?? code,
             Vendor = vendor,
             Endpoint = args.Require("endpoint"),
@@ -323,7 +276,7 @@ internal static class ProvisioningCommands
         {
             code,
             unit = args.Require("unit"),
-            site = args.Get("site"),
+            area = args.Get("area"),
             vendor = vendor.ToString(),
             endpoint = args.Require("endpoint"),
             credentialReference = args.Require("credential"),
@@ -342,7 +295,7 @@ internal static class ProvisioningCommands
 
         var rows = (await connection.QueryAsync(new CommandDefinition("""
             SELECT t.code, t.vendor::text AS vendor, t.state::text AS state,
-                   ou.code AS unit_code, s.code AS site_code, t.endpoint, t.leased_by,
+                   ou.code AS unit_code, g.code AS area_code, t.endpoint, t.leased_by,
                    (SELECT count(*) FROM federation.federated_camera c WHERE c.target_id = t.id) AS cameras,
                    -- Bounded to the recent window: connector_health is partitioned by day, so
                    -- an unbounded correlated subquery probes every partition once per target.
@@ -354,7 +307,7 @@ internal static class ProvisioningCommands
                      ORDER BY h.checked_at DESC LIMIT 1) AS health
             FROM federation.connector_target t
             JOIN federation.organization_units ou ON ou.id = t.organization_unit_id
-            LEFT JOIN federation.sites s ON s.id = t.site_id
+            LEFT JOIN federation.geographic_areas g ON g.id = t.geographic_area_id
             ORDER BY t.code;
             """, cancellationToken: ct))).ToList();
 
@@ -364,13 +317,13 @@ internal static class ProvisioningCommands
             return 0;
         }
 
-        Out.Info($"{"CODE",-16} {"VENDOR",-16} {"UNIT",-12} {"SITE",-12} "
+        Out.Info($"{"CODE",-16} {"VENDOR",-16} {"UNIT",-12} {"AREA",-12} "
                + $"{"STATE",-11} {"HEALTH",-11} {"CAMS",5}  ENDPOINT");
 
         foreach (var r in rows)
         {
             var owner = r.leased_by is null ? "" : $"  (worker {r.leased_by})";
-            Out.Info($"{r.code,-16} {r.vendor,-16} {r.unit_code,-12} {r.site_code ?? "-",-12} "
+            Out.Info($"{r.code,-16} {r.vendor,-16} {r.unit_code,-12} {r.area_code ?? "-",-12} "
                    + $"{r.state,-11} {(string?)r.health ?? "-",-11} {r.cameras,5}  {r.endpoint}{owner}");
         }
 

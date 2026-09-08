@@ -11,10 +11,10 @@ namespace Trinetra.Federation.Storage.Repositories;
 /// <para>
 /// Every read and write is constrained on <b>both</b> scope dimensions, ANDed and each with its
 /// own unscoped flag (<c>CLAUDE.md</c> invariant 12): the organization dimension against
-/// <c>connector_target.organization_unit_id</c>, the geographic dimension against the target's
-/// site's area. A target's <c>site_id</c> is nullable, so a target with no site has no
-/// geographic key and the geo dimension cannot constrain it — matching
-/// <c>CameraRepository.RequirePlacementAsync</c>. The organization dimension always applies.
+/// <c>connector_target.organization_unit_id</c>, the geographic dimension against
+/// <c>connector_target.geographic_area_id</c>. A target's <c>geographic_area_id</c> is nullable,
+/// so a target with no area has no geographic key and the geo dimension cannot constrain it —
+/// matching <c>CameraRepository.RequirePlacementAsync</c>. The organization dimension always applies.
 /// </para>
 /// <para>
 /// The scope predicate is the <b>database's</b>, not a filter applied after the fact — one
@@ -32,7 +32,7 @@ namespace Trinetra.Federation.Storage.Repositories;
 public sealed class ConnectorTargetRepository
 {
     private const string Columns = """
-        t.id, t.code, t.organization_unit_id, t.site_id, t.display_name,
+        t.id, t.code, t.organization_unit_id, t.geographic_area_id, t.display_name,
         t.vendor::text AS vendor, t.runtime_class::text AS runtime_class,
         t.endpoint, t.credential_reference, t.verify_tls, t.state::text AS state,
         t.rate_limit_per_second, t.rate_limit_burst,
@@ -42,15 +42,14 @@ public sealed class ConnectorTargetRepository
 
     // The dual-dimension scope predicate, parameterised by the permission the caller exercises.
     // Both dimensions are ANDed; each is bypassed only by ITS OWN unscoped flag (invariant 12).
-    // A target with no site (site_id IS NULL) has no geographic key, so the geo dimension does
-    // not apply to it — the organization dimension still does. `alias` is the table reference the
+    // A target with no area (geographic_area_id IS NULL) has no geographic key, so the geo
+    // dimension does not apply to it — the organization dimension still does. `alias` is the table reference the
     // predicate hangs off (`t` in a SELECT, `connector_target` in an UPDATE/DELETE).
     private static string Scope(string alias, string permission) => $"""
         (@UnscopedOrg OR {alias}.organization_unit_id IN (
             SELECT organization_unit_id FROM federation.authorized_org_units(
                 p_user_id => @UserId, p_api_key_id => @ApiKeyId, p_permission => @Perm)))
-        AND (@UnscopedGeo OR {alias}.site_id IS NULL OR (
-                SELECT s.geographic_area_id FROM federation.sites s WHERE s.id = {alias}.site_id) IN (
+        AND (@UnscopedGeo OR {alias}.geographic_area_id IS NULL OR {alias}.geographic_area_id IN (
             SELECT geographic_area_id FROM federation.authorized_geographic_areas(
                 p_user_id => @UserId, p_api_key_id => @ApiKeyId, p_permission => @Perm)))
         """;
@@ -129,7 +128,7 @@ public sealed class ConnectorTargetRepository
 
         // Referenced records must exist AND be ACTIVE. A foreign key alone catches "does not
         // exist" (400 via ConstraintViolationExceptionHandler); it says nothing about status, so
-        // without this a target could attach to a deactivated unit or site and silently drop out
+        // without this a target could attach to a deactivated unit or area and silently drop out
         // of every scope query. Runs unconditionally — including for an unscoped caller, who
         // otherwise got no validation here at all.
         var refs = await c.QuerySingleAsync<ReferenceCheckRow>(new CommandDefinition(
@@ -137,10 +136,11 @@ public sealed class ConnectorTargetRepository
             SELECT
                 EXISTS (SELECT 1 FROM federation.organization_units
                         WHERE id = @OrgUnit AND status = 'ACTIVE') AS org_active,
-                (@SiteId::uuid IS NULL OR EXISTS (
-                    SELECT 1 FROM federation.sites WHERE id = @SiteId AND status = 'ACTIVE')
-                ) AS site_active;
-            """, new { OrgUnit = target.OrganizationUnitId, target.SiteId },
+                (@GeographicAreaId::uuid IS NULL OR EXISTS (
+                    SELECT 1 FROM federation.geographic_areas
+                    WHERE id = @GeographicAreaId AND status = 'ACTIVE')
+                ) AS area_active;
+            """, new { OrgUnit = target.OrganizationUnitId, target.GeographicAreaId },
             work.Transaction, cancellationToken: ct));
 
         if (!refs.OrgActive)
@@ -149,18 +149,19 @@ public sealed class ConnectorTargetRepository
                 "organizationUnitId", "does not exist or is not ACTIVE");
         }
 
-        if (!refs.SiteActive)
+        if (!refs.AreaActive)
         {
-            throw new InvalidReferenceException("siteId", "does not exist or is not ACTIVE");
+            throw new InvalidReferenceException(
+                "geographicAreaId", "does not exist or is not ACTIVE");
         }
 
-        // A caller must be able to reach BOTH the organization unit and the site's geography
+        // A caller must be able to reach BOTH the organization unit and the geographic area
         // they are assigning the target to — otherwise they could park a target in another
         // department, or another district, and read its events. Each dimension is skipped only
-        // by its own unscoped flag; a target with no site has no geography to check.
+        // by its own unscoped flag; a target with no area has no geography to check.
         var writePermission = target.Id == Guid.Empty ? "vms.create" : "vms.update";
         var orgOk = caller.IsUnscopedFor(writePermission);
-        var geoOk = target.SiteId is null || caller.IsUnscopedForGeography(writePermission);
+        var geoOk = target.GeographicAreaId is null || caller.IsUnscopedForGeography(writePermission);
 
         if (!orgOk || !geoOk)
         {
@@ -176,12 +177,11 @@ public sealed class ConnectorTargetRepository
                             p_user_id => @UserId, p_api_key_id => @ApiKeyId, p_permission => @Permission)
                         WHERE organization_unit_id = @OrgUnit))
                     AND
-                    (@GeoOk OR @SiteId::uuid IS NULL OR EXISTS (
+                    (@GeoOk OR @GeographicAreaId::uuid IS NULL OR EXISTS (
                         SELECT 1 FROM federation.authorized_geographic_areas(
                             p_user_id => @UserId, p_api_key_id => @ApiKeyId,
                             p_permission => @Permission)
-                        WHERE geographic_area_id =
-                            (SELECT s.geographic_area_id FROM federation.sites s WHERE s.id = @SiteId)));
+                        WHERE geographic_area_id = @GeographicAreaId));
                 """,
                 new
                 {
@@ -191,7 +191,7 @@ public sealed class ConnectorTargetRepository
                     OrgOk = orgOk,
                     GeoOk = geoOk,
                     OrgUnit = target.OrganizationUnitId,
-                    target.SiteId,
+                    target.GeographicAreaId,
                 }, work.Transaction, cancellationToken: ct));
 
             if (!permitted)
@@ -202,13 +202,13 @@ public sealed class ConnectorTargetRepository
 
         return await c.ExecuteScalarAsync<Guid>(new CommandDefinition("""
             INSERT INTO federation.connector_target
-                (id, code, organization_unit_id, site_id, display_name, vendor, runtime_class,
+                (id, code, organization_unit_id, geographic_area_id, display_name, vendor, runtime_class,
                  endpoint, credential_reference, verify_tls, state,
                  rate_limit_per_second, rate_limit_burst, inventory_poll_seconds,
                  status_poll_seconds, event_poll_seconds, max_concurrent_requests,
                  expected_camera_count, created_by, updated_by)
             VALUES (COALESCE(NULLIF(@Id,'00000000-0000-0000-0000-000000000000'::uuid), gen_random_uuid()),
-                    @Code, @OrganizationUnitId, @SiteId, @DisplayName,
+                    @Code, @OrganizationUnitId, @GeographicAreaId, @DisplayName,
                     @Vendor::federation.vendor_kind, @RuntimeClass::federation.runtime_class,
                     @Endpoint, @CredentialReference, @VerifyTls, @State::federation.target_state,
                     @RateLimitPerSecond, @RateLimitBurst, @InventoryPollSeconds,
@@ -220,7 +220,7 @@ public sealed class ConnectorTargetRepository
             -- here on; the INSERT branch above still writes it (defaults to Active on register).
             SET code = EXCLUDED.code,
                 organization_unit_id = EXCLUDED.organization_unit_id,
-                site_id = EXCLUDED.site_id, display_name = EXCLUDED.display_name,
+                geographic_area_id = EXCLUDED.geographic_area_id, display_name = EXCLUDED.display_name,
                 vendor = EXCLUDED.vendor, runtime_class = EXCLUDED.runtime_class,
                 endpoint = EXCLUDED.endpoint,
                 credential_reference = EXCLUDED.credential_reference,
@@ -236,7 +236,7 @@ public sealed class ConnectorTargetRepository
             RETURNING id;
             """, new
         {
-            target.Id, target.Code, target.OrganizationUnitId, target.SiteId, target.DisplayName,
+            target.Id, target.Code, target.OrganizationUnitId, target.GeographicAreaId, target.DisplayName,
             Vendor = target.Vendor.ToString(),
             RuntimeClass = target.RuntimeClass.ToString(),
             target.Endpoint, target.CredentialReference, target.VerifyTls,
@@ -313,7 +313,7 @@ public sealed class ConnectorTargetRepository
     private sealed class ReferenceCheckRow
     {
         public bool OrgActive { get; init; }
-        public bool SiteActive { get; init; }
+        public bool AreaActive { get; init; }
     }
 
     private sealed class TargetRow
@@ -321,7 +321,7 @@ public sealed class ConnectorTargetRepository
         public Guid Id { get; init; }
         public string Code { get; init; } = "";
         public Guid OrganizationUnitId { get; init; }
-        public Guid? SiteId { get; init; }
+        public Guid? GeographicAreaId { get; init; }
         public string DisplayName { get; init; } = "";
         public string Vendor { get; init; } = "";
         public string RuntimeClass { get; init; } = "";
@@ -342,7 +342,7 @@ public sealed class ConnectorTargetRepository
             Id = Id,
             Code = Code,
             OrganizationUnitId = OrganizationUnitId,
-            SiteId = SiteId,
+            GeographicAreaId = GeographicAreaId,
             DisplayName = DisplayName,
             Vendor = Enum.Parse<VendorKind>(Vendor),
             RuntimeClass = Enum.Parse<RuntimeClass>(RuntimeClass),

@@ -143,7 +143,7 @@ public sealed record CameraPage(IReadOnlyList<CameraResponse> Items, string? Nex
 
 | # | Method & path | Purpose | Permission | Request | Response | Codes |
 |---|---|---|---|---|---|---|
-| 1 | `POST /api/v1/cameras` | Manual onboarding. Creates one registry record. | `camera.create` | `CameraWriteRequest` (body) | `201` + `CreatedResponse { id }`, `Location: /api/v1/cameras/{id}` | `201`, `400` (validation), `404` (org unit or site not in caller scope), `409` (`camera_code` exists) |
+| 1 | `POST /api/v1/cameras` | Manual onboarding. Creates one registry record. | `camera.create` | `CameraWriteRequest` (body) | `201` + `CreatedResponse { id }`, `Location: /api/v1/cameras/{id}` | `201`, `400` (validation), `404` (org unit or geographic area not in caller scope), `409` (`camera_code` exists) |
 | 2 | `GET /api/v1/cameras/{id:guid}` | Read one registry record. | `camera.read` | — | `CameraResponse` | `200`, `404` (absent or out of scope) |
 | 3 | `GET /api/v1/cameras` | Paginated, filtered list. | `camera.read` | query params below | `CameraPage` | `200`, `400` (bad bbox / filter) |
 | 4 | `PUT /api/v1/cameras/{id:guid}` | Full replace. Every field taken from body; omitted optional field reverts to null/default. Read-then-send pattern, like `PUT /vms/{id}`. | `camera.update` | `CameraWriteRequest` | `CameraResponse` (`200`) | `200`, `400`, `404`, `409` (code collision with another row) |
@@ -164,8 +164,8 @@ offered.
 | `limit` | int | default 50, clamp 1..200 |
 | `cursor` | string | opaque keyset cursor |
 | `organizationUnitId` | guid | filter to this unit **and its descendants** (`org_unit_descendants`) |
-| `siteId` | guid | exact site |
-| `geographicAreaId` | guid | this area **and descendants** (`geographic_area_descendants`), resolved via the camera's site |
+| `geographicAreaId` | guid | this area **and descendants** (`geographic_area_descendants`) |
+
 | `vendorId` | guid | exact |
 | `cameraType` | string | `FIXED`/`PTZ`/`DOME`/`BULLET`/`ANPR`/… |
 | `operationalStatus` | string | `ONLINE`/`OFFLINE`/`DEGRADED`/`UNKNOWN` |
@@ -190,8 +190,8 @@ caller's org-AND-geo scope (§5).
 - **One transaction per row**, not per batch: a bad row must not roll back 499 good ones.
   Each successful row writes its own `config_audit` entry (`action: "create"` /
   `"update"`, `entity_type: "camera"`).
-- Every row is scope-checked individually (its `organization_unit_id` + its site's area);
-  a row outside caller scope fails with `error: "organization_unit or site not in scope"`.
+- Every row is scope-checked individually (its `organization_unit_id` + its `geographic_area_id`);
+  a row outside caller scope fails with `error: "organization_unit or geographic_area not in scope"`.
 - `409` is not used — partial success is normal for bulk, so the HTTP status is `200` and
   the body carries per-row outcomes.
 
@@ -222,7 +222,7 @@ a future health rule; slice 1 has no automatic setter.
 
 | # | Method & path | Purpose | Permission | Request | Response | Codes |
 |---|---|---|---|---|---|---|
-| 14 | `GET /api/v1/cameras/unreconciled` | The backlog: `federated_camera` rows with `camera_id IS NULL`, i.e. cameras a VMS reports that the registry has never matched. Uses `ix_camera_unreconciled`. | `camera.reconcile` | `targetId?` (guid), `limit` (default 100, max 500), `cursor` | `UnreconciledPage { items: UnreconciledCameraResponse[], nextCursor }` where each item = `{ targetId, nativeCameraId, name, vendorModel, firmware, organizationUnitId, siteId, latitude, longitude, lastSeen, streamReferences[] }` | `200` |
+| 14 | `GET /api/v1/cameras/unreconciled` | The backlog: `federated_camera` rows with `camera_id IS NULL`, i.e. cameras a VMS reports that the registry has never matched. Uses `ix_camera_unreconciled`. | `camera.reconcile` | `targetId?` (guid), `limit` (default 100, max 500), `cursor` | `UnreconciledPage { items: UnreconciledCameraResponse[], nextCursor }` where each item = `{ targetId, nativeCameraId, name, vendorModel, firmware, organizationUnitId, geographicAreaId, latitude, longitude, lastSeen, streamReferences[] }` | `200` |
 | 15 | `POST /api/v1/cameras/{id:guid}/reconcile` | Link an existing registry record to a VMS-native camera: set `federated_camera.camera_id = {id}` for `(targetId, nativeCameraId)`. Optionally copy `vms_id` / `stream_reference` onto the registry row. | `camera.reconcile` | `ReconcileRequest { targetId, nativeCameraId, adoptStreamReference: bool = true, adoptVmsId: bool = true }` | `ReconcileResponse { cameraId, targetId, nativeCameraId, vmsId }` | `200`, `404` (registry camera or federated row not in scope), `409` (that federated row is already linked to a **different** `camera_id`) |
 | 16 | `POST /api/v1/cameras/from-federated` | Convenience: create a registry record **from** an unreconciled federated row and link it in one call. Body carries the fields the federated row cannot supply (`cameraCode`, `cameraType`, optics). | `camera.create` + `camera.reconcile` | `CreateFromFederatedRequest { targetId, nativeCameraId, cameraCode, name?, cameraType, azimuth?, horizontalFov?, effectiveRange?, … }` | `201` + `CreatedResponse { id }` | `201`, `400`, `404`, `409` (`camera_code` exists / federated row already linked) |
 
@@ -265,7 +265,7 @@ CREATE TABLE IF NOT EXISTS cameras (
 
     -- Ownership and location: the two independent dimensions. Both required.
     organization_unit_id  UUID NOT NULL REFERENCES organization_units(id),
-    site_id               UUID NOT NULL REFERENCES sites(id),
+    geographic_area_id    UUID NOT NULL REFERENCES geographic_areas(id),
 
     vendor_id             UUID,                 -- no vendors table yet; see Q4. Plain UUID for now.
     manufacturer          VARCHAR(255),
@@ -329,7 +329,7 @@ CREATE TABLE IF NOT EXISTS cameras (
 );
 
 CREATE INDEX IF NOT EXISTS ix_cameras_org        ON cameras (organization_unit_id);
-CREATE INDEX IF NOT EXISTS ix_cameras_site       ON cameras (site_id);
+CREATE INDEX IF NOT EXISTS ix_cameras_geo_area   ON cameras (geographic_area_id);
 CREATE INDEX IF NOT EXISTS ix_cameras_vendor     ON cameras (vendor_id) WHERE vendor_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS ix_cameras_type       ON cameras (camera_type);
 CREATE INDEX IF NOT EXISTS ix_cameras_op_status  ON cameras (operational_status);
@@ -489,7 +489,7 @@ bool adoptStreamReference, bool adoptVmsId, CallerContext caller, UnitOfWork wor
 
 1. **Scope both sides.** Load the registry camera via `CameraRepository` scoped read
    (org AND geo, §5) — null → `404`. Load the federated row; verify the caller can reach
-   its `organization_unit_id` + its site's area via `has_permission('camera.reconcile', …)`
+   its `organization_unit_id` + its `geographic_area_id` via `has_permission('camera.reconcile', …)`
    — fail → `404`.
 2. **Conflict check.** If `federated_camera.camera_id IS NOT NULL AND camera_id <> @cameraId`
    → `409` (`"That VMS camera is already reconciled to a different registry record"`).
@@ -534,12 +534,11 @@ For a camera:
 
 - **organization dimension** = `cameras.organization_unit_id`, checked against
   `authorized_org_units(user, key, perm)` / `has_unscoped_permission(user, key, perm)`.
-- **geographic dimension** = the area of the camera's site:
-  `(SELECT geographic_area_id FROM sites WHERE id = cameras.site_id)`, checked against
+- **geographic dimension** = `cameras.geographic_area_id` (any hierarchy level), checked against
   `authorized_geographic_areas(user, key, perm)` / `has_unscoped_geography(user, key, perm)`.
 
-`sites.geographic_area_id` is `NOT NULL`, and `cameras.site_id` is `NOT NULL`, so — unlike
-`connector_target` where `site_id` is optional — **every camera always has both
+`cameras.geographic_area_id` is `NOT NULL`, so — unlike
+`connector_target` where it is optional — **every camera always has both
 dimensions** and the geo filter is never skipped.
 
 ### Single-row reads / writes (`GET/PUT/PATCH/DELETE /cameras/{id}`, health, maintenance, coverage, reconcile)
@@ -554,7 +553,7 @@ WHERE c.id = @id
         SELECT organization_unit_id
         FROM federation.authorized_org_units(
                  p_user_id => @UserId, p_api_key_id => @ApiKeyId, p_permission => @Perm)))
-  AND (@UnscopedGeo OR (SELECT s.geographic_area_id FROM federation.sites s WHERE s.id = c.site_id) IN (
+  AND (@UnscopedGeo OR c.geographic_area_id IN (
         SELECT geographic_area_id
         FROM federation.authorized_geographic_areas(
                  p_user_id => @UserId, p_api_key_id => @ApiKeyId, p_permission => @Perm)));
@@ -577,7 +576,7 @@ internally) is also acceptable and matches `ConnectorTargetRepository.GetAsync`:
 AND (@Unscoped OR federation.has_permission(
         p_user_id => @UserId, p_api_key_id => @ApiKeyId, p_permission => @Perm,
         p_organization_unit_id => c.organization_unit_id,
-        p_geographic_area_id => (SELECT s.geographic_area_id FROM federation.sites s WHERE s.id = c.site_id)))
+        p_geographic_area_id => c.geographic_area_id))
 ```
 
 Prefer this single-call form for `{id}` reads; use the two explicit `IN (…)` sets for list
@@ -586,38 +585,38 @@ queries (planner-friendly, matches `ConnectorTargetRepository.ListAsync`).
 ### List / feed reads (`GET /cameras`, `GET /gis/cameras`, `GET /gis/coverage`, `GET /cameras/unreconciled`)
 
 `WHERE` clause ANDs **both** authorized sets (org via `cameras.organization_unit_id`, geo
-via the site subquery), each guarded by its own unscoped flag, plus the user filters from
+directly), each guarded by its own unscoped flag, plus the user filters from
 §2.1. `GET /cameras/unreconciled` scopes on `federated_camera.organization_unit_id` and its
-site area the same way, with `camera.reconcile` as the permission.
+geographic area the same way, with `camera.reconcile` as the permission.
 
 ### Create / bulk-import
 
 `camera.create` (or `camera.import`) is checked **and** the target
-`organization_unit_id` + the chosen `site_id`'s area must both be within the caller's
+`organization_unit_id` + the chosen `geographic_area_id` must both be within the caller's
 authorized sets for that permission — otherwise `404` (single) / per-row error (bulk).
 This is the `AUTHORIZATION.md` §5 "a scoped caller cannot create a resource outside their
 oversight" rule. A camera has no "root" problem (it always sits under an existing unit and
-site), so no special unscoped-only restriction like organizations have.
+area), so no special unscoped-only restriction like organizations have.
 
 ### Per-endpoint permission summary
 
 | Endpoint | Permission | Org dim source | Geo dim source |
 |---|---|---|---|
-| `POST /cameras`, bulk-import | `camera.create` / `camera.import` | body `organizationUnitId` | body `siteId` → area |
-| `GET /cameras`, `GET /cameras/{id}` | `camera.read` | `cameras.organization_unit_id` | site area |
-| `PUT`/`PATCH /cameras/{id}` | `camera.update` | current row | current row's site area (and new site if changed — check both) |
-| `DELETE /cameras/{id}` | `camera.delete` | current row | current row's site area |
-| `GET .../health`, `.../health/history` | `camera.health.read` | camera | site area |
-| `PATCH .../health` | `camera.update` | camera | site area |
-| `GET .../maintenance` | `camera.maintenance.read` | camera | site area |
-| `POST/PATCH .../maintenance` | `camera.maintenance.update` | camera | site area |
-| `GET /cameras/{id}/coverage` | `gis.coverage.read` | camera | site area |
-| `GET /gis/cameras` | `gis.read` | camera | site area |
-| `GET /gis/coverage` | `gis.coverage.read` | camera | site area |
-| `GET /cameras/unreconciled` | `camera.reconcile` | `federated_camera.organization_unit_id` | its site area |
-| `POST /cameras/{id}/reconcile`, `/from-federated` | `camera.reconcile` (+ `camera.create` for from-federated) | both the registry camera **and** the federated row | both site areas |
+| `POST /cameras`, bulk-import | `camera.create` / `camera.import` | body `organizationUnitId` | body `geographicAreaId` |
+| `GET /cameras`, `GET /cameras/{id}` | `camera.read` | `cameras.organization_unit_id` | geographic area |
+| `PUT`/`PATCH /cameras/{id}` | `camera.update` | current row | current row's geographic area (and the new one if changed — check both) |
+| `DELETE /cameras/{id}` | `camera.delete` | current row | current row's geographic area |
+| `GET .../health`, `.../health/history` | `camera.health.read` | camera | geographic area |
+| `PATCH .../health` | `camera.update` | camera | geographic area |
+| `GET .../maintenance` | `camera.maintenance.read` | camera | geographic area |
+| `POST/PATCH .../maintenance` | `camera.maintenance.update` | camera | geographic area |
+| `GET /cameras/{id}/coverage` | `gis.coverage.read` | camera | geographic area |
+| `GET /gis/cameras` | `gis.read` | camera | geographic area |
+| `GET /gis/coverage` | `gis.coverage.read` | camera | geographic area |
+| `GET /cameras/unreconciled` | `camera.reconcile` | `federated_camera.organization_unit_id` | its geographic area |
+| `POST /cameras/{id}/reconcile`, `/from-federated` | `camera.reconcile` (+ `camera.create` for from-federated) | both the registry camera **and** the federated row | both geographic areas |
 
-If a PUT/PATCH moves the camera to a different `site_id` or `organization_unit_id`, the
+If a PUT/PATCH moves the camera to a different `geographic_area_id` or `organization_unit_id`, the
 caller must be authorized for **both** the old and the new placement (prevents "push a
 camera into a unit I can't see" and "pull one out of view").
 
@@ -633,7 +632,7 @@ the DB `CHECK` constraints as a backstop.
 | `camera_code` | required; `^[A-Za-z0-9][A-Za-z0-9._/-]{1,99}$`; unique among non-deleted rows (`409` on collision). Immutable? — recommend **mutable via PUT/PATCH** but audited; `id` is the immutable identity (`CAMERA-SCHEMA.md`). |
 | `name` | required, 1..255, trimmed |
 | `organization_unit_id` | required, must exist, status `ACTIVE`, in caller scope |
-| `site_id` | required, must exist, status `ACTIVE`, in caller scope |
+| `geographic_area_id` | required, must exist, status `ACTIVE`, in caller scope |
 | `camera_type` | required, one of `FIXED,PTZ,DOME,BULLET,ANPR,THERMAL,MULTISENSOR,OTHER` |
 | `latitude` | required, `-90 ≤ lat ≤ 90`, ≤ 7 dp |
 | `longitude` | required, `-180 ≤ lon ≤ 180`, ≤ 7 dp |
@@ -714,7 +713,7 @@ by `AuditAsync` from `CallerContext` as they are today.
 | Q13 | GeoJSON media type — return `application/geo+json` or plain `application/json`? | `application/geo+json` for `/gis/cameras` and `/cameras/{id}/coverage`; keep `/gis/coverage` (no geometry) as `application/json`. |
 | Q14 | Does `RequirePermission` metadata support the two admin-added permissions without a code change (it reads the `permissions` table at startup for coverage reporting)? | Adding rows to `permissions` in v1.6 is sufficient; confirm the startup coverage check tolerates permissions it has never seen used. |
 | Q15 | Bulk-import size cap (500) and sync model — acceptable for the first-phase 100+ camera rollout and the 80k target? | 500/call sync is fine for onboarding waves. An async job endpoint is a later addition, not a slice-1 blocker. |
-| Q16 | Should `PATCH /cameras/{id}` allow moving `site_id` / `organization_unit_id` at all, or force a dedicated "transfer" endpoint with its own permission? | Allow via PATCH in slice 1, gated by the dual-scope (old AND new) check in §5. Revisit if transfers need a distinct approval flow. |
+| Q16 | Should `PATCH /cameras/{id}` allow moving `geographic_area_id` / `organization_unit_id` at all, or force a dedicated "transfer" endpoint with its own permission? | Allow via PATCH in slice 1, gated by the dual-scope (old AND new) check in §5. Revisit if transfers need a distinct approval flow. |
 
 ---
 
@@ -803,11 +802,11 @@ ids for both dimensions is therefore always safe.
 who is **org-unscoped but geography-scoped** takes the `@Unscoped` branch and the row is returned
 with the geo dimension never checked — that is exactly the "reuse one dimension's unscoped answer
 for the other" failure `CLAUDE.md` invariant 12 forbids. It is a latent bug in the Model 3 code;
-`connector_target.site_id` being nullable has hidden it. For cameras, `site_id` is `NOT NULL` and
+`connector_target.geographic_area_id` being nullable has hidden it. For cameras it is `NOT NULL` and
 geo always matters, so **do not replicate that pattern.** Use one of:
 
 - **(preferred) always call `has_permission(... p_organization_unit_id => c.organization_unit_id,
-  p_geographic_area_id => (SELECT s.geographic_area_id FROM sites s WHERE s.id = c.site_id))` with
+  p_geographic_area_id => c.geographic_area_id)` with
   no unscoped bypass** — a genuinely unscoped admin has no constraining scopes, so
   `has_permission` returns TRUE for them anyway. The bypass is only a micro-optimisation and here
   it is a security hole.
@@ -851,23 +850,22 @@ ON CONFLICT (target_id, native_camera_id) DO UPDATE SET name=..., vendor_model=.
 is_enabled=..., is_recording=..., health=..., last_seen=..., stream_references=CASE..., updated_at=now()`.
 **`camera_id` is not in the `DO UPDATE SET` list**, so a poll never clears a reconciled link. No
 Model 3 change is required for slice 1. (Also not in the SET list: `organization_unit_id`,
-`site_id` — a camera that moves org/site in the VMS keeps its original values in `federated_camera`;
+`geographic_area_id` — a camera that moves org/area in the VMS keeps its original values in `federated_camera`;
 out of scope here but worth knowing for the reconcile UI.) The value inserted for `camera_id`
 comes from the adapter row (`c.CameraId`), which is always NULL today.
 
 `federated_camera` columns (`db/versions/v1.sql:957-985`): `target_id`, `native_camera_id`,
 `camera_id UUID` (nullable, **no FK**), `organization_unit_id UUID NOT NULL`,
-`site_id UUID` (**nullable**, FK to `sites`), `name`, `vendor_model`, `firmware`,
+`geographic_area_id UUID` (**nullable**, FK to `geographic_areas`), `name`, `vendor_model`, `firmware`,
 `latitude`/`longitude DECIMAL(10,7)`, `is_enabled`, `is_recording`, `health health_status`,
 `last_seen`, `stream_references TEXT[] NOT NULL DEFAULT '{}'`, `raw_reference`, `first_seen_at`,
 `updated_at`. Indexes: `ix_camera_registry_id` (partial, `camera_id IS NOT NULL`),
 `ix_camera_org`, `ix_camera_unreconciled` (partial, `camera_id IS NULL`, on `target_id`).
 Two consequences for the plan:
 
-- `federated_camera.site_id` is **nullable**, so `GET /cameras/unreconciled`'s geo dimension
-  ("its site area") can be null. Decide: fall back to scoping on `organization_unit_id` only when
-  `site_id IS NULL`, or exclude such rows. The plan currently assumes every federated row has a
-  site.
+- `federated_camera.geographic_area_id` is **nullable**, so `GET /cameras/unreconciled`'s geo
+  dimension can be null. It falls back to scoping on `organization_unit_id` only when the area is
+  null (a null area = "geography does not constrain"), matching the other repos.
 - The unreconciled item shape lists `streamReferences[]` — that maps to
   `federated_camera.stream_references` directly. Good. `vendorModel`/`firmware` map to
   `vendor_model`/`firmware`. There is no `vms_id` on `federated_camera`; the VMS is `target_id`.
@@ -994,7 +992,7 @@ Must-fix before coding:
    `vendorId` filter/bucket on endpoints 3/17/19 (§10.5 / Q4).
 5. **Specify the PATCH merge mechanism** (JsonElement read / `Optional<T>` / `*Specified`) — an
    all-nullable record does not express "leave unchanged" (§10.7).
-6. **`federated_camera.site_id` is nullable** — define the geo-scope fallback for
+6. **`federated_camera.geographic_area_id` is nullable** — geo-scope falls back to org-only for
    `GET /cameras/unreconciled` (§10.4).
 
 Should-fix (cheap, do them now):
@@ -1040,10 +1038,10 @@ Decisions taken from §10 before coding. This section governs where it differs f
    nullable column, an absent property is untouched. Repository takes a
    `CameraPatch` record of `JsonElement?`-free resolved values plus a `HashSet<string>
    changed` field list. No `Optional<T>` wrapper.
-6. **`GET /cameras/unreconciled` geo scope:** when `federated_camera.site_id IS NULL`, the
+6. **`GET /cameras/unreconciled` geo scope:** when `federated_camera.geographic_area_id IS NULL`, the
    row is scoped on `organization_unit_id` only (its geo dimension is treated as in-scope
    for a geo-scoped caller). Such rows are still returned — hiding a VMS-reported camera
-   because it lacks a site defeats the point of the backlog view.
+   because it lacks an area defeats the point of the backlog view.
 7. v1.6 file: `====` banner, rationale, `-- Requires: v1.sql … v1.5.sql`, `SET search_path
    TO federation, public;`, and the "Transaction is owned by MigrationRunner" note.
 8. Index names carry the full table name (`ix_cameras_*`, `ix_camera_health_history_*`,

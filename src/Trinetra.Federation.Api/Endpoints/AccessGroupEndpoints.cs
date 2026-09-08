@@ -81,6 +81,36 @@ public static class AccessGroupEndpoints
               + "time, or a caller could build the group first and hand it to themselves through "
               + "a route that only inspects it on the way out.");
 
+        group.MapPut("/{id:guid}", UpdateAsync)
+          .RequirePermission("group.manage")
+          .WithSummary("Edit an access group")
+          .WithDescription(
+              "Changes `code`, `name`, `description` and `roleId`. `status` is not touched here — "
+              + "use `/activate` and `/disable`.\n\n"
+              + "Switching the role re-runs the escalation guard: a scoped caller cannot move a "
+              + "group onto a role granting permissions they do not hold themselves. Editing the "
+              + "role of an **active** group changes what every member can do immediately, and is "
+              + "audited as such. 404 if the group is unknown or outside your reach.");
+
+        group.MapPost("/{id:guid}/activate", ActivateAsync)
+          .RequirePermission("group.manage")
+          .WithSummary("Activate an access group")
+          .WithDescription(
+              "Moves a `DRAFT` or `DISABLED` group to `ACTIVE`, at which point its members hold "
+              + "the grant.\n\n"
+              + "**A group missing an ORGANIZATION scope or a GEOGRAPHY scope is unrestricted on "
+              + "that dimension** — an estate-wide grant. Activating one is allowed only for a "
+              + "caller already unscoped for `group.manage` on that dimension; anyone else gets "
+              + "403 and must add the missing scope first.");
+
+        group.MapPost("/{id:guid}/disable", DisableAsync)
+          .RequirePermission("group.manage")
+          .WithSummary("Disable an access group")
+          .WithDescription(
+              "Moves a group to `DISABLED`. The grant stops immediately for every member — the "
+              + "authorization functions only consider `ACTIVE` groups. Membership rows are left "
+              + "intact, so re-activating restores the same roster.");
+
         // ---- Scopes --------------------------------------------------------
 
         group.MapPost("/{id:guid}/scopes", AddScopeAsync)
@@ -110,14 +140,7 @@ public static class AccessGroupEndpoints
               + "several is ordinary narrowing and is allowed.");
 
         // ---- Reference data -------------------------------------------------
-
-        app.MapGet("/api/v1/roles", ListRolesAsync)
-          .RequireAuthorization().WithTags(ApiTags.AccessControl).RequirePermission("group.read")
-          .WithSummary("List the roles a group can be built on")
-          .WithDescription(
-              "Reference data for the role picker. `isSystem` marks a role the platform depends "
-              + "on and that should not be treated as editable. Roles are bundles of permissions "
-              + "with no scope of their own — scope is attached to the group.");
+        // Roles live at /api/v1/roles — see RoleEndpoints, which also owns their CRUD.
 
         app.MapGet("/api/v1/permissions", ListPermissionsAsync)
           .RequireAuthorization().WithTags(ApiTags.AccessControl).RequirePermission("group.read")
@@ -182,19 +205,9 @@ public static class AccessGroupEndpoints
         // The same escalation guard as group assignment, applied one step earlier. Without
         // it a caller could build a SUPER_ADMIN group and then hand it to themselves through
         // a route that only checks the group's contents at assignment time.
-        if (!caller.IsUnscopedFor("group.manage"))
+        if (await RoleEscalationProblemAsync(caller, repo, request.RoleId, ct) is { } problem)
         {
-            var granted = await repo.GetRolePermissionsAsync(request.RoleId, ct);
-            var exceeding = granted.Where(p => !caller.Has(p)).OrderBy(p => p).ToList();
-
-            if (exceeding.Count > 0)
-            {
-                return TypedResults.Problem(
-                    title: "Would grant more than you hold",
-                    detail: "That role grants permissions you do not have: "
-                          + $"{string.Join(", ", exceeding)}.",
-                    statusCode: StatusCodes.Status403Forbidden);
-            }
+            return problem;
         }
 
         await using var work = await UnitOfWork.BeginAsync(db, ct);
@@ -215,6 +228,157 @@ public static class AccessGroupEndpoints
 
         return TypedResults.Created($"/api/v1/access-groups/{id}", new CreatedResponse(id));
     }
+
+    private static async Task<Results<Ok<AccessGroupResponse>, NotFound, ProblemHttpResult>> UpdateAsync(
+        Guid id, [FromBody] UpdateGroupRequest request, AccessGroupRepository repo,
+        NpgsqlDataSource db, HttpContext http, CancellationToken ct)
+    {
+        var caller = CallerContextFactory.From(http);
+        caller.Require("group.manage");
+
+        if (!await repo.IsVisibleToAsync(id, caller, "group.manage", ct)
+            || await repo.GetAsync(id, ct) is not { } prior)
+        {
+            return TypedResults.NotFound();
+        }
+
+        // Re-checked on every edit, not just the ones that change the role: a caller who lost a
+        // permission since the group was built must not be able to keep re-saving it either.
+        if (await RoleEscalationProblemAsync(caller, repo, request.RoleId, ct) is { } problem)
+        {
+            return problem;
+        }
+
+        await using var work = await UnitOfWork.BeginAsync(db, ct);
+
+        var updated = new AccessGroup
+        {
+            Id = id,
+            Code = request.Code,
+            Name = request.Name,
+            Description = request.Description,
+            RoleId = request.RoleId,
+            Status = prior.Status,   // lifecycle is the activate / disable routes, not this one
+        };
+        await repo.UpsertAsync(updated, caller.UserId, work, ct);
+
+        await work.AuditAsync(caller, "update", "access_group", id.ToString(),
+            before: ToResponse(prior), after: request, organizationUnitId: null, ct);
+        await work.CommitAsync(ct);
+
+        var refreshed = await repo.GetAsync(id, ct);
+        return TypedResults.Ok(ToResponse(refreshed!));
+    }
+
+    private static async Task<Results<NoContent, NotFound, ProblemHttpResult>> ActivateAsync(
+        Guid id, AccessGroupRepository repo, NpgsqlDataSource db, HttpContext http,
+        CancellationToken ct)
+    {
+        var caller = CallerContextFactory.From(http);
+        caller.Require("group.manage");
+
+        if (!await repo.IsVisibleToAsync(id, caller, "group.manage", ct)
+            || await repo.GetAsync(id, ct) is not { } group)
+        {
+            return TypedResults.NotFound();
+        }
+
+        // Re-run the escalation guard on the group's effective permissions: a stale DRAFT may
+        // carry a role the caller has since lost the standing to grant.
+        if (!caller.IsUnscopedFor("group.manage"))
+        {
+            var granted = await repo.GetGroupPermissionsAsync(id, ct);
+            var exceeding = granted.Where(p => !caller.Has(p)).OrderBy(p => p).ToList();
+            if (exceeding.Count > 0)
+            {
+                return TypedResults.Problem(
+                    title: "Would grant more than you hold",
+                    detail: "This group's role grants permissions you do not have: "
+                          + $"{string.Join(", ", exceeding)}.",
+                    statusCode: StatusCodes.Status403Forbidden);
+            }
+        }
+
+        // An unconstrained dimension is an estate-wide grant. Activating such a group is a
+        // deliberate act only an already-unscoped administrator may take on that dimension.
+        if (!await repo.HasOrganizationScopeAsync(id, ct) && !caller.IsUnscopedFor("group.manage"))
+        {
+            return UnscopedActivationProblem("organization");
+        }
+
+        if (!await repo.HasGeographyScopeAsync(id, ct)
+            && !caller.IsUnscopedForGeography("group.manage"))
+        {
+            return UnscopedActivationProblem("geography");
+        }
+
+        await using var work = await UnitOfWork.BeginAsync(db, ct);
+        await repo.SetStatusAsync(id, "ACTIVE", caller.UserId, work, ct);
+
+        await work.AuditAsync(caller, "update", "access_group", id.ToString(),
+            before: new { status = group.Status }, after: new { status = "ACTIVE" },
+            organizationUnitId: null, ct);
+        await work.CommitAsync(ct);
+
+        return TypedResults.NoContent();
+    }
+
+    private static async Task<Results<NoContent, NotFound, ProblemHttpResult>> DisableAsync(
+        Guid id, AccessGroupRepository repo, NpgsqlDataSource db, HttpContext http,
+        CancellationToken ct)
+    {
+        var caller = CallerContextFactory.From(http);
+        caller.Require("group.manage");
+
+        if (!await repo.IsVisibleToAsync(id, caller, "group.manage", ct)
+            || await repo.GetAsync(id, ct) is not { } group)
+        {
+            return TypedResults.NotFound();
+        }
+
+        await using var work = await UnitOfWork.BeginAsync(db, ct);
+        await repo.SetStatusAsync(id, "DISABLED", caller.UserId, work, ct);
+
+        await work.AuditAsync(caller, "update", "access_group", id.ToString(),
+            before: new { status = group.Status }, after: new { status = "DISABLED" },
+            organizationUnitId: null, ct);
+        await work.CommitAsync(ct);
+
+        return TypedResults.NoContent();
+    }
+
+    /// <summary>
+    /// The escalation guard shared by group create and edit: a scoped caller may not point a
+    /// group at a role granting permissions the caller does not hold. Unscoped callers are exempt.
+    /// </summary>
+    private static async Task<ProblemHttpResult?> RoleEscalationProblemAsync(
+        CallerContext caller, AccessGroupRepository repo, Guid roleId, CancellationToken ct)
+    {
+        if (caller.IsUnscopedFor("group.manage"))
+        {
+            return null;
+        }
+
+        var granted = await repo.GetRolePermissionsAsync(roleId, ct);
+        var exceeding = granted.Where(p => !caller.Has(p)).OrderBy(p => p).ToList();
+
+        return exceeding.Count == 0
+            ? null
+            : TypedResults.Problem(
+                title: "Would grant more than you hold",
+                detail: "That role grants permissions you do not have: "
+                      + $"{string.Join(", ", exceeding)}.",
+                statusCode: StatusCodes.Status403Forbidden);
+    }
+
+    private static ProblemHttpResult UnscopedActivationProblem(string dimension) =>
+        TypedResults.Problem(
+            title: "Group is unrestricted on a dimension",
+            detail: $"This group has no {dimension} scope, so activating it would grant its "
+                  + $"permissions across every {(dimension == "organization" ? "department" : "area")}. "
+                  + $"Add a {dimension} scope first, or activate it as an administrator already "
+                  + $"unscoped for group.manage on that dimension.",
+            statusCode: StatusCodes.Status403Forbidden);
 
     private static async Task<Results<Created<CreatedResponse>, NotFound, ProblemHttpResult>> AddScopeAsync(
         Guid id, [FromBody] AddScopeRequest request, AccessGroupRepository repo,
@@ -311,15 +475,6 @@ public static class AccessGroupEndpoints
         await work.CommitAsync(ct);
 
         return TypedResults.NoContent();
-    }
-
-    private static async Task<Ok<IReadOnlyList<RoleResponse>>> ListRolesAsync(
-        AccessGroupRepository repo, HttpContext http, CancellationToken ct)
-    {
-        CallerContextFactory.From(http).Require("group.read");
-        var roles = await repo.ListRolesAsync(ct);
-        return TypedResults.Ok<IReadOnlyList<RoleResponse>>(
-            [.. roles.Select(r => new RoleResponse(r.Id, r.Code, r.Name, r.Description, r.IsSystem))]);
     }
 
     private static async Task<Ok<IReadOnlyList<PermissionResponse>>> ListPermissionsAsync(

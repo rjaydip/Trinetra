@@ -37,7 +37,7 @@ Suggested fields:
 ``` text
 camera_id
 department_id
-site_id
+geographic_area_id
 camera_name
 vendor
 model

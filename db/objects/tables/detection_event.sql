@@ -12,7 +12,7 @@ CREATE TABLE federation.detection_event (
     native_camera_id text NOT NULL,
     camera_id uuid,
     organization_unit_id uuid NOT NULL,
-    site_id uuid,
+    geographic_area_id uuid,
     event_type text NOT NULL,
     confidence double precision,
     vehicle_type text,
@@ -39,4 +39,4 @@ ALTER TABLE ONLY federation.detection_event
 ALTER TABLE ONLY federation.detection_event
     ADD CONSTRAINT detection_event_organization_unit_id_fkey FOREIGN KEY (organization_unit_id) REFERENCES federation.organization_units(id);
 ALTER TABLE ONLY federation.detection_event
-    ADD CONSTRAINT detection_event_site_id_fkey FOREIGN KEY (site_id) REFERENCES federation.sites(id);
+    ADD CONSTRAINT detection_event_geographic_area_id_fkey FOREIGN KEY (geographic_area_id) REFERENCES federation.geographic_areas(id);

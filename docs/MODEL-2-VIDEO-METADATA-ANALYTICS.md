@@ -44,7 +44,7 @@ repository root — see `ai-worker/README.md`): it discovers cameras via
 itself, using `(target_id, native_camera_id)` for source traceability exactly as described
 above), decodes and samples frames, and runs real vehicle/plate/OCR inference. The `.NET` side
 of the sink now also exists: `POST /api/v1/detections` (idempotent on the worker's own event id,
-resolves the camera to its organization/site scope, matches the plate against an active
+resolves the camera to its organization/geographic-area scope, matches the plate against an active
 watchlist entry in the same transaction) and `POST /api/v1/worker-health/heartbeat`. Not yet
 built: the Kafka metadata producer/consumer that would put detections on the event bus, and
 real-time alert push — `GET /api/v1/watchlist/alerts` is poll-only today.

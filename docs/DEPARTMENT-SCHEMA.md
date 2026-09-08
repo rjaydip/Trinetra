@@ -39,10 +39,21 @@ Use this generic hierarchical entity instead of hardcoding commissionerate/divis
 | `code` | VARCHAR(50) | Yes | Unit code |
 | `name` | VARCHAR(255) | Yes | Unit name |
 | `unit_type` | VARCHAR(50) | Yes | Commissionerate, division, zone, unit, etc. |
+| `description` | TEXT | No | Free-text operator note, round-tripped by GET/PUT |
+| `geographic_area_id` | UUID | No | **Descriptive "home area" label only** — see below |
 | `status` | VARCHAR(20) | Yes | ACTIVE / INACTIVE |
 | `metadata` | JSONB | No | Organization-specific attributes |
 | `created_at` | TIMESTAMPTZ | Yes | Creation time |
 | `updated_at` | TIMESTAMPTZ | Yes | Last update time |
+
+`geographic_area_id` records the area a unit is *based in*, for display and reporting — the way a
+mailing address is attached to a department. It is **never an authorization input**: no scope
+predicate, `has_permission`, `authorized_org_units` or `authorized_geographic_areas` reads it.
+Organization and geography stay independent scope dimensions (see `AUTHORIZATION.md` and
+`RBAC-LOGICAL-FLOW.md`). The API validates the area exists and is ACTIVE but does **not** check
+the caller's geographic scope to set it — a unit admin with no geography grant may still label
+their unit with the area it sits in. Operators who want "show me my unit's cameras" should build
+it as a saved geographic filter, not expect this field to scope anything.
 
 ## Example
 
@@ -116,5 +127,13 @@ POST /api/v1/organizations/{id}/units
 GET  /api/v1/organizations/{id}/units
 
 GET  /api/v1/organization-units/{id}
-PUT  /api/v1/organization-units/{id}
+PUT  /api/v1/organization-units/{id}          # edit fields + description + geographicAreaId;
+                                             # refuses a parentUnitId change (400)
+POST /api/v1/organization-units/{id}/deactivate
 ```
+
+`PUT` on an organization or unit replaces its editable fields; `status` is left as-is when
+omitted (deactivate through `/deactivate`, not by clearing a field). A unit's `organizationId`
+is immutable and a `parentUnitId` change through `PUT` is refused (400) — re-parenting is the
+`/deactivate` `reparent` flow. Editing an organization needs `organization.manage` held
+unscoped.

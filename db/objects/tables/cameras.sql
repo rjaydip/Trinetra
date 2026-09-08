@@ -8,7 +8,7 @@ CREATE TABLE federation.cameras (
     camera_code character varying(100) NOT NULL,
     name character varying(255) NOT NULL,
     organization_unit_id uuid NOT NULL,
-    site_id uuid NOT NULL,
+    geographic_area_id uuid NOT NULL,
     manufacturer character varying(255),
     model character varying(255),
     camera_type character varying(50) NOT NULL,
@@ -67,7 +67,7 @@ ALTER TABLE ONLY federation.cameras
 CREATE UNIQUE INDEX ux_cameras_code_live ON federation.cameras USING btree (camera_code) WHERE (deleted_at IS NULL);
 
 CREATE INDEX ix_cameras_organization_unit ON federation.cameras USING btree (organization_unit_id);
-CREATE INDEX ix_cameras_site ON federation.cameras USING btree (site_id);
+CREATE INDEX ix_cameras_geo_area ON federation.cameras USING btree (geographic_area_id);
 CREATE INDEX ix_cameras_camera_type ON federation.cameras USING btree (camera_type);
 CREATE INDEX ix_cameras_operational_status ON federation.cameras USING btree (operational_status);
 CREATE INDEX ix_cameras_maintenance_status ON federation.cameras USING btree (maintenance_status);
@@ -78,4 +78,4 @@ ALTER TABLE ONLY federation.cameras
     ADD CONSTRAINT cameras_organization_unit_id_fkey FOREIGN KEY (organization_unit_id) REFERENCES federation.organization_units(id);
 
 ALTER TABLE ONLY federation.cameras
-    ADD CONSTRAINT cameras_site_id_fkey FOREIGN KEY (site_id) REFERENCES federation.sites(id);
+    ADD CONSTRAINT cameras_geographic_area_id_fkey FOREIGN KEY (geographic_area_id) REFERENCES federation.geographic_areas(id);

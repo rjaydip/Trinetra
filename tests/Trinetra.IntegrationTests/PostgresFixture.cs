@@ -147,7 +147,6 @@ public sealed class PostgresFixture : IAsyncLifetime
     public static readonly Guid AhmedabadCp = Guid.Parse("a2222222-2222-2222-2222-222222222222");
     public static readonly Guid DistrictId  = Guid.Parse("b1111111-1111-1111-1111-111111111111");
     public static readonly Guid VillageId   = Guid.Parse("b2222222-2222-2222-2222-222222222222");
-    public static readonly Guid SiteId      = Guid.Parse("c1111111-1111-1111-1111-111111111111");
 
     /// <summary>
     /// Clears connector state and re-seeds the organization and geography a test needs.
@@ -183,10 +182,6 @@ public sealed class PostgresFixture : IAsyncLifetime
 
             INSERT INTO federation.geographic_areas (id, parent_area_id, code, name, area_type)
             VALUES ('{VillageId}', '{DistrictId}', 'VILX', 'Village X', 'VILLAGE')
-            ON CONFLICT (id) DO NOTHING;
-
-            INSERT INTO federation.sites (id, code, name, geographic_area_id)
-            VALUES ('{SiteId}', 'SITE-RR', 'Ring Road Junction', '{VillageId}')
             ON CONFLICT (id) DO NOTHING;
             """);
     }

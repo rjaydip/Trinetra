@@ -30,8 +30,8 @@ public sealed record FederatedCamera
 
     public required Guid OrganizationUnitId { get; init; }
 
-    /// <summary>Physical site, inherited from the target unless the VMS reports otherwise.</summary>
-    public Guid? SiteId { get; init; }
+    /// <summary>Geographic area, inherited from the target unless the VMS reports otherwise.</summary>
+    public Guid? GeographicAreaId { get; init; }
 
     public string? Name { get; init; }
     public string? VendorModel { get; init; }

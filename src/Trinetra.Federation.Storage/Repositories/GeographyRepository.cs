@@ -4,7 +4,9 @@ using Npgsql;
 namespace Trinetra.Federation.Storage.Repositories;
 
 /// <summary>
-/// Geographic areas and sites — the operator-defined location hierarchy.
+/// Geographic areas — the operator-defined location hierarchy. Every level (its name and depth)
+/// is defined by the operator through <c>geographic_area_types</c>; there is no fixed bottom
+/// tier. A camera attaches directly to an area at any level.
 /// </summary>
 // CA1822 fires on the write methods now that they take their connection from the UnitOfWork
 // rather than the data source. That is the point of the change, not a defect: they stay instance
@@ -27,7 +29,7 @@ public sealed class GeographyRepository
 
         await using var c = await _dataSource.OpenConnectionAsync(ct);
         var rows = await c.QueryAsync<GeographicArea>(new CommandDefinition("""
-            SELECT id, parent_area_id, code, name, area_type, status
+            SELECT id, parent_area_id, code, name, area_type, description, status
             FROM federation.geographic_areas
             WHERE (@rootsOnly = FALSE OR parent_area_id IS NULL)
               AND (@parentId::uuid IS NULL OR parent_area_id = @parentId)
@@ -51,7 +53,7 @@ public sealed class GeographyRepository
 
         await using var c = await _dataSource.OpenConnectionAsync(ct);
         return await c.QuerySingleOrDefaultAsync<GeographicArea>(new CommandDefinition("""
-            SELECT id, parent_area_id, code, name, area_type, status
+            SELECT id, parent_area_id, code, name, area_type, description, status
             FROM federation.geographic_areas
             WHERE id = @id
               AND (@Unscoped OR id IN (SELECT geographic_area_id
@@ -83,15 +85,29 @@ public sealed class GeographyRepository
 
         await using var c = await _dataSource.OpenConnectionAsync(ct);
         var rows = await c.QueryAsync<GeographicArea>(new CommandDefinition("""
-            SELECT g.id, g.parent_area_id, g.code, g.name, g.area_type, g.status
+            SELECT g.id, g.parent_area_id, g.code, g.name, g.area_type, g.description, g.status
             FROM federation.geographic_area_ancestors(@id) a
             JOIN federation.geographic_areas g ON g.id = a.id;
             """, new { id }, cancellationToken: ct));
         return rows.ToList();
     }
 
+    /// <summary>
+    /// Inserts or updates a geographic area.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>parentIsChanging</c> is <see langword="false"/> only on a field-only update (name,
+    /// description, area type) that leaves the parent as it stands. When the parent is not moving,
+    /// the "parent must be ACTIVE" guard is skipped: a pure rename of an area whose parent has
+    /// since been retired must still be allowed. An <c>area_type</c> change is still level-order
+    /// checked against the parent's level and the levels of the area's own children by the
+    /// <c>trg_geo_area_acyclic</c> trigger, which surfaces a violation as a 400.
+    /// </para>
+    /// </remarks>
     public async Task<Guid> UpsertAreaAsync(
-        GeographicArea area, CallerContext caller, UnitOfWork work, CancellationToken ct)
+        GeographicArea area, CallerContext caller, UnitOfWork work, CancellationToken ct,
+        bool parentIsChanging = true)
     {
         ArgumentNullException.ThrowIfNull(area);
         ArgumentNullException.ThrowIfNull(caller);
@@ -116,25 +132,30 @@ public sealed class GeographyRepository
             }
         }
 
-        // A live area may not be attached under a retired one (finding 5-M8).
-        await RequireActiveAreaAsync(c, work.Transaction, area.ParentAreaId, "parentAreaId", ct)
-            .ConfigureAwait(false);
+        // A live area may not be attached under a retired one (finding 5-M8) -- but only when the
+        // parent is actually being set or moved.
+        if (parentIsChanging)
+        {
+            await RequireActiveAreaAsync(c, work.Transaction, area.ParentAreaId, "parentAreaId", ct)
+                .ConfigureAwait(false);
+        }
 
         return await c.ExecuteScalarAsync<Guid>(new CommandDefinition("""
             INSERT INTO federation.geographic_areas
-                (id, parent_area_id, code, name, area_type, status)
+                (id, parent_area_id, code, name, area_type, description, status)
             VALUES (COALESCE(NULLIF(@Id,'00000000-0000-0000-0000-000000000000'::uuid), gen_random_uuid()),
-                    @ParentAreaId, @Code, @Name, @AreaType, @Status)
+                    @ParentAreaId, @Code, @Name, @AreaType, @Description, @Status)
             ON CONFLICT (id) DO UPDATE
             SET parent_area_id = EXCLUDED.parent_area_id, code = EXCLUDED.code,
                 name = EXCLUDED.name, area_type = EXCLUDED.area_type,
+                description = EXCLUDED.description,
                 status = EXCLUDED.status, updated_at = now()
             RETURNING id;
             """, area, work.Transaction, cancellationToken: ct));
     }
 
     /// <summary>
-    /// Deactivates an area, resolving active children and sites by the chosen strategy.
+    /// Deactivates an area, resolving active child areas by the chosen strategy.
     /// </summary>
     /// <returns>Null on success; what would be affected when the strategy is Refuse.</returns>
     public async Task<DeactivationConflict?> DeactivateAreaAsync(
@@ -145,8 +166,8 @@ public sealed class GeographyRepository
 
         var c = work.Connection;
 
-        // Cascade deactivation takes every descendant area and site with it, so both the area
-        // and any reparent destination must be inside the caller's own geographic scope.
+        // Cascade deactivation takes every descendant area with it, so both the area and any
+        // reparent destination must be inside the caller's own geographic scope.
         if (!Geo(caller, "geography.manage"))
         {
             await RequireAreaAsync(c, work.Transaction, caller, areaId, ct).ConfigureAwait(false);
@@ -175,17 +196,12 @@ public sealed class GeographyRepository
             WHERE parent_area_id = @areaId AND status = 'ACTIVE';
             """, new { areaId }, work.Transaction, cancellationToken: ct))).ToList();
 
-        var sites = (await c.QueryAsync<string>(new CommandDefinition("""
-            SELECT name FROM federation.sites
-            WHERE geographic_area_id = @areaId AND status = 'ACTIVE';
-            """, new { areaId }, work.Transaction, cancellationToken: ct))).ToList();
-
-        if ((areas.Count > 0 || sites.Count > 0) && strategy == ChildStrategy.Refuse)
+        if (areas.Count > 0 && strategy == ChildStrategy.Refuse)
         {
-            return new DeactivationConflict(areas, sites);
+            return new DeactivationConflict(areas);
         }
 
-        if (strategy == ChildStrategy.Reparent && (areas.Count > 0 || sites.Count > 0))
+        if (strategy == ChildStrategy.Reparent && areas.Count > 0)
         {
             if (newParentId is null)
             {
@@ -214,17 +230,12 @@ public sealed class GeographyRepository
             await c.ExecuteAsync(new CommandDefinition("""
                 UPDATE federation.geographic_areas SET parent_area_id = @newParentId, updated_at = now()
                 WHERE parent_area_id = @areaId;
-                UPDATE federation.sites SET geographic_area_id = @newParentId, updated_at = now()
-                WHERE geographic_area_id = @areaId;
                 """, new { areaId, newParentId }, work.Transaction, cancellationToken: ct));
         }
 
         if (strategy == ChildStrategy.Cascade)
         {
             await c.ExecuteAsync(new CommandDefinition("""
-                UPDATE federation.sites SET status = 'INACTIVE', updated_at = now()
-                WHERE geographic_area_id IN (SELECT id FROM federation.geographic_area_descendants(@areaId));
-
                 UPDATE federation.geographic_areas SET status = 'INACTIVE', updated_at = now()
                 WHERE id IN (SELECT id FROM federation.geographic_area_descendants(@areaId));
                 """, new { areaId }, work.Transaction, cancellationToken: ct));
@@ -239,64 +250,6 @@ public sealed class GeographyRepository
         return null;
     }
 
-    // ---- Sites -------------------------------------------------------------
-
-    public async Task<IReadOnlyList<Site>> ListSitesAsync(
-        Guid? areaId, CallerContext caller, CancellationToken ct)
-    {
-        ArgumentNullException.ThrowIfNull(caller);
-        caller.Require("geography.read");
-
-        await using var c = await _dataSource.OpenConnectionAsync(ct);
-        var rows = await c.QueryAsync<Site>(new CommandDefinition("""
-            SELECT id, code, name, geographic_area_id, site_type, address,
-                   latitude, longitude, status
-            FROM federation.sites
-            WHERE (@areaId::uuid IS NULL OR geographic_area_id = @areaId)
-              AND (@Unscoped OR geographic_area_id IN (
-                       SELECT geographic_area_id
-                       FROM federation.authorized_geographic_areas(
-                           @UserId, @ApiKeyId, 'geography.read')))
-            ORDER BY name;
-            """, new
-        {
-            areaId, caller.UserId, caller.ApiKeyId, Unscoped = Geo(caller, "geography.read"),
-        }, cancellationToken: ct));
-        return rows.ToList();
-    }
-
-    public async Task<Guid> UpsertSiteAsync(Site site, CallerContext caller, UnitOfWork work, CancellationToken ct)
-    {
-        ArgumentNullException.ThrowIfNull(site);
-        ArgumentNullException.ThrowIfNull(caller);
-        caller.Require("geography.manage");
-
-        var c = work.Connection;
-
-        if (!Geo(caller, "geography.manage"))
-        {
-            await RequireAreaAsync(c, work.Transaction, caller, site.GeographicAreaId, ct).ConfigureAwait(false);
-        }
-
-        // A site may not be pinned to a retired area (finding 5-M8).
-        await RequireActiveAreaAsync(c, work.Transaction, site.GeographicAreaId, "geographicAreaId", ct)
-            .ConfigureAwait(false);
-
-        return await c.ExecuteScalarAsync<Guid>(new CommandDefinition("""
-            INSERT INTO federation.sites
-                (id, code, name, geographic_area_id, site_type, address, latitude, longitude, status)
-            VALUES (COALESCE(NULLIF(@Id,'00000000-0000-0000-0000-000000000000'::uuid), gen_random_uuid()),
-                    @Code, @Name, @GeographicAreaId, @SiteType, @Address, @Latitude, @Longitude, @Status)
-            ON CONFLICT (id) DO UPDATE
-            SET code = EXCLUDED.code, name = EXCLUDED.name,
-                geographic_area_id = EXCLUDED.geographic_area_id,
-                site_type = EXCLUDED.site_type, address = EXCLUDED.address,
-                latitude = EXCLUDED.latitude, longitude = EXCLUDED.longitude,
-                status = EXCLUDED.status, updated_at = now()
-            RETURNING id;
-            """, site, work.Transaction, cancellationToken: ct));
-    }
-
     /// <summary>Operator-defined level names, used to render and validate the hierarchy.</summary>
     public async Task<IReadOnlyList<(string Code, string Name, int LevelOrder)>> ListAreaTypesAsync(
         CancellationToken ct)
@@ -308,6 +261,7 @@ public sealed class GeographyRepository
             """, cancellationToken: ct));
         return rows.ToList();
     }
+
     /// <summary>Whether the caller is unrestricted by GEOGRAPHY for a permission.</summary>
     /// <remarks>
     /// Not <c>CallerContext.IsUnscopedFor</c>, which answers the ORGANIZATION question. The two
@@ -368,5 +322,4 @@ public sealed class GeographyRepository
             throw new InvalidReferenceException(field, "does not exist or is not ACTIVE");
         }
     }
-
 }

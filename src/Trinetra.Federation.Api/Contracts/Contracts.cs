@@ -44,16 +44,12 @@ public sealed record OrganizationRequest(
 
 public sealed record OrganizationUnitRequest(
     Guid OrganizationId, string Code, string Name, string UnitType,
-    Guid? ParentUnitId = null, string? Status = null);
+    Guid? ParentUnitId = null, string? Description = null,
+    Guid? GeographicAreaId = null, string? Status = null);
 
 public sealed record GeographicAreaRequest(
     string Code, string Name, string AreaType,
-    Guid? ParentAreaId = null, string? Status = null);
-
-public sealed record SiteRequest(
-    string Code, string Name, Guid GeographicAreaId,
-    string? SiteType = null, string? Address = null,
-    double? Latitude = null, double? Longitude = null, string? Status = null);
+    Guid? ParentAreaId = null, string? Description = null, string? Status = null);
 
 /// <summary>Deactivation with an explicit resolution for active children.</summary>
 /// <remarks>
@@ -70,7 +66,7 @@ public sealed record ConnectorTargetRequest(
     string Vendor,
     string Endpoint,
     string CredentialReference,
-    Guid? SiteId = null,
+    Guid? GeographicAreaId = null,
     bool VerifyTls = true,
     string? RuntimeClass = null,
     double? RateLimitPerSecond = null,
@@ -146,6 +142,23 @@ public sealed record AssignGroupRequest(Guid GroupId, DateTimeOffset? ExpiresAt 
 
 public sealed record CreateGroupRequest(
     string Code, string Name, Guid RoleId,
+    string? Description = null, string? Status = null);
+
+/// <summary>
+/// Edits an access group's code, name, description and role. <c>status</c> is not touched here —
+/// use the activate / disable routes. Switching the role re-runs the escalation guard.
+/// </summary>
+public sealed record UpdateGroupRequest(
+    string Code, string Name, Guid RoleId, string? Description = null);
+
+/// <summary>
+/// Creates or replaces a role — a named set of permission codes. On <c>PUT</c> the
+/// <c>permissions</c> list fully replaces the role's current set. <c>code</c> is ignored on
+/// <c>PUT</c> (a role's code never changes). <c>status</c> is <c>ACTIVE</c> or <c>INACTIVE</c>;
+/// an <c>INACTIVE</c> role grants nothing to any group that uses it.
+/// </summary>
+public sealed record RoleWriteRequest(
+    string Code, string Name, IReadOnlyList<string> Permissions,
     string? Description = null, string? Status = null);
 
 /// <summary>

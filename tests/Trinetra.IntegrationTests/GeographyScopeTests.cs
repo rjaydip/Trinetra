@@ -15,8 +15,8 @@ namespace Trinetra.IntegrationTests;
 /// One caller (<c>TestUser</c>) is scoped to <c>PoliceUnit</c> organizationally and
 /// <c>PostgresFixture.DistrictId</c> geographically, via a bespoke role carrying exactly the
 /// permissions these repositories check. Two targets exist: one in-district
-/// (<c>TargetIn</c>, at <c>PostgresFixture.SiteId</c>), one in a different district
-/// (<c>TargetOut</c>, at <c>OtherSiteId</c>), and one with no site at all (<c>TargetNoSite</c>) —
+/// (<c>TargetIn</c>, at <c>PostgresFixture.VillageId</c>), one in a different district
+/// (<c>TargetOut</c>, at <c>OtherDistrict</c>), and one with no area at all (<c>TargetNoSite</c>) —
 /// the case CameraRepository's placement rule says a geo dimension cannot constrain.
 /// </remarks>
 public sealed class GeographyScopeTests : IClassFixture<PostgresFixture>, IAsyncLifetime
@@ -28,7 +28,6 @@ public sealed class GeographyScopeTests : IClassFixture<PostgresFixture>, IAsync
     private static readonly Guid OrgScope      = Guid.Parse("e3333333-3333-3333-3333-333333333333");
     private static readonly Guid GeoScope      = Guid.Parse("e4444444-4444-4444-4444-444444444444");
     private static readonly Guid OtherDistrict = Guid.Parse("b3333333-3333-3333-3333-333333333333");
-    private static readonly Guid OtherSiteId   = Guid.Parse("c3333333-3333-3333-3333-333333333333");
 
     private static readonly Guid TargetIn     = Guid.Parse("00000000-0000-0000-0000-0000000000a1");
     private static readonly Guid TargetOut    = Guid.Parse("00000000-0000-0000-0000-0000000000a2");
@@ -54,12 +53,9 @@ public sealed class GeographyScopeTests : IClassFixture<PostgresFixture>, IAsync
             DELETE FROM federation.scopes WHERE id IN ('{OrgScope}', '{GeoScope}');
             DELETE FROM federation.platform_users WHERE id = '{TestUser}';
 
-            -- A district the test caller is NOT scoped to, with a site inside it.
+            -- A district the test caller is NOT scoped to.
             INSERT INTO federation.geographic_areas (id, code, name, area_type)
             VALUES ('{OtherDistrict}', 'OTH', 'Other District', 'DISTRICT')
-            ON CONFLICT (id) DO NOTHING;
-            INSERT INTO federation.sites (id, code, name, geographic_area_id)
-            VALUES ('{OtherSiteId}', 'SITE-OTHER', 'Other Site', '{OtherDistrict}')
             ON CONFLICT (id) DO NOTHING;
 
             -- A bespoke role carrying exactly the permissions these repositories exercise, so
@@ -93,15 +89,15 @@ public sealed class GeographyScopeTests : IClassFixture<PostgresFixture>, IAsync
             INSERT INTO federation.user_groups (user_id, group_id)
             VALUES ('{TestUser}', '{TestGroup}');
 
-            -- Three targets: in-district, out-of-district, and site-less.
+            -- Three targets: in-district, out-of-district, and area-less.
             INSERT INTO federation.connector_target
-                (id, code, organization_unit_id, site_id, display_name, vendor, endpoint,
+                (id, code, organization_unit_id, geographic_area_id, display_name, vendor, endpoint,
                  credential_reference)
             VALUES
-                ('{TargetIn}', 'TGT-IN', '{PostgresFixture.PoliceUnit}', '{PostgresFixture.SiteId}',
+                ('{TargetIn}', 'TGT-IN', '{PostgresFixture.PoliceUnit}', '{PostgresFixture.VillageId}',
                  'In-district target', 'Onvif'::federation.vendor_kind, 'http://10.0.0.1',
                  'vault://in'),
-                ('{TargetOut}', 'TGT-OUT', '{PostgresFixture.PoliceUnit}', '{OtherSiteId}',
+                ('{TargetOut}', 'TGT-OUT', '{PostgresFixture.PoliceUnit}', '{OtherDistrict}',
                  'Out-of-district target', 'Onvif'::federation.vendor_kind, 'http://10.0.0.2',
                  'vault://out'),
                 ('{TargetNoSite}', 'TGT-NOSITE', '{PostgresFixture.PoliceUnit}', NULL,
@@ -110,10 +106,10 @@ public sealed class GeographyScopeTests : IClassFixture<PostgresFixture>, IAsync
 
             -- One discovered camera per target, for DetectionRepository.ResolveCameraAsync.
             INSERT INTO federation.federated_camera
-                (target_id, native_camera_id, organization_unit_id, site_id)
+                (target_id, native_camera_id, organization_unit_id, geographic_area_id)
             VALUES
-                ('{TargetIn}', 'ch1', '{PostgresFixture.PoliceUnit}', '{PostgresFixture.SiteId}'),
-                ('{TargetOut}', 'ch1', '{PostgresFixture.PoliceUnit}', '{OtherSiteId}');
+                ('{TargetIn}', 'ch1', '{PostgresFixture.PoliceUnit}', '{PostgresFixture.VillageId}'),
+                ('{TargetOut}', 'ch1', '{PostgresFixture.PoliceUnit}', '{OtherDistrict}');
 
             SELECT federation.ensure_event_partitions(CURRENT_DATE, 2);
             """);
@@ -205,7 +201,7 @@ public sealed class GeographyScopeTests : IClassFixture<PostgresFixture>, IAsync
             Id = Guid.Empty,
             Code = "TGT-NEW-OUT",
             OrganizationUnitId = PostgresFixture.PoliceUnit,
-            SiteId = OtherSiteId,
+            GeographicAreaId = OtherDistrict,
             DisplayName = "Attempted escalation",
             Vendor = VendorKind.Onvif,
             Endpoint = "http://10.0.0.9",
@@ -227,7 +223,7 @@ public sealed class GeographyScopeTests : IClassFixture<PostgresFixture>, IAsync
             Id = Guid.Empty,
             Code = "TGT-NEW-IN",
             OrganizationUnitId = PostgresFixture.PoliceUnit,
-            SiteId = PostgresFixture.SiteId,
+            GeographicAreaId = PostgresFixture.VillageId,
             DisplayName = "Legitimate registration",
             Vendor = VendorKind.Onvif,
             Endpoint = "http://10.0.0.10",
@@ -272,7 +268,7 @@ public sealed class GeographyScopeTests : IClassFixture<PostgresFixture>, IAsync
 
         await Should.ThrowAsync<ForbiddenException>(() => detections.IngestAsync(
             evt, resolved!.Value.TargetId, resolved.Value.NativeCameraId, resolved.Value.CameraId,
-            resolved.Value.OrganizationUnitId, resolved.Value.SiteId, plateNumberNormalized: null,
+            resolved.Value.OrganizationUnitId, resolved.Value.GeographicAreaId, plateNumberNormalized: null,
             ScopedCaller(), work, CancellationToken.None));
     }
 
@@ -296,7 +292,7 @@ public sealed class GeographyScopeTests : IClassFixture<PostgresFixture>, IAsync
 
         var inserted = await detections.IngestAsync(
             evt, resolved!.Value.TargetId, resolved.Value.NativeCameraId, resolved.Value.CameraId,
-            resolved.Value.OrganizationUnitId, resolved.Value.SiteId, plateNumberNormalized: null,
+            resolved.Value.OrganizationUnitId, resolved.Value.GeographicAreaId, plateNumberNormalized: null,
             ScopedCaller(), work, CancellationToken.None);
         inserted.ShouldBeTrue();
         await work.CommitAsync(CancellationToken.None);
@@ -317,9 +313,9 @@ public sealed class GeographyScopeTests : IClassFixture<PostgresFixture>, IAsync
         await _fixture.ExecuteAsync($"""
             INSERT INTO federation.detection_event
                 (event_id, occurred_at, target_id, native_camera_id, camera_id,
-                 organization_unit_id, site_id, event_type, confidence)
+                 organization_unit_id, geographic_area_id, event_type, confidence)
             VALUES ('evt-out-of-scope', now(), '{TargetOut}', 'ch1', NULL,
-                    '{PostgresFixture.PoliceUnit}', '{OtherSiteId}', 'AnprDetection', 0.9)
+                    '{PostgresFixture.PoliceUnit}', '{OtherDistrict}', 'AnprDetection', 0.9)
             ON CONFLICT (event_id, occurred_at) DO NOTHING;
             """);
 
@@ -339,13 +335,13 @@ public sealed class GeographyScopeTests : IClassFixture<PostgresFixture>, IAsync
     {
         await _fixture.ExecuteAsync($"""
             INSERT INTO federation.federation_event
-                (event_id, source_vms_id, camera_id, organization_unit_id, site_id,
+                (event_id, source_vms_id, camera_id, organization_unit_id, geographic_area_id,
                  event_type, occurred_at)
             VALUES
                 ('evt-geo-in', '{TargetIn}', 'ch1', '{PostgresFixture.PoliceUnit}',
-                 '{PostgresFixture.SiteId}', 'AnprDetection', now()),
+                 '{PostgresFixture.VillageId}', 'AnprDetection', now()),
                 ('evt-geo-out', '{TargetOut}', 'ch1', '{PostgresFixture.PoliceUnit}',
-                 '{OtherSiteId}', 'AnprDetection', now())
+                 '{OtherDistrict}', 'AnprDetection', now())
             ON CONFLICT (source_vms_id, source_event_id, occurred_at) DO NOTHING;
             """);
 

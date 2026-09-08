@@ -524,12 +524,20 @@ Desktop).
 - **5-M2** `area_type` unvalidated free text. No FK to `geographic_area_types`, no check in
   endpoint or `UpsertAreaAsync`, no `level_order` check vs parent — contradicts route description
   (":141-142") and DDL comment ("reject a district inside a village"). Validate in Storage.
-- **5-M3** Codes globally unique estate-wide (`organizations/units/areas/sites.code` bare UNIQUE).
-  Two districts naming a ward `WARD-1` collide; 409 message doesn't reveal another dept took it.
-  Schema decision — consider `UNIQUE (parent_id, code)`; at minimum improve the 409 detail.
-- **5-M4** (was F5c) CONFIRMED + worse: `CreateUnit`/`CreateSite` return `Created(Location=...)`
-  for paths with NO GET → Location header 404s. No PUT/PATCH anywhere. `ListUnitsAsync` (:304)
-  never checks parent org visible/exists → bogus/out-of-scope id returns `200 []` not `404`.
+- **5-M3** Codes globally unique estate-wide (`organizations/units/areas.code` bare UNIQUE).
+  Two districts naming a ward `WARD-1` collide. ✅ PARTIAL (v1.11 PR): `geographic_areas.code`
+  is now `UNIQUE NULLS NOT DISTINCT (parent_area_id, code)` (roots still unique among
+  themselves); Admin `Lookup` rejects an ambiguous bare-code match. `organizations` /
+  `organization_units` still globally unique — separate finding if it matters.
+- **5-M4** (was F5c) — ⚠️ PARTIALLY FIXED (2026-09-07, owner asked for hierarchy edit
+  endpoints). Added: `GET /api/v1/organization-units/{id}`, `PUT /api/v1/organizations/{id}`,
+  `PUT /api/v1/organization-units/{id}` — field edits (code/name/type/status/description), the
+  `update` path audits `before:`/`after:` the stored projection (not the request DTO), a unit
+  cannot change organization, and a PUT that changes `parentUnitId` is 400'd (re-parent has its
+  own locked `/deactivate` flow). New `OrganizationRepository.GetUnitAsync`. **Still open:**
+  `GET`/`PUT` for **geographic areas** (GET/{id} exists, no PUT) and **sites** (no GET/{id}, no
+  PUT), and `ListUnitsAsync` still returns `200 []` for a bogus/out-of-scope parent org rather
+  than 404. Access-group edit folds into F7. See the CREATE→UPDATE audit note below.
 - **5-M5** (was F5b) PARTLY REFUTED: create endpoints can't currently mis-record an update — DTOs
   carry no Id, always INSERT, duplicate code → 409. Real issues: (a) latent — the moment a PUT is
   added calling the same `Upsert*`, it audits `action:"create"` `before:null`; split
@@ -583,6 +591,30 @@ purely on geo dimension via separate `GeographyRepository.Geo(...)`; not cross-c
 escalation-by-parent-attach: `UpsertUnit/Area` check node AND parent for scoped callers, reject
 scoped caller creating a root. Invariant 10 structurally OK for happy paths (weaknesses are 5-H1
 checks-outside-txn and 5-M6 audit granularity, not a missing audit).
+
+### CREATE → UPDATE endpoint audit (2026-09-07, owner asked)
+
+Every `POST` that creates a persistent entity, and whether it has a `PUT`/`PATCH` to edit by id:
+
+| Entity | Create | Update | State |
+|---|---|---|---|
+| Camera | `POST /cameras` | `PUT /{id}` + `PATCH /{id}` | ✅ |
+| VMS target | `POST /vms` | `PUT /{id}` + `POST /{id}/state` | ✅ |
+| User | `POST /users` | `PUT /{id}` (username immutable — 6-L3) | ✅ |
+| Maintenance record | `POST /cameras/{id}/maintenance` | `PATCH /.../maintenance/{recordId}` | ✅ |
+| Credential | — | `PUT /` is the idempotent write | ✅ |
+| **Organization** | `POST /organizations` | `PUT /{id}` | ✅ (added 2026-09-07) |
+| **Organization unit** | `POST /organizations/{id}/units` | `GET`+`PUT /organization-units/{id}` | ✅ (added 2026-09-07) |
+| **Geographic area** | `POST /geographic-areas` | — (`GET /{id}` exists) | ❌ open — 5-M4 |
+| **Site** | `POST /sites` | — (no `GET /{id}`, no `PUT`) | ❌ open — 5-M4 |
+| **Access group** | `POST /access-groups` | — (no `PUT`, no activate) | ❌ open — 6-H2 / F7 |
+| **Watchlist entry** | `POST /watchlist` | — (no `GET /{id}`, no `PUT`) | ❌ open — new (F16-adjacent) |
+| Detection / federation event | ingest | n/a — immutable observation | ✅ n/a |
+| Connection test | `POST` | n/a — async job | ✅ n/a |
+| API key | `POST /api-keys` | revoke + reissue; rotation endpoint = 8-M2 | intended |
+
+Next: `GET`/`PUT` for geographic area + site (extend the 5-M4 PR), watchlist-entry edit (its own
+item), access-group edit via F7.
 
 ## Finding 6 — Users & Access control (UserEndpoints.cs, AccessGroupEndpoints.cs)
 
@@ -692,6 +724,16 @@ role-fixed at group creation so the assignment-time subset check stays valid; sc
 
 ## Finding 7 — DESIGN DIRECTION: custom roles + maker-checker approval (2026-09-04)
 
+> **STATUS (2026-09-08): SPLIT.** The **composed-roles CRUD** half is ✅ implemented in the
+> v1.11 PR — new `role.manage` permission (delegable, owner reversed the SUPER_ADMIN-only call),
+> `POST/PUT/DELETE /api/v1/roles`, presets editable in place (`SUPER_ADMIN` locked; presets
+> not deletable; `roles.customized_at` guards against migration re-seed reverting edits), the
+> same escalation guard as access-group creation. Access groups gained `PUT /{id}` +
+> `/activate` + `/disable` (6-H2, 6-L4 closed). The **maker-checker approval workflow** half
+> (`approval_request`, `role.approve`/`group.approve`, PENDING_APPROVAL state, org-unit-admin
+> approvers) stays **DEFERRED** — owner wants the approver model designed separately.
+
+
 A different RBAC shape than what's built:
 
 1. **User-composed roles** — a user picks multiple permissions to form a role, rather than only
@@ -724,6 +766,78 @@ A different RBAC shape than what's built:
 
 View: worth doing; the risk is scattering approval logic — build the request/approval model once
 and route all three grant types through it.
+
+### Owner's expanded model (2026-09-07) — hierarchy + RBAC, needs a design pass
+
+Verbatim intent: *access group = role (composed of permissions) + organization unit + geographic
+area; nothing is static except the permission catalogue (`vms.read`, `vms.manage`,
+`geography.read`, …). Organization units can also be tied to a geographic area. Geographic-area
+LEVELS are operator-defined and each level carries name + description; the last level is a site
+by default, or sites can be removed entirely.*
+
+Buildable now (done — see 5-M4): plain `PUT`/`GET` for organization + organization unit.
+
+Needs decisions before building — each is a schema change:
+- **Org-unit ↔ geographic-area link.** A nullable `organization_units.geographic_area_id`? What
+  it MEANS (the unit "operates in" that area — a data attribute) vs what it must NOT do (collapse
+  invariant 12 — org and geography stay independent scope dimensions, ANDed). Does a group scoped
+  to that unit implicitly inherit the linked area, or stay explicit?
+- **`description` on `organization_units` and `geographic_areas`.** Both only have `name` +
+  `metadata` JSONB today. The owner wants first-class `name` + `description` per level.
+- **Sites optional / removable.** Large: cameras reach geography via a site
+  (`connector_target.site_id`, `federated_camera.site_id`, CAMERA-SCHEMA). Making the deepest
+  area level the leaf and dropping sites means cameras attach directly to an area — a Model 1
+  registry migration. Decide: keep sites mandatory, make them optional (nullable, area as
+  fallback), or remove.
+- **User-composed roles** — this IS finding 7 above. Permission catalogue stays seeded; `roles`
+  become user-built compositions gated by the subset check; `approval_request` for role + group.
+
+Recommendation: one design doc covering the hierarchy changes + F7 together (they share the
+"nothing is static" premise), reviewed with the owner, before any of it is built.
+
+### DESIGN REVIEW DONE + OWNER DECISIONS (2026-09-08, BA + dotnet-expert)
+
+Both agents converged. Owner decisions:
+
+- **D1 Group scope cardinality** — KEEP many-scopes-per-group in the schema (`group_scopes` unchanged).
+  The "role + one org + one geo" shape is the default CREATE FORM, not a constraint. A police
+  estate needs multi-scope groups (cross-district investigation cells, task forces spanning
+  departments). Add a denormalised "primary org unit / primary geo area" per group for display +
+  SSO claim-mapping.
+- **D2 Org-unit ↔ geographic-area link** — nullable `organization_units.geographic_area_id`,
+  ONE area, **DESCRIPTIVE ONLY**. Never read by `has_permission` / `authorized_*` / any scope
+  predicate (would collapse invariant 12 — a unit HQ'd in one area legitimately owns a camera in
+  the next). Used only as a group-create suggestion + a map pin. Review guard: nothing joins it
+  in a scope predicate.
+- **D3 Sites** — **REMOVED ENTIRELY (hard cut, 2026-09-08).** Owner: "remove site id, geographics
+  purely work on dynamic, not want to give static value" — the geo hierarchy is fully
+  operator-defined levels, no fixed bottom tier. `DROP TABLE sites`; `site_id` → `geographic_area_id`
+  on `cameras` (NOT NULL, backfilled from `sites`), `connector_target` / `federated_camera` /
+  `federation_event` / `detection_event` (nullable, backfilled). Site fields (address, lat/long,
+  site_type) **dropped** — cameras carry their own coordinates; areas stay pure administrative
+  containers. A camera attaches to a geographic area at **ANY level** (owner: "any area and any
+  level with organization unit, so it can find easily") — no leaf-only rule. No `resolved_area()`
+  helper, no XOR CHECK — a camera just has `geographic_area_id` directly like it has
+  `organization_unit_id`. The geo-scope predicate in ~8 repos simplifies from a `sites` sub-select
+  to `X.geographic_area_id`. `GET/POST /api/v1/sites` routes + `GeographyRepository` site methods +
+  `Site` model + `Site*` DTOs deleted. `PostgresFixture.ResetTargetsAsync` site seed removed.
+- **D4 `description` per level** — plain `TEXT NULL` on `organization_units`, `geographic_areas`,
+  `geographic_area_types`. Per-level custom-field definitions deferred (use `metadata` JSONB).
+- **D5 `area_type`** — promote from free text to a REQUIRED FK into `geographic_area_types`;
+  add level-order containment to `assert_geographic_area_acyclic()` (child level_order > parent).
+  Backfill the registry from distinct existing `area_type` values.
+- **D6 Composed roles + approval (F7)** — **DEFERRED**. Owner wants to work through the approver
+  model separately (org-unit-admin-as-approver and other cases). `role.compose` / `role.approve`
+  / `group.approve` would be SUPER_ADMIN-only initially when it does land.
+- **Build order** — ONE migration / PR for the whole hierarchy change (D1 UI part, D2, D3, D4,
+  D5 + finish 5-M4 `GET`/`PUT` for geographic areas). PR7.5 (org + unit `PUT`/`GET`, already
+  built, uncommitted) folds into it.
+
+Resolver hot path: unchanged and slightly *simpler* — the geo predicate drops the `sites`
+sub-select for a direct `geographic_area_id` column. No security-function signature changes →
+invariant 13 not triggered. Migration: `v1.11.sql`; additive except the `sites` teardown; seeded
+roles / existing groups / existing scopes untouched. API not deployed → the destructive `DROP
+TABLE sites` + `DROP COLUMN site_id` is acceptable.
 
 ## Finding 8 — API keys (ApiKeyEndpoints.cs + ApiKeyRepository.cs)
 

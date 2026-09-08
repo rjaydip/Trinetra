@@ -120,7 +120,7 @@ current `src/` tree — today `TargetWorker` writes normalised events directly t
      provision, list and revoke the `X-Api-Key` credentials service integrations
      authenticate with; a key acts through one access group exactly as a user does
      (`ApiKeyEndpoints`, gated by `apikey.read` / `apikey.manage`).
-   - Org/unit/area/site hierarchy, access groups, roles/permissions, users, auth — the
+   - Org/unit/area hierarchy, access groups, roles/permissions, users, auth — the
      RBAC and org-scoping surface everything above is gated by.
 
 ---

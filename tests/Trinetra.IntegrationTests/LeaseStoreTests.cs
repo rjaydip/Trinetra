@@ -31,13 +31,13 @@ public sealed class LeaseStoreTests : IClassFixture<PostgresFixture>, IAsyncLife
         // without querying for it first.
         await _fixture.ExecuteAsync($"""
             INSERT INTO federation.connector_target
-                (id, code, organization_unit_id, site_id, display_name, vendor, runtime_class,
+                (id, code, organization_unit_id, geographic_area_id, display_name, vendor, runtime_class,
                  endpoint, credential_reference, rate_limit_per_second, rate_limit_burst,
                  max_concurrent_requests, expected_camera_count)
             SELECT ('00000000-0000-0000-0000-' || lpad(i::text, 12, '0'))::uuid,
                    'TGT-' || i,
                    '{PostgresFixture.PoliceUnit}'::uuid,
-                   '{PostgresFixture.SiteId}'::uuid,
+                   '{PostgresFixture.VillageId}'::uuid,
                    'Site ' || i,
                    '{vendor}'::federation.vendor_kind,
                    '{runtimeClass}'::federation.runtime_class,

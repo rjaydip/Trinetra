@@ -70,7 +70,7 @@ public static class VmsEndpoints
               + "The target is created in its default state and is not polled until `POST "
               + "/vms/{id}/state` activates it. An unparseable endpoint or unknown vendor is "
               + "rejected here rather than becoming an unexplained dead site later. So is a "
-              + "deactivated `organizationUnitId` or `siteId` — an active-looking target attached "
+              + "deactivated `organizationUnitId` or `geographicAreaId` — an active-looking target attached "
               + "to a retired unit would otherwise never appear in anyone's scope.");
 
         group.MapPut("/{id:guid}", ReplaceAsync)
@@ -82,7 +82,7 @@ public static class VmsEndpoints
               + "Does not change the target's state, and does not write a credential — those are "
               + "`POST /vms/{id}/state` and `PUT /vms/{id}/credential`. Changing `endpoint` or "
               + "`vendor` takes effect at the worker's next poll cycle.\n\n"
-              + "`organizationUnitId` and `siteId` must reference an **active** unit and site — a "
+              + "`organizationUnitId` and `geographicAreaId` must reference an **active** unit and area — a "
               + "deactivated one is a 400, not a silent drop out of scope resolution.\n\n"
               + "Omitting `verifyTls` sets it to `true`, the safe default — **not** the target's "
               + "previous value, because this endpoint replaces rather than patches. Sending "
@@ -248,7 +248,7 @@ public static class VmsEndpoints
             Id = id,
             Code = request.Code,
             OrganizationUnitId = request.OrganizationUnitId,
-            SiteId = request.SiteId,
+            GeographicAreaId = request.GeographicAreaId,
             DisplayName = request.DisplayName,
             Vendor = vendor,
             RuntimeClass = runtimeClass,
@@ -279,20 +279,20 @@ public static class VmsEndpoints
     /// how internal state and lease bookkeeping leak into a public contract.
     /// </remarks>
     private static VmsResponse ToResponse(ConnectorTarget t) => new(
-        t.Id, t.Code, t.OrganizationUnitId, t.SiteId, t.DisplayName,
+        t.Id, t.Code, t.OrganizationUnitId, t.GeographicAreaId, t.DisplayName,
         t.Vendor.ToString(), t.RuntimeClass.ToString(), t.Endpoint, t.CredentialReference,
         t.VerifyTls, t.State.ToString(), t.ExpectedCameraCount);
 
     /// <summary>Audit projection. Records the credential <i>reference</i>, never its value.</summary>
     private static object Redact(ConnectorTargetRequest r) => new
     {
-        r.Code, r.OrganizationUnitId, r.SiteId, r.DisplayName, r.Vendor,
+        r.Code, r.OrganizationUnitId, r.GeographicAreaId, r.DisplayName, r.Vendor,
         r.Endpoint, r.CredentialReference, r.VerifyTls, r.ExpectedCameraCount,
     };
 
     private static object Redact(ConnectorTarget t) => new
     {
-        t.Code, t.OrganizationUnitId, t.SiteId, t.DisplayName,
+        t.Code, t.OrganizationUnitId, t.GeographicAreaId, t.DisplayName,
         Vendor = t.Vendor.ToString(), t.Endpoint, t.CredentialReference,
         t.VerifyTls, t.ExpectedCameraCount,
         // Included so the delete audit row (RemoveAsync) records the state the target was in

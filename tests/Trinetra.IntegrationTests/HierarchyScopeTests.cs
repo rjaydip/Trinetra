@@ -185,6 +185,16 @@ public sealed class HierarchyScopeTests : IClassFixture<PostgresFixture>, IAsync
         Permissions = new HashSet<string>(StringComparer.Ordinal) { "organization.read" },
     };
 
+    private static CallerContext UnscopedCaller() => new()
+    {
+        Actor = "hier-system",
+        Permissions = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "organization.read", "organization.manage", "geography.read", "geography.manage",
+        },
+        IsSystem = true,
+    };
+
     private OrganizationRepository Orgs => new(_fixture.DataSource);
     private GeographyRepository Geo => new(_fixture.DataSource);
 
@@ -259,16 +269,17 @@ public sealed class HierarchyScopeTests : IClassFixture<PostgresFixture>, IAsync
     }
 
     [Fact]
-    public async Task Geo_UpsertSite_InReachableArea_DoesNotThrow()
+    public async Task Geo_UpsertChildArea_InReachableArea_DoesNotThrow()
     {
-        // UpsertSiteAsync → RequireAreaAsync is the third path with the un-enrolled-command bug.
+        // UpsertAreaAsync → RequireAreaAsync is the third path with the un-enrolled-command bug.
         await using var work = await UnitOfWork.BeginAsync(_fixture.DataSource, CancellationToken.None);
 
-        var id = await Geo.UpsertSiteAsync(new Site
+        var id = await Geo.UpsertAreaAsync(new GeographicArea
         {
+            ParentAreaId = PostgresFixture.VillageId,
             Code = "S-NEW-IN",
-            Name = "New In-Reach Site",
-            GeographicAreaId = PostgresFixture.VillageId,
+            Name = "New In-Reach Sector",
+            AreaType = "SECTOR",
         }, ScopedCaller(), work, CancellationToken.None);
 
         id.ShouldNotBe(Guid.Empty);
@@ -276,16 +287,50 @@ public sealed class HierarchyScopeTests : IClassFixture<PostgresFixture>, IAsync
     }
 
     [Fact]
-    public async Task Geo_UpsertSite_InUnreachableArea_ThrowsForbidden()
+    public async Task Geo_UpsertChildArea_InUnreachableArea_ThrowsForbidden()
     {
         await using var work = await UnitOfWork.BeginAsync(_fixture.DataSource, CancellationToken.None);
 
-        await Should.ThrowAsync<ForbiddenException>(() => Geo.UpsertSiteAsync(new Site
+        await Should.ThrowAsync<ForbiddenException>(() => Geo.UpsertAreaAsync(new GeographicArea
         {
+            ParentAreaId = OtherArea,
             Code = "S-NEW-OUT",
-            Name = "New Out-Of-Reach Site",
-            GeographicAreaId = OtherArea,
+            Name = "New Out-Of-Reach Sector",
+            AreaType = "SECTOR",
         }, ScopedCaller(), work, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Geo_UpsertArea_CoarserThanParent_IsRejected()
+    {
+        // DistrictId is a DISTRICT (level_order 30); a DISTRICT cannot sit inside it.
+        await using var work = await UnitOfWork.BeginAsync(_fixture.DataSource, CancellationToken.None);
+
+        var ex = await Should.ThrowAsync<Exception>(() => Geo.UpsertAreaAsync(new GeographicArea
+        {
+            ParentAreaId = PostgresFixture.VillageId,   // VILLAGE, level_order 60
+            Code = "A-BACKWARDS",
+            Name = "District under a village",
+            AreaType = "DISTRICT",
+        }, UnscopedCaller(), work, CancellationToken.None));
+
+        ex.Message.ShouldContain("finer level");
+    }
+
+    [Fact]
+    public async Task Geo_UpsertArea_SameLevelAsParent_IsRejected()
+    {
+        await using var work = await UnitOfWork.BeginAsync(_fixture.DataSource, CancellationToken.None);
+
+        var ex = await Should.ThrowAsync<Exception>(() => Geo.UpsertAreaAsync(new GeographicArea
+        {
+            ParentAreaId = PostgresFixture.VillageId,   // VILLAGE
+            Code = "A-SAMELEVEL",
+            Name = "Village under a village",
+            AreaType = "VILLAGE",
+        }, UnscopedCaller(), work, CancellationToken.None));
+
+        ex.Message.ShouldContain("finer level");
     }
 
     [Fact]
@@ -439,15 +484,16 @@ public sealed class HierarchyScopeTests : IClassFixture<PostgresFixture>, IAsync
     }
 
     [Fact]
-    public async Task Geo_UpsertSite_InInactiveArea_ThrowsInvalidReference()
+    public async Task Geo_UpsertChildArea_UnderInactiveArea_ThrowsInvalidReference()
     {
         await using var work = await UnitOfWork.BeginAsync(_fixture.DataSource, CancellationToken.None);
 
-        await Should.ThrowAsync<InvalidReferenceException>(() => Geo.UpsertSiteAsync(new Site
+        await Should.ThrowAsync<InvalidReferenceException>(() => Geo.UpsertAreaAsync(new GeographicArea
         {
+            ParentAreaId = AreaInactive,
             Code = "S-UNDER-DEAD",
-            Name = "Site In A Retired Area",
-            GeographicAreaId = AreaInactive,
+            Name = "Sector In A Retired Area",
+            AreaType = "SECTOR",
         }, ScopedCaller(), work, CancellationToken.None));
     }
 
@@ -501,5 +547,100 @@ public sealed class HierarchyScopeTests : IClassFixture<PostgresFixture>, IAsync
 
         (await Orgs.GetAsync(PostgresFixture.OrgId, ReadOnlyCaller(), CancellationToken.None))
             .ShouldNotBeNull();
+    }
+
+    // ---- update: GET one unit + edit organization / unit by id -----------
+
+    [Fact]
+    public async Task Org_GetUnit_InScope_Returns_OutOfScope_Null()
+    {
+        (await Orgs.GetUnitAsync(PostgresFixture.AhmedabadCp, ScopedCaller(), CancellationToken.None))
+            .ShouldNotBeNull();
+
+        (await Orgs.GetUnitAsync(OtherOrgUnit, ScopedCaller(), CancellationToken.None))
+            .ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task Org_UpsertUnit_WithId_UpdatesInPlace_OrganizationUnchanged()
+    {
+        await using var work = await UnitOfWork.BeginAsync(_fixture.DataSource, CancellationToken.None);
+
+        var returned = await Orgs.UpsertUnitAsync(new OrganizationUnit
+        {
+            Id = UnitLeaf,
+            OrganizationId = PostgresFixture.OrgId,
+            ParentUnitId = PostgresFixture.AhmedabadCp,
+            Code = "U-LEAF",
+            Name = "Unit Leaf Renamed",
+            UnitType = "ZONE",
+        }, ScopedCaller(), work, CancellationToken.None);
+        returned.ShouldBe(UnitLeaf);
+        await work.CommitAsync(CancellationToken.None);
+
+        var after = await Orgs.GetUnitAsync(UnitLeaf, ScopedCaller(), CancellationToken.None);
+        after!.Name.ShouldBe("Unit Leaf Renamed");
+        after.UnitType.ShouldBe("ZONE");
+        after.OrganizationId.ShouldBe(PostgresFixture.OrgId);
+    }
+
+    [Fact]
+    public async Task Org_UpsertUnit_FieldEdit_NotBlockedByInactiveParent()
+    {
+        // UnitInactiveChild is ACTIVE under UnitInactive (INACTIVE). A rename must go through —
+        // parentIsChanging: false suppresses the parent-ACTIVE assertion.
+        await using var work = await UnitOfWork.BeginAsync(_fixture.DataSource, CancellationToken.None);
+
+        await Orgs.UpsertUnitAsync(new OrganizationUnit
+        {
+            Id = UnitInactiveChild,
+            OrganizationId = PostgresFixture.OrgId,
+            ParentUnitId = UnitInactive,
+            Code = "U-INACT-C",
+            Name = "Renamed Under A Dead Parent",
+            UnitType = "STATION",
+        }, ScopedCaller(), work, CancellationToken.None, parentIsChanging: false);
+        await work.CommitAsync(CancellationToken.None);
+
+        (await Orgs.GetUnitAsync(UnitInactiveChild, ScopedCaller(), CancellationToken.None))!
+            .Name.ShouldBe("Renamed Under A Dead Parent");
+    }
+
+    [Fact]
+    public async Task Org_UpsertUnit_AttachUnderInactiveParent_StillRejected()
+    {
+        // The default (parentIsChanging: true) must still refuse attaching a new unit under a
+        // retired parent — 5-M8.
+        await using var work = await UnitOfWork.BeginAsync(_fixture.DataSource, CancellationToken.None);
+
+        await Should.ThrowAsync<InvalidReferenceException>(() => Orgs.UpsertUnitAsync(
+            new OrganizationUnit
+            {
+                OrganizationId = PostgresFixture.OrgId,
+                ParentUnitId = UnitInactive,
+                Code = "U-NEW-UNDER-DEAD",
+                Name = "Should Not Attach",
+                UnitType = "STATION",
+            }, ScopedCaller(), work, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Org_UpsertOrganization_WithId_Updates()
+    {
+        await using var work = await UnitOfWork.BeginAsync(_fixture.DataSource, CancellationToken.None);
+
+        await Orgs.UpsertAsync(new Organization
+        {
+            Id = PostgresFixture.OrgId,
+            Code = "POLICE",
+            Name = "Police Department (renamed)",
+            OrganizationType = "DEPARTMENT",
+            Description = "edited",
+        }, UnscopedCaller(), work, CancellationToken.None);
+        await work.CommitAsync(CancellationToken.None);
+
+        var after = await Orgs.GetAsync(PostgresFixture.OrgId, UnscopedCaller(), CancellationToken.None);
+        after!.Name.ShouldBe("Police Department (renamed)");
+        after.Description.ShouldBe("edited");
     }
 }

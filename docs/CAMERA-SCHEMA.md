@@ -14,8 +14,8 @@ Camera
 ├── Ownership
 │   └── Organization Unit
 └── Location
-    └── Site
-        └── Geographic Hierarchy
+    └── Geographic Area (any level)
+        └── parent chain
 ```
 
 ## Core Rule
@@ -37,7 +37,7 @@ Prefer:
 ```text
 camera
 ├── organization_unit_id
-└── site_id
+└── geographic_area_id
 ```
 
 The referenced entities resolve the hierarchy.
@@ -50,7 +50,7 @@ The referenced entities resolve the hierarchy.
 | `camera_code` | VARCHAR(100) | Yes | Unique business identifier |
 | `name` | VARCHAR(255) | Yes | Display name |
 | `organization_unit_id` | UUID | Yes | Owner/operator organization unit |
-| `site_id` | UUID | Yes | Physical installation site |
+| `geographic_area_id` | UUID | Yes | The area the camera sits in, at any level of the hierarchy |
 | `vendor_id` | UUID | No | Vendor reference |
 | `manufacturer` | VARCHAR(255) | No | Manufacturer |
 | `model` | VARCHAR(255) | No | Camera model |
@@ -108,17 +108,16 @@ Camera CAM-AHM-001245
 
 ```text
 Camera
-└── Site
-    └── Locality / Village / Ward
-        └── Taluka
-            └── District
-                └── State
+└── Geographic Area (e.g. a ward, or a per-junction area)
+    └── Taluka
+        └── District
+            └── State
 ```
 
 This lets the system answer both:
 
 - Which Police cameras are in Ahmedabad?
-- Which departments have cameras at this village/site?
+- Which departments have cameras in this area?
 
 ## GIS
 
@@ -243,7 +242,7 @@ updated_at
   "camera_code": "CAM-AHM-001245",
   "name": "Ring Road Junction Camera 01",
   "organization_unit_id": "org-unit-ahm-police",
-  "site_id": "site-ring-road-001",
+  "geographic_area_id": "area-ring-road-jn-001",
   "camera_type": "FIXED",
   "latitude": 23.0225,
   "longitude": 72.5714,

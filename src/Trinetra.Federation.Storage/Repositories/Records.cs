@@ -20,6 +20,14 @@ public sealed record OrganizationUnit
     public required string Code { get; init; }
     public required string Name { get; init; }
     public required string UnitType { get; init; }
+    public string? Description { get; init; }
+
+    /// <summary>
+    /// Descriptive "home area" only — displayed and reported, never an authorization input.
+    /// See the <c>COMMENT ON COLUMN organization_units.geographic_area_id</c> and invariant 12.
+    /// </summary>
+    public Guid? GeographicAreaId { get; init; }
+
     public string Status { get; init; } = "ACTIVE";
 }
 
@@ -34,20 +42,7 @@ public sealed record GeographicArea
     public required string Code { get; init; }
     public required string Name { get; init; }
     public required string AreaType { get; init; }
-    public string Status { get; init; } = "ACTIVE";
-}
-
-/// <summary>A physical installation location. Cameras reach geography through a site.</summary>
-public sealed record Site
-{
-    public Guid Id { get; init; }
-    public required string Code { get; init; }
-    public required string Name { get; init; }
-    public required Guid GeographicAreaId { get; init; }
-    public string? SiteType { get; init; }
-    public string? Address { get; init; }
-    public double? Latitude { get; init; }
-    public double? Longitude { get; init; }
+    public string? Description { get; init; }
     public string Status { get; init; } = "ACTIVE";
 }
 
@@ -96,6 +91,5 @@ public enum ChildStrategy
     Reparent,
 }
 
-/// <summary>What a deactivation would affect, returned when it is refused.</summary>
-public sealed record DeactivationConflict(
-    IReadOnlyList<string> AffectedAreas, IReadOnlyList<string> AffectedSites);
+/// <summary>What a deactivation would affect (the active child nodes), returned when it is refused.</summary>
+public sealed record DeactivationConflict(IReadOnlyList<string> AffectedChildren);

@@ -11,9 +11,9 @@ namespace Trinetra.Federation.Storage.Repositories;
 /// <para>
 /// Every read and write is constrained on <b>both</b> scope dimensions, ANDed and each with its
 /// own unscoped flag (<c>CLAUDE.md</c> invariant 12): the organization dimension against
-/// <c>cameras.organization_unit_id</c>, the geographic dimension against the camera's site's
-/// area. Unlike <c>connector_target</c>, a camera's <c>site_id</c> is never null, so
-/// the geographic check is never skipped.
+/// <c>cameras.organization_unit_id</c>, the geographic dimension against
+/// <c>cameras.geographic_area_id</c>. Unlike <c>connector_target</c>, a camera's
+/// <c>geographic_area_id</c> is <c>NOT NULL</c>, so the geographic check is never skipped.
 /// </para>
 /// <para>
 /// A camera the caller cannot reach returns null / affects no rows — never a 403. Telling an
@@ -28,7 +28,7 @@ public sealed class CameraRepository
 {
     private const string Columns = """
         c.id, c.camera_code AS code, c.name,
-        c.organization_unit_id, c.site_id, c.manufacturer, c.model, c.camera_type,
+        c.organization_unit_id, c.geographic_area_id, c.manufacturer, c.model, c.camera_type,
         c.serial_number, c.latitude, c.longitude, c.altitude, c.mounting_height,
         c.azimuth, c.tilt, c.horizontal_fov, c.vertical_fov, c.effective_range,
         host(c.ip_address) AS ip_address, c.port, c.protocol,
@@ -37,10 +37,8 @@ public sealed class CameraRepository
         c.last_seen_at, c.last_health_check_at, c.deleted_at
         """;
 
-    // The camera's geographic-scope key: the area of its site. A correlated subquery rather than
-    // a join so the column list stays flat and the planner can still use ix_cameras_site.
-    private const string SiteArea =
-        "(SELECT s.geographic_area_id FROM federation.sites s WHERE s.id = c.site_id)";
+    // The camera's geographic-scope key — a direct column since sites were removed.
+    private const string SiteArea = "c.geographic_area_id";
 
     private readonly NpgsqlDataSource _dataSource;
 
@@ -84,9 +82,8 @@ public sealed class CameraRepository
               AND (@OrganizationUnitId::uuid IS NULL
                    OR c.organization_unit_id IN (
                        SELECT id FROM federation.org_unit_descendants(@OrganizationUnitId)))
-              AND (@SiteId::uuid IS NULL OR c.site_id = @SiteId)
               AND (@GeographicAreaId::uuid IS NULL
-                   OR {SiteArea} IN (
+                   OR c.geographic_area_id IN (
                        SELECT id FROM federation.geographic_area_descendants(@GeographicAreaId)))
               AND (@CameraType::text IS NULL OR c.camera_type = @CameraType)
               AND (@OperationalStatus::text IS NULL OR c.operational_status = @OperationalStatus)
@@ -105,7 +102,6 @@ public sealed class CameraRepository
         var args = new DynamicParameters(ScopeArgs(Guid.Empty, caller, "camera.read"));
         args.Add("IncludeRetired", query.IncludeRetired);
         args.Add("OrganizationUnitId", query.OrganizationUnitId);
-        args.Add("SiteId", query.SiteId);
         args.Add("GeographicAreaId", query.GeographicAreaId);
         args.Add("CameraType", query.CameraType);
         args.Add("OperationalStatus", query.OperationalStatus);
@@ -156,7 +152,7 @@ public sealed class CameraRepository
         caller.Require("camera.create");
 
         await RequirePlacementAsync(
-            work, caller, "camera.create", camera.OrganizationUnitId, camera.SiteId, ct);
+            work, caller, "camera.create", camera.OrganizationUnitId, camera.GeographicAreaId, ct);
 
         return await work.Connection.ExecuteScalarAsync<Guid>(new CommandDefinition(
             $"""
@@ -179,12 +175,12 @@ public sealed class CameraRepository
         // A move must be authorised at both ends: the caller may not push a camera into a unit
         // or site they cannot see, nor pull one out of their own view.
         await RequirePlacementAsync(
-            work, caller, "camera.update", camera.OrganizationUnitId, camera.SiteId, ct);
+            work, caller, "camera.update", camera.OrganizationUnitId, camera.GeographicAreaId, ct);
 
         var affected = await work.Connection.ExecuteAsync(new CommandDefinition($"""
             UPDATE federation.cameras c
             SET camera_code = @Code, name = @Name,
-                organization_unit_id = @OrganizationUnitId, site_id = @SiteId,
+                organization_unit_id = @OrganizationUnitId, geographic_area_id = @GeographicAreaId,
                 manufacturer = @Manufacturer, model = @Model, camera_type = @CameraType,
                 serial_number = @SerialNumber, latitude = @Latitude, longitude = @Longitude,
                 altitude = @Altitude, mounting_height = @MountingHeight,
@@ -221,11 +217,11 @@ public sealed class CameraRepository
 
         if (patch.NewOrganizationUnitId is { } newOrg)
         {
-            await RequirePlacementAsync(work, caller, "camera.update", newOrg, patch.NewSiteId, ct);
+            await RequirePlacementAsync(work, caller, "camera.update", newOrg, patch.NewGeographicAreaId, ct);
         }
-        else if (patch.NewSiteId is { } newSite)
+        else if (patch.NewGeographicAreaId is { } newArea)
         {
-            await RequirePlacementAsync(work, caller, "camera.update", null, newSite, ct);
+            await RequirePlacementAsync(work, caller, "camera.update", null, newArea, ct);
         }
 
         var set = string.Join(", ", patch.Assignments) + ", updated_by = @ActorId, updated_at = now()";
@@ -318,16 +314,29 @@ public sealed class CameraRepository
     }
 
     /// <summary>
-    /// Verifies the caller may place a camera in the given unit and/or site — i.e. both are
-    /// inside their authorised sets for the permission. Throws <see cref="ForbiddenException"/>
-    /// otherwise, which the endpoint surfaces as 404 (never disclose the id).
+    /// Verifies the caller may place a camera in the given unit and/or geographic area — both
+    /// inside their authorised sets for the permission — and that the area exists and is ACTIVE.
+    /// Throws <see cref="ForbiddenException"/> (endpoint → 404, never disclose the id) or
+    /// <see cref="InvalidReferenceException"/> (endpoint → 400) as appropriate.
     /// </summary>
     private static async Task RequirePlacementAsync(
         UnitOfWork work, CallerContext caller, string permission,
-        Guid? organizationUnitId, Guid? siteId, CancellationToken ct)
+        Guid? organizationUnitId, Guid? geographicAreaId, CancellationToken ct)
     {
+        if (geographicAreaId is { } areaId)
+        {
+            var active = await work.Connection.ExecuteScalarAsync<bool>(new CommandDefinition("""
+                SELECT EXISTS (SELECT 1 FROM federation.geographic_areas
+                               WHERE id = @areaId AND status = 'ACTIVE');
+                """, new { areaId }, work.Transaction, cancellationToken: ct));
+            if (!active)
+            {
+                throw new InvalidReferenceException("geographicAreaId", "does not exist or is not ACTIVE");
+            }
+        }
+
         var orgOk = organizationUnitId is null || caller.IsUnscopedFor(permission);
-        var geoOk = siteId is null || caller.IsUnscopedForGeography(permission);
+        var geoOk = geographicAreaId is null || caller.IsUnscopedForGeography(permission);
 
         if (orgOk && geoOk)
         {
@@ -341,16 +350,15 @@ public sealed class CameraRepository
                         p_user_id => @UserId, p_api_key_id => @ApiKeyId, p_permission => @Perm)
                     WHERE organization_unit_id = @OrgUnit))
                 AND
-                (@GeoOk OR @SiteId::uuid IS NULL OR EXISTS (
+                (@GeoOk OR @GeographicAreaId::uuid IS NULL OR EXISTS (
                     SELECT 1 FROM federation.authorized_geographic_areas(
                         p_user_id => @UserId, p_api_key_id => @ApiKeyId, p_permission => @Perm)
-                    WHERE geographic_area_id =
-                        (SELECT s.geographic_area_id FROM federation.sites s WHERE s.id = @SiteId)));
+                    WHERE geographic_area_id = @GeographicAreaId));
             """, new
         {
             caller.UserId, caller.ApiKeyId, Perm = permission,
             OrgOk = orgOk, GeoOk = geoOk,
-            OrgUnit = organizationUnitId, SiteId = siteId,
+            OrgUnit = organizationUnitId, GeographicAreaId = geographicAreaId,
         }, work.Transaction, cancellationToken: ct));
 
         if (!permitted)
@@ -360,7 +368,7 @@ public sealed class CameraRepository
     }
 
     private const string InsertColumns = """
-        camera_code, name, organization_unit_id, site_id, manufacturer, model, camera_type,
+        camera_code, name, organization_unit_id, geographic_area_id, manufacturer, model, camera_type,
         serial_number, latitude, longitude, altitude, mounting_height, azimuth, tilt,
         horizontal_fov, vertical_fov, effective_range, ip_address, port, protocol,
         vms_id, stream_reference, credential_reference, installation_date,
@@ -368,7 +376,7 @@ public sealed class CameraRepository
         """;
 
     private const string InsertValues = """
-        @Code, @Name, @OrganizationUnitId, @SiteId, @Manufacturer, @Model, @CameraType,
+        @Code, @Name, @OrganizationUnitId, @GeographicAreaId, @Manufacturer, @Model, @CameraType,
         @SerialNumber, @Latitude, @Longitude, @Altitude, @MountingHeight, @Azimuth, @Tilt,
         @HorizontalFov, @VerticalFov, @EffectiveRange, @IpAddress::inet, @Port, @Protocol,
         @VmsId, @StreamReference, @CredentialReference, @InstallationDate,
@@ -377,7 +385,7 @@ public sealed class CameraRepository
 
     private static object WriteArgs(Camera cam, CallerContext caller) => new
     {
-        cam.Id, cam.Code, cam.Name, cam.OrganizationUnitId, cam.SiteId,
+        cam.Id, cam.Code, cam.Name, cam.OrganizationUnitId, cam.GeographicAreaId,
         cam.Manufacturer, cam.Model, cam.CameraType, cam.SerialNumber,
         cam.Latitude, cam.Longitude, cam.Altitude, cam.MountingHeight,
         cam.Azimuth, cam.Tilt, cam.HorizontalFov, cam.VerticalFov, cam.EffectiveRange,
@@ -398,7 +406,7 @@ public sealed class CameraRepository
         public string Code { get; init; } = "";
         public string Name { get; init; } = "";
         public Guid OrganizationUnitId { get; init; }
-        public Guid SiteId { get; init; }
+        public Guid GeographicAreaId { get; init; }
         public string? Manufacturer { get; init; }
         public string? Model { get; init; }
         public string CameraType { get; init; } = "";
@@ -432,7 +440,7 @@ public sealed class CameraRepository
             Code = Code,
             Name = Name,
             OrganizationUnitId = OrganizationUnitId,
-            SiteId = SiteId,
+            GeographicAreaId = GeographicAreaId,
             Manufacturer = Manufacturer,
             Model = Model,
             CameraType = CameraType,
@@ -472,7 +480,6 @@ public readonly record struct CameraQuery(
     string? Cursor,
     bool IncludeRetired,
     Guid? OrganizationUnitId,
-    Guid? SiteId,
     Guid? GeographicAreaId,
     string? CameraType,
     string? OperationalStatus,
@@ -501,8 +508,8 @@ public sealed class CameraPatch
     /// <summary>Set when the patch moves the camera to a different owning unit.</summary>
     public Guid? NewOrganizationUnitId { get; private set; }
 
-    /// <summary>Set when the patch moves the camera to a different site.</summary>
-    public Guid? NewSiteId { get; private set; }
+    /// <summary>Set when the patch moves the camera to a different geographic area.</summary>
+    public Guid? NewGeographicAreaId { get; private set; }
 
     /// <summary>Records <c>column = @param</c> with its value. <paramref name="column"/> is a literal.</summary>
     public void Set(string column, string parameter, object? value)
@@ -514,9 +521,9 @@ public sealed class CameraPatch
         {
             NewOrganizationUnitId = org;
         }
-        else if (column == "site_id" && value is Guid site)
+        else if (column == "geographic_area_id" && value is Guid area)
         {
-            NewSiteId = site;
+            NewGeographicAreaId = area;
         }
     }
 }

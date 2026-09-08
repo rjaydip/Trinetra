@@ -83,7 +83,7 @@ public sealed class LeaseStore
             -- Enum columns are cast to text rather than mapped as Npgsql enums. Npgsql cannot
             -- read an unmapped PostgreSQL enum, and registering mappings would couple the
             -- domain enums to the exact database type names. TargetRow parses them back.
-            RETURNING t.id, t.code, t.organization_unit_id, t.site_id, t.display_name,
+            RETURNING t.id, t.code, t.organization_unit_id, t.geographic_area_id, t.display_name,
                       t.vendor::text        AS vendor,
                       t.runtime_class::text AS runtime_class,
                       t.endpoint, t.credential_reference, t.verify_tls,
@@ -203,7 +203,7 @@ public sealed class LeaseStore
         public Guid Id { get; init; }
         public string Code { get; init; } = "";
         public Guid OrganizationUnitId { get; init; }
-        public Guid? SiteId { get; init; }
+        public Guid? GeographicAreaId { get; init; }
         public string DisplayName { get; init; } = "";
         public string Vendor { get; init; } = "";
         public string RuntimeClass { get; init; } = "";
@@ -224,7 +224,7 @@ public sealed class LeaseStore
             Id = Id,
             Code = Code,
             OrganizationUnitId = OrganizationUnitId,
-            SiteId = SiteId,
+            GeographicAreaId = GeographicAreaId,
             DisplayName = DisplayName,
             Vendor = Enum.Parse<VendorKind>(Vendor),
             RuntimeClass = Enum.Parse<RuntimeClass>(RuntimeClass),

@@ -114,6 +114,28 @@ public sealed class OrganizationRepository
 
     // ---- Units -------------------------------------------------------------
 
+    /// <summary>One unit the caller can reach, or null. Out of scope reads as null, not 403.</summary>
+    public async Task<OrganizationUnit?> GetUnitAsync(Guid id, CallerContext caller, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(caller);
+        caller.Require("organization.read");
+
+        await using var c = await _dataSource.OpenConnectionAsync(ct);
+        return await c.QuerySingleOrDefaultAsync<OrganizationUnit>(new CommandDefinition("""
+            SELECT id, organization_id, parent_unit_id, code, name, unit_type,
+                   description, geographic_area_id, status
+            FROM federation.organization_units
+            WHERE id = @id
+              AND (@Unscoped OR id IN (SELECT organization_unit_id
+                                       FROM federation.authorized_org_units(
+                                           @UserId, @ApiKeyId, 'organization.read')));
+            """, new
+        {
+            id, caller.UserId, caller.ApiKeyId,
+            Unscoped = caller.IsUnscopedFor("organization.read"),
+        }, cancellationToken: ct));
+    }
+
     public async Task<IReadOnlyList<OrganizationUnit>> ListUnitsAsync(
         Guid? organizationId, CallerContext caller, CancellationToken ct)
     {
@@ -122,7 +144,8 @@ public sealed class OrganizationRepository
 
         await using var c = await _dataSource.OpenConnectionAsync(ct);
         var rows = await c.QueryAsync<OrganizationUnit>(new CommandDefinition("""
-            SELECT id, organization_id, parent_unit_id, code, name, unit_type, status
+            SELECT id, organization_id, parent_unit_id, code, name, unit_type,
+                   description, geographic_area_id, status
             FROM federation.organization_units
             WHERE (@organizationId::uuid IS NULL OR organization_id = @organizationId)
               AND (@Unscoped OR id IN (SELECT organization_unit_id
@@ -142,9 +165,16 @@ public sealed class OrganizationRepository
     /// Both the unit and its parent are checked. Checking only the unit would let a scoped caller
     /// re-parent one of their own units under another department -- moving it, and everything
     /// beneath it, out of their administrator's view.
+    /// <para>
+    /// Pass <c>parentIsChanging: false</c> on a field-only edit where the caller has already
+    /// established that <c>ParentUnitId</c> equals the stored value — it suppresses the "parent
+    /// must be ACTIVE" assertion so a rename is not blocked just because the unit already sits
+    /// under a retired parent (the residual 5-H2 case).
+    /// </para>
     /// </remarks>
     public async Task<Guid> UpsertUnitAsync(
-        OrganizationUnit unit, CallerContext caller, UnitOfWork work, CancellationToken ct)
+        OrganizationUnit unit, CallerContext caller, UnitOfWork work, CancellationToken ct,
+        bool parentIsChanging = true)
     {
         ArgumentNullException.ThrowIfNull(unit);
         ArgumentNullException.ThrowIfNull(caller);
@@ -167,19 +197,43 @@ public sealed class OrganizationRepository
             }
         }
 
-        // A live unit may not be attached under a retired one — that would put it, and everything
-        // beneath it, under a parent every list and scope query treats as gone (finding 5-M8).
-        await RequireActiveParentAsync(c, work.Transaction, unit.ParentUnitId, "parentUnitId", ct)
-            .ConfigureAwait(false);
+        // A live unit may not be *attached* under a retired one — that would put it, and
+        // everything beneath it, under a parent every list and scope query treats as gone
+        // (finding 5-M8). Skipped when the parent is unchanged: a field edit is not an attach.
+        if (parentIsChanging)
+        {
+            await RequireActiveParentAsync(c, work.Transaction, unit.ParentUnitId, "parentUnitId", ct)
+                .ConfigureAwait(false);
+        }
+
+        // The "home area" link is DESCRIPTIVE ONLY (invariant 12): it is never an authorization
+        // input, so it gets an existence + ACTIVE check but NO geographic-scope check. A unit
+        // admin with no geography scope may still tag their unit with the area it sits in.
+        if (unit.GeographicAreaId is { } homeArea)
+        {
+            var areaOk = await c.ExecuteScalarAsync<bool>(new CommandDefinition("""
+                SELECT EXISTS (SELECT 1 FROM federation.geographic_areas
+                               WHERE id = @homeArea AND status = 'ACTIVE');
+                """, new { homeArea }, work.Transaction, cancellationToken: ct)).ConfigureAwait(false);
+            if (!areaOk)
+            {
+                throw new InvalidReferenceException(
+                    "geographicAreaId", "does not exist or is not ACTIVE");
+            }
+        }
 
         return await c.ExecuteScalarAsync<Guid>(new CommandDefinition("""
             INSERT INTO federation.organization_units
-                (id, organization_id, parent_unit_id, code, name, unit_type, status)
+                (id, organization_id, parent_unit_id, code, name, unit_type,
+                 description, geographic_area_id, status)
             VALUES (COALESCE(NULLIF(@Id,'00000000-0000-0000-0000-000000000000'::uuid), gen_random_uuid()),
-                    @OrganizationId, @ParentUnitId, @Code, @Name, @UnitType, @Status)
+                    @OrganizationId, @ParentUnitId, @Code, @Name, @UnitType,
+                    @Description, @GeographicAreaId, @Status)
             ON CONFLICT (id) DO UPDATE
             SET parent_unit_id = EXCLUDED.parent_unit_id, code = EXCLUDED.code,
                 name = EXCLUDED.name, unit_type = EXCLUDED.unit_type,
+                description = EXCLUDED.description,
+                geographic_area_id = EXCLUDED.geographic_area_id,
                 status = EXCLUDED.status, updated_at = now()
             RETURNING id;
             """, unit, work.Transaction, cancellationToken: ct));
@@ -246,7 +300,7 @@ public sealed class OrganizationRepository
 
         if (children.Count > 0 && strategy == ChildStrategy.Refuse)
         {
-            return new DeactivationConflict(children, []);
+            return new DeactivationConflict(children);
         }
 
         if (strategy == ChildStrategy.Reparent && children.Count > 0)

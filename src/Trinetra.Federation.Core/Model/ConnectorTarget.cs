@@ -29,10 +29,10 @@ public sealed record ConnectorTarget
     public required Guid OrganizationUnitId { get; init; }
 
     /// <summary>
-    /// Physical site, if known. Optional, and the only thing that makes a VMS geographically
+    /// Geographic area, if known. Optional, and the only thing that makes a VMS geographically
     /// scopeable before Model 1's camera registry exists.
     /// </summary>
-    public Guid? SiteId { get; init; }
+    public Guid? GeographicAreaId { get; init; }
 
     public required string DisplayName { get; init; }
     public required VendorKind Vendor { get; init; }

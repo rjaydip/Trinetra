@@ -8,7 +8,7 @@ namespace Trinetra.IntegrationTests;
 /// <summary>
 /// Verifies the PR3 VMS-lifecycle fixes: a replace never touches state (9-NEW-H), delete refuses
 /// an Active target (9-H2) and is gated on its own permission (9-H3), and register/replace
-/// validate that the organization unit and site are real and ACTIVE (9-M2).
+/// validate that the organization unit and geographic area are real and ACTIVE (9-M2).
 /// </summary>
 /// <remarks>
 /// Most of these are business-rule tests, not scope tests — <see cref="GeographyScopeTests"/>
@@ -24,7 +24,7 @@ public sealed class VmsLifecycleTests : IClassFixture<PostgresFixture>, IAsyncLi
 
     private static readonly Guid TargetId = Guid.Parse("00000000-0000-0000-0000-0000000000b1");
     private static readonly Guid InactiveOrgUnit = Guid.Parse("a4444444-4444-4444-4444-444444444444");
-    private static readonly Guid InactiveSiteId = Guid.Parse("c4444444-4444-4444-4444-444444444444");
+    private static readonly Guid InactiveAreaId = Guid.Parse("b4444444-4444-4444-4444-444444444444");
 
     public VmsLifecycleTests(PostgresFixture fixture) => _fixture = fixture;
 
@@ -34,21 +34,21 @@ public sealed class VmsLifecycleTests : IClassFixture<PostgresFixture>, IAsyncLi
 
         await _fixture.ExecuteAsync($"""
             INSERT INTO federation.connector_target
-                (id, code, organization_unit_id, site_id, display_name, vendor, endpoint,
+                (id, code, organization_unit_id, geographic_area_id, display_name, vendor, endpoint,
                  credential_reference)
             VALUES ('{TargetId}', 'TGT-LIFECYCLE', '{PostgresFixture.PoliceUnit}',
-                    '{PostgresFixture.SiteId}', 'Lifecycle test target',
+                    '{PostgresFixture.VillageId}', 'Lifecycle test target',
                     'Onvif'::federation.vendor_kind, 'http://10.0.0.1', 'vault://lifecycle');
 
-            -- A deactivated unit and site, for 9-M2.
+            -- A deactivated unit and area, for 9-M2.
             INSERT INTO federation.organization_units
                 (id, organization_id, parent_unit_id, code, name, unit_type, status)
             VALUES ('{InactiveOrgUnit}', '{PostgresFixture.OrgId}', NULL, 'PD-RETIRED',
                     'Retired Unit', 'DEPARTMENT', 'INACTIVE')
             ON CONFLICT (id) DO NOTHING;
-            INSERT INTO federation.sites (id, code, name, geographic_area_id, status)
-            VALUES ('{InactiveSiteId}', 'SITE-RETIRED', 'Retired Site',
-                    '{PostgresFixture.VillageId}', 'INACTIVE')
+            INSERT INTO federation.geographic_areas (id, parent_area_id, code, name, area_type, status)
+            VALUES ('{InactiveAreaId}', '{PostgresFixture.DistrictId}', 'AHM-RETIRED', 'Retired Area',
+                    'VILLAGE', 'INACTIVE')
             ON CONFLICT (id) DO NOTHING;
             """);
     }
@@ -57,12 +57,12 @@ public sealed class VmsLifecycleTests : IClassFixture<PostgresFixture>, IAsyncLi
 
     private static CallerContext SystemCaller() => CallerContext.System("vms-lifecycle-test");
 
-    private static ConnectorTarget NewTarget(string code, Guid orgUnit, Guid? siteId) => new()
+    private static ConnectorTarget NewTarget(string code, Guid orgUnit, Guid? areaId) => new()
     {
         Id = Guid.Empty,
         Code = code,
         OrganizationUnitId = orgUnit,
-        SiteId = siteId,
+        GeographicAreaId = areaId,
         DisplayName = code,
         Vendor = VendorKind.Onvif,
         Endpoint = "http://10.0.0.99",
@@ -87,7 +87,7 @@ public sealed class VmsLifecycleTests : IClassFixture<PostgresFixture>, IAsyncLi
         // State left at the model default (Active) — exactly what TryBuild produces today.
         await using (var work = await UnitOfWork.BeginAsync(_fixture.DataSource, CancellationToken.None))
         {
-            var replacement = NewTarget("TGT-LIFECYCLE", PostgresFixture.PoliceUnit, PostgresFixture.SiteId)
+            var replacement = NewTarget("TGT-LIFECYCLE", PostgresFixture.PoliceUnit, PostgresFixture.VillageId)
                 with
             {
                 Id = TargetId,
@@ -112,7 +112,7 @@ public sealed class VmsLifecycleTests : IClassFixture<PostgresFixture>, IAsyncLi
         var repo = new ConnectorTargetRepository(_fixture.DataSource);
 
         await using var work = await UnitOfWork.BeginAsync(_fixture.DataSource, CancellationToken.None);
-        var replacement = NewTarget("TGT-LIFECYCLE", PostgresFixture.PoliceUnit, PostgresFixture.SiteId)
+        var replacement = NewTarget("TGT-LIFECYCLE", PostgresFixture.PoliceUnit, PostgresFixture.VillageId)
             with
         { Id = TargetId };
 
@@ -184,7 +184,7 @@ public sealed class VmsLifecycleTests : IClassFixture<PostgresFixture>, IAsyncLi
             () => repo.DeleteAsync(TargetId, caller, work, CancellationToken.None));
     }
 
-    // ---- 9-M2: organizationUnitId / siteId must be ACTIVE ------------------
+    // ---- 9-M2: organizationUnitId / geographicAreaId must be ACTIVE -------
 
     [Fact]
     public async Task Upsert_ReferencingAnInactiveOrganizationUnit_ThrowsInvalidReference()
@@ -192,45 +192,45 @@ public sealed class VmsLifecycleTests : IClassFixture<PostgresFixture>, IAsyncLi
         var repo = new ConnectorTargetRepository(_fixture.DataSource);
         await using var work = await UnitOfWork.BeginAsync(_fixture.DataSource, CancellationToken.None);
 
-        var target = NewTarget("TGT-BAD-ORG", InactiveOrgUnit, PostgresFixture.SiteId);
+        var target = NewTarget("TGT-BAD-ORG", InactiveOrgUnit, PostgresFixture.VillageId);
 
         await Should.ThrowAsync<InvalidReferenceException>(
             () => repo.UpsertAsync(target, SystemCaller(), work, CancellationToken.None));
     }
 
     [Fact]
-    public async Task Upsert_ReferencingAnInactiveSite_ThrowsInvalidReference()
+    public async Task Upsert_ReferencingAnInactiveArea_ThrowsInvalidReference()
     {
         var repo = new ConnectorTargetRepository(_fixture.DataSource);
         await using var work = await UnitOfWork.BeginAsync(_fixture.DataSource, CancellationToken.None);
 
-        var target = NewTarget("TGT-BAD-SITE", PostgresFixture.PoliceUnit, InactiveSiteId);
+        var target = NewTarget("TGT-BAD-AREA", PostgresFixture.PoliceUnit, InactiveAreaId);
 
         await Should.ThrowAsync<InvalidReferenceException>(
             () => repo.UpsertAsync(target, SystemCaller(), work, CancellationToken.None));
     }
 
     [Fact]
-    public async Task Upsert_ReferencingActiveOrganizationUnitAndSite_Succeeds()
+    public async Task Upsert_ReferencingActiveOrganizationUnitAndArea_Succeeds()
     {
-        // Regression case: the fixture's own PoliceUnit/SiteId must still register cleanly —
+        // Regression case: the fixture's own PoliceUnit/VillageId must still register cleanly —
         // this is the same pair GeographyScopeTests' Vms_UpsertAsync_* tests rely on being ACTIVE.
         var repo = new ConnectorTargetRepository(_fixture.DataSource);
         await using var work = await UnitOfWork.BeginAsync(_fixture.DataSource, CancellationToken.None);
 
-        var target = NewTarget("TGT-GOOD-REF", PostgresFixture.PoliceUnit, PostgresFixture.SiteId);
+        var target = NewTarget("TGT-GOOD-REF", PostgresFixture.PoliceUnit, PostgresFixture.VillageId);
 
         var id = await repo.UpsertAsync(target, SystemCaller(), work, CancellationToken.None);
         id.ShouldNotBe(Guid.Empty);
     }
 
     [Fact]
-    public async Task Upsert_WithNoSite_StillValidatesOrganizationUnit()
+    public async Task Upsert_WithNoArea_StillValidatesOrganizationUnit()
     {
         var repo = new ConnectorTargetRepository(_fixture.DataSource);
         await using var work = await UnitOfWork.BeginAsync(_fixture.DataSource, CancellationToken.None);
 
-        var target = NewTarget("TGT-BAD-ORG-NOSITE", InactiveOrgUnit, siteId: null);
+        var target = NewTarget("TGT-BAD-ORG-NOAREA", InactiveOrgUnit, areaId: null);
 
         await Should.ThrowAsync<InvalidReferenceException>(
             () => repo.UpsertAsync(target, SystemCaller(), work, CancellationToken.None));

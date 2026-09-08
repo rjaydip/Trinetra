@@ -71,7 +71,7 @@ public sealed class EventStore
         await using (var writer = await connection.BeginBinaryImportAsync("""
             COPY staged_event (
                 event_id, source_vms_id, source_event_id, camera_id,
-                organization_unit_id, site_id,
+                organization_unit_id, geographic_area_id,
                 event_type, vendor_event_type, occurred_at, severity,
                 object_reference, confidence, raw_reference, delivery_mode, trace_id
             ) FROM STDIN (FORMAT BINARY)
@@ -86,9 +86,9 @@ public sealed class EventStore
                 await writer.WriteAsync(e.CameraId, NpgsqlDbType.Text, cancellationToken).ConfigureAwait(false);
                 await writer.WriteAsync(e.OrganizationUnitId, NpgsqlDbType.Uuid, cancellationToken).ConfigureAwait(false);
 
-                if (e.SiteId is { } siteId)
+                if (e.GeographicAreaId is { } areaId)
                 {
-                    await writer.WriteAsync(siteId, NpgsqlDbType.Uuid, cancellationToken).ConfigureAwait(false);
+                    await writer.WriteAsync(areaId, NpgsqlDbType.Uuid, cancellationToken).ConfigureAwait(false);
                 }
                 else
                 {
@@ -121,12 +121,12 @@ public sealed class EventStore
         const string merge = """
             INSERT INTO federation.federation_event (
                 event_id, source_vms_id, source_event_id, camera_id,
-                organization_unit_id, site_id,
+                organization_unit_id, geographic_area_id,
                 event_type, vendor_event_type, occurred_at, severity,
                 object_reference, confidence, raw_reference, delivery_mode, trace_id
             )
             SELECT event_id, source_vms_id, source_event_id, camera_id,
-                   organization_unit_id, site_id,
+                   organization_unit_id, geographic_area_id,
                    event_type, vendor_event_type, occurred_at, severity,
                    object_reference, confidence, raw_reference, delivery_mode, trace_id
             FROM staged_event

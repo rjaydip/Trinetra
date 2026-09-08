@@ -22,7 +22,7 @@ public sealed record DetectionEventRow
 
 /// <summary>
 /// Stores detections submitted by Model 2's AI worker, and resolves them against
-/// <c>federated_camera</c> for organization/site scope.
+/// <c>federated_camera</c> for organization/geography scope.
 /// </summary>
 [System.Diagnostics.CodeAnalysis.SuppressMessage(
     "Performance", "CA1822:Mark members as static",
@@ -36,11 +36,11 @@ public sealed class DetectionRepository
 
     /// <summary>
     /// Resolves a worker's <c>"{targetId}:{nativeCameraId}"</c> camera id against the camera
-    /// inventory a worker discovered, for the organization/site scope to denormalize onto the
+    /// inventory a worker discovered, for the organization/geography scope to denormalize onto the
     /// detection row.
     /// </summary>
     public async Task<(Guid TargetId, string NativeCameraId, Guid? CameraId,
-        Guid OrganizationUnitId, Guid? SiteId)?> ResolveCameraAsync(
+        Guid OrganizationUnitId, Guid? GeographicAreaId)?> ResolveCameraAsync(
         string workerCameraId, CancellationToken ct)
     {
         var separator = workerCameraId.IndexOf(':', StringComparison.Ordinal);
@@ -53,14 +53,14 @@ public sealed class DetectionRepository
 
         await using var c = await _dataSource.OpenConnectionAsync(ct);
         var row = await c.QuerySingleOrDefaultAsync<CameraLookupRow>(new CommandDefinition("""
-            SELECT camera_id, organization_unit_id, site_id
+            SELECT camera_id, organization_unit_id, geographic_area_id
             FROM federation.federated_camera
             WHERE target_id = @targetId AND native_camera_id = @nativeCameraId;
             """, new { targetId, nativeCameraId }, cancellationToken: ct));
 
         return row is null
             ? null
-            : (targetId, nativeCameraId, row.CameraId, row.OrganizationUnitId, row.SiteId);
+            : (targetId, nativeCameraId, row.CameraId, row.OrganizationUnitId, row.GeographicAreaId);
     }
 
     /// <summary>
@@ -70,7 +70,7 @@ public sealed class DetectionRepository
     /// </summary>
     public async Task<bool> IngestAsync(
         DetectionEvent evt, Guid targetId, string nativeCameraId, Guid? cameraId,
-        Guid organizationUnitId, Guid? siteId, string? plateNumberNormalized,
+        Guid organizationUnitId, Guid? geographicAreaId, string? plateNumberNormalized,
         CallerContext caller, UnitOfWork work, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(evt);
@@ -79,12 +79,12 @@ public sealed class DetectionRepository
         caller.Require("observation.write");
 
         // A caller must be able to reach the camera's own organization AND the geography of its
-        // site — a key scoped to one department, or one district, must not be able to ingest
+        // area — a key scoped to one department, or one district, must not be able to ingest
         // detections into another's. CLAUDE.md #12: the two dimensions are independent, ANDed,
-        // and each is skipped only by its own unscoped flag. A camera with no site has no
+        // and each is skipped only by its own unscoped flag. A camera with no area has no
         // geography to check.
         var orgOk = caller.IsUnscopedFor("observation.write");
-        var geoOk = siteId is null || caller.IsUnscopedForGeography("observation.write");
+        var geoOk = geographicAreaId is null || caller.IsUnscopedForGeography("observation.write");
 
         if (!orgOk || !geoOk)
         {
@@ -101,18 +101,17 @@ public sealed class DetectionRepository
                             p_permission => 'observation.write')
                         WHERE organization_unit_id = @OrgUnit))
                     AND
-                    (@GeoOk OR @SiteId::uuid IS NULL OR EXISTS (
+                    (@GeoOk OR @GeographicAreaId::uuid IS NULL OR EXISTS (
                         SELECT 1 FROM federation.authorized_geographic_areas(
                             p_user_id => @UserId, p_api_key_id => @ApiKeyId,
                             p_permission => 'observation.write')
-                        WHERE geographic_area_id =
-                            (SELECT s.geographic_area_id FROM federation.sites s WHERE s.id = @SiteId)));
+                        WHERE geographic_area_id = @GeographicAreaId));
                 """,
                 new
                 {
                     caller.UserId, caller.ApiKeyId,
                     OrgOk = orgOk, GeoOk = geoOk,
-                    OrgUnit = organizationUnitId, SiteId = siteId,
+                    OrgUnit = organizationUnitId, GeographicAreaId = geographicAreaId,
                 },
                 work.Transaction, cancellationToken: ct));
 
@@ -125,10 +124,10 @@ public sealed class DetectionRepository
         var affected = await work.Connection.ExecuteAsync(new CommandDefinition("""
             INSERT INTO federation.detection_event
                 (event_id, occurred_at, target_id, native_camera_id, camera_id,
-                 organization_unit_id, site_id, event_type, confidence,
+                 organization_unit_id, geographic_area_id, event_type, confidence,
                  vehicle_type, plate_number_raw, plate_number_normalized, snapshot_reference)
             VALUES (@EventId, @OccurredAt, @TargetId, @NativeCameraId, @CameraId,
-                    @OrganizationUnitId, @SiteId, @EventType, @Confidence,
+                    @OrganizationUnitId, @GeographicAreaId, @EventType, @Confidence,
                     @VehicleType, @PlateNumberRaw, @PlateNumberNormalized, @SnapshotReference)
             ON CONFLICT (event_id, occurred_at) DO NOTHING;
             """, new
@@ -139,7 +138,7 @@ public sealed class DetectionRepository
             NativeCameraId = nativeCameraId,
             CameraId = cameraId,
             OrganizationUnitId = organizationUnitId,
-            SiteId = siteId,
+            GeographicAreaId = geographicAreaId,
             EventType = evt.EventType,
             evt.Confidence,
             evt.VehicleType,
@@ -154,7 +153,7 @@ public sealed class DetectionRepository
     /// <summary>
     /// Search over recent detections, scoped to the caller's organization AND geography reach
     /// (invariant 12) — each dimension bypassed only by its own unscoped flag. A detection whose
-    /// camera has no site is not geo-constrained.
+    /// camera has no area is not geo-constrained.
     /// </summary>
     /// <remarks>
     /// The caller's reachable org units and geographic areas are resolved to arrays before the
@@ -195,9 +194,7 @@ public sealed class DetectionRepository
               AND (@TargetId::uuid IS NULL OR d.target_id = @TargetId)
               {(unscopedOrg ? "" : "AND d.organization_unit_id = ANY (@units)")}
               {(unscopedGeo ? "" : """
-              AND (d.site_id IS NULL OR EXISTS (
-                       SELECT 1 FROM federation.sites s
-                       WHERE s.id = d.site_id AND s.geographic_area_id = ANY (@areas)))
+              AND (d.geographic_area_id IS NULL OR d.geographic_area_id = ANY (@areas))
               """)}
             ORDER BY d.occurred_at DESC
             LIMIT @limit;
@@ -245,6 +242,6 @@ public sealed class DetectionRepository
     {
         public Guid? CameraId { get; init; }
         public Guid OrganizationUnitId { get; init; }
-        public Guid? SiteId { get; init; }
+        public Guid? GeographicAreaId { get; init; }
     }
 }

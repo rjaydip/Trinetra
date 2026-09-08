@@ -233,6 +233,10 @@ Some things are refused on purpose, and look like gaps until you know why.
 | A scoped caller creating a root org unit or root area | Same: it answers to no existing scope |
 | Re-parenting into a subtree being deactivated | Detaches it from the root and makes it unreachable to every scope query |
 | Widening a group beyond the caller's own reach | Escalation by another route: granting access to a department they cannot themselves see |
+| A scoped `role.manage` holder touching a permission they lack (on the new set or the role's existing set) | Same escalation, one step earlier: put the permission in a role, attach a group in your scope, add yourself. Unscoped `role.manage` is exempt. Checked against the `FOR UPDATE` row |
+| A **scoped** `role.manage` holder editing, disabling or deleting a **preset** (`is_system`) role | A role is global; a preset change hits every group on it in every department. Preset writes require `role.manage` held unscoped; scoped holders get custom roles only |
+| Editing or deleting `SUPER_ADMIN` at all | It is the recovery role the first-start backfill and the platform-admin group depend on. Every other preset is editable (unscoped); presets cannot be deleted, only disabled |
+| Activating an access group with no organization *or* no geography scope | An unconstrained dimension is an estate-wide grant. Only an administrator already unscoped for `group.manage` on that dimension may do it |
 
 Out-of-scope reads return **404, not 403**. Distinguishing "does not exist" from "exists but is
 not yours" tells an unauthorised caller which ids are real. This holds for the user, access-group

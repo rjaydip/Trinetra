@@ -92,9 +92,7 @@ public sealed class EventQueryRepository
             WHERE e.occurred_at >= @From AND e.occurred_at < @To
               {(unscopedOrg ? "" : "AND e.organization_unit_id = ANY (@units)")}
               {(unscopedGeo ? "" : """
-              AND (e.site_id IS NULL OR EXISTS (
-                       SELECT 1 FROM federation.sites s
-                       WHERE s.id = e.site_id AND s.geographic_area_id = ANY (@areas)))
+              AND (e.geographic_area_id IS NULL OR e.geographic_area_id = ANY (@areas))
               """)}
               AND (@CameraId::text IS NULL OR e.camera_id = @CameraId)
               AND (@EventType::text IS NULL OR e.event_type = @EventType)
@@ -137,7 +135,7 @@ public sealed class EventQueryRepository
     /// The geographic areas this caller may read events for — resolved to an array for the same
     /// planner reason as <see cref="AuthorizedOrgUnitsAsync"/>. Used as a secondary filter over
     /// the (already time- and org-narrowed) page rather than the primary access path, so a
-    /// subquery against <c>sites</c> in the main query is cheap.
+    /// geographic_area_id filter on the main query is a direct column comparison.
     /// </summary>
     private static async Task<Guid[]> AuthorizedAreasAsync(
         NpgsqlConnection c, CallerContext caller, CancellationToken ct)

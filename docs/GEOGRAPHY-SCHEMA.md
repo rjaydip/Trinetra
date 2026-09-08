@@ -10,12 +10,13 @@ A camera has an owner (organization) and a place (geography). These are separate
 
 ```text
 Geographic Area
-  └── Child Geographic Area
-       └── Site
-            └── Camera
+  └── Child Geographic Area   (to any depth)
+       └── Camera             (attaches at any level)
 ```
 
-The hierarchy is **defined by the operator**, not by the schema.
+The hierarchy is **defined by the operator**, not by the schema. There is no fixed bottom tier:
+a camera attaches directly to a `geographic_area_id` at whatever level the operator finds
+useful — a district, a ward, or a per-junction area they created for the purpose.
 
 ## Operator-Defined Levels
 
@@ -26,11 +27,24 @@ Deployment A                Deployment B
 ------------                ------------
 State                       City
  └── District                └── Zone
-      └── Taluka                  └── Sector
-           └── Village                 └── Block
+      └── Taluka                  └── Ward
+           └── Village                 └── Sector
 ```
 
-Both use the same tables. Neither requires a schema change.
+Both use the same tables. `area_type` is a label drawn from `geographic_area_types`, each of
+which carries a `level_order`: **smaller = broader / higher in the tree** (STATE `10`),
+**larger = finer / deeper** (BLOCK `70`). Two rules constrain the tree:
+
+- **No cycles.**
+- **Level-order containment** — a child area must sit at a *strictly finer* level than its
+  parent (`child.level_order > parent.level_order`). A District cannot be placed inside a
+  Village; two areas of the *same* level cannot nest either. Only the ordering is checked, never
+  the size of the gap — an operator may skip intervening levels (District straight to Village).
+  The check also fires when an area's `area_type` is changed, so a node cannot be relabelled
+  coarser than its own children. Violations return `400`.
+
+A deployment that wants arbitrary-depth trees registers its own ordered levels
+(`AREA-1`, `AREA-2`, …) rather than reusing one label.
 
 This mirrors the rule in `DEPARTMENT-SCHEMA.md`: use a generic hierarchical entity instead of hardcoding the levels of one organization's structure.
 
@@ -40,56 +54,61 @@ This mirrors the rule in `DEPARTMENT-SCHEMA.md`: use a generic hierarchical enti
 |---|---|---:|---|
 | `id` | UUID | Yes | Immutable identifier |
 | `parent_area_id` | UUID | No | Parent area. NULL marks a root |
-| `code` | VARCHAR(50) | Yes | Unique area code |
+| `code` | VARCHAR(50) | Yes | Area code — unique **within a parent**, not globally (roots unique among themselves) |
 | `name` | VARCHAR(255) | Yes | Area name |
-| `area_type` | VARCHAR(50) | Yes | Operator-defined level: state, district, taluka, village, zone, ward, etc. |
+| `area_type` | VARCHAR(50) | Yes | FK into `geographic_area_types(code)`. Operator-defined level label |
+| `description` | TEXT | No | Free-text operator note, round-tripped by GET/PUT |
 | `status` | VARCHAR(20) | Yes | ACTIVE / INACTIVE |
 | `metadata` | JSONB | No | Deployment-specific attributes |
 | `created_at` | TIMESTAMPTZ | Yes | Creation time |
 | `updated_at` | TIMESTAMPTZ | Yes | Last update time |
+
+`code` is unique per parent (`UNIQUE NULLS NOT DISTINCT (parent_area_id, code)`), so "WARD-1"
+can recur under every district. Because areas are the finest tier now, tools that resolve an
+area by bare `code` must handle an ambiguous match.
 
 There is **no boundary polygon**. Containment is resolved by walking the parent chain, not by
 spatial maths, so the hierarchy is sufficient on its own — and carrying a geometry column meant
-requiring PostGIS across every deployment for data nobody had populated and no query read.
-
-A site's position is a plain `latitude` / `longitude` pair with range checks, the same
-representation used everywhere else in the schema. If administrative polygons are ever needed for
-map rendering, they belong with Model 1's coverage work, which is where spatial querying actually
-starts — and they can be added then, against a requirement rather than in anticipation of one.
+requiring PostGIS across every deployment for data nobody had populated and no query read. If
+administrative polygons are ever needed for map rendering, they belong with Model 1's coverage
+work.
 
 ## `geographic_area_types`
 
-Optional. Lets a deployment declare its own level names and their order, so the UI can render them consistently and the API can reject a district placed inside a village.
+A registry of the level names a deployment uses, so the UI can render an ordered picker.
 
 | Field | Type | Required | Description |
 |---|---|---:|---|
-| `code` | VARCHAR(50) | Yes | Level code, e.g. `DISTRICT` |
+| `code` | VARCHAR(50) | Yes | Level code, e.g. `DISTRICT` — referenced by `geographic_areas.area_type` |
 | `name` | VARCHAR(255) | Yes | Display name |
-| `level_order` | INTEGER | Yes | Depth ordering, lower is broader |
+| `level_order` | INTEGER | Yes | Smaller = broader/higher; larger = finer/deeper. Orders the picker **and** enforces containment (a child must be strictly finer than its parent) |
+| `description` | TEXT | No | Free-text operator note |
 | `status` | VARCHAR(20) | Yes | ACTIVE / INACTIVE |
 
-Without this table `area_type` is free text and the hierarchy is unvalidated beyond cycle prevention. With it, level ordering can be enforced.
+`v1` shipped this table empty; `v1.11` seeds a baseline (STATE, DIVISION, DISTRICT, TALUKA,
+CITY, ZONE, WARD, VILLAGE, SECTOR, BLOCK — in `level_order` gaps of 10) and makes
+`geographic_areas.area_type` a required FK into it. An operator adds their own rows for other
+level names; a new level's `level_order` decides where it may sit in the tree (see the
+containment rule above).
 
-## `sites`
+## Cameras attach directly to an area
 
-A site is a physical installation location — a junction, a building, a toll plaza. Cameras are installed at sites; sites sit inside geographic areas.
+A camera references a `geographic_area_id` (`NOT NULL`) at **any** level of the hierarchy — there
+is no separate "site" table. It does not reference the wider chain; ancestors are resolved by
+walking `parent_area_id`.
 
-| Field | Type | Required | Description |
-|---|---|---:|---|
-| `id` | UUID | Yes | Immutable identifier |
-| `code` | VARCHAR(100) | Yes | Unique site code |
-| `name` | VARCHAR(255) | Yes | Site name |
-| `geographic_area_id` | UUID | Yes | Containing geographic area |
-| `site_type` | VARCHAR(50) | No | Junction, building, toll plaza, etc. |
-| `address` | TEXT | No | Postal or descriptive address |
-| `latitude` | DECIMAL(10,7) | No | Site centre latitude |
-| `longitude` | DECIMAL(10,7) | No | Site centre longitude |
-| `status` | VARCHAR(20) | Yes | ACTIVE / INACTIVE |
-| `metadata` | JSONB | No | Deployment-specific attributes |
-| `created_at` | TIMESTAMPTZ | Yes | Creation time |
-| `updated_at` | TIMESTAMPTZ | Yes | Last update time |
+```text
+Camera
+  └── geographic_area_id  (any level: a district, a ward, a per-junction area…)
+       └── Geographic Area
+            └── parent chain
+```
 
-A site's coordinates describe the location as a whole. A camera keeps its own precise coordinates, because several cameras at one junction point in different directions from different poles.
+A camera keeps its own precise `latitude` / `longitude` — several cameras in one place point in
+different directions from different poles — so removing the site tier loses nothing about the
+map. A VMS target (`connector_target`) and an event carry an **optional** `geographic_area_id`
+for the same purpose; null means "no geographic key", and the scope predicates read that as
+"the geography dimension does not constrain this row".
 
 ## Example
 
@@ -98,24 +117,11 @@ Gujarat                          (area_type: STATE)
 ├── Ahmedabad                    (area_type: DISTRICT)
 │   ├── Daskroi                  (area_type: TALUKA)
 │   │   └── Village X            (area_type: VILLAGE)
-│   │        └── Site: Ring Road Junction
+│   │        └── Ring Road Jn    (area_type: SECTOR — an area the operator made for the junction)
 │   │             ├── Camera CAM-AHM-001245
 │   │             └── Camera CAM-AHM-001246
-│   └── Sanand                   (area_type: TALUKA)
+│   └── Sanand                   (area_type: TALUKA)   ← a camera could attach here directly too
 └── Surat                        (area_type: DISTRICT)
-```
-
-## Camera Relationship
-
-A camera references a `site_id`. It does not reference the wider hierarchy.
-
-```text
-Camera
-  └── site_id
-       └── Site
-            └── geographic_area_id
-                 └── Geographic Area
-                      └── parent chain
 ```
 
 Avoid:
@@ -145,7 +151,7 @@ Organization Unit               Ahmedabad
 Keeping them separate is what lets the system answer both:
 
 - Which Police cameras are in Ahmedabad?
-- Which departments have cameras at this site?
+- Which departments have cameras in this area?
 
 Merging them into one tree makes the second question unanswerable.
 
@@ -156,7 +162,7 @@ Containment is resolved by walking parents, typically with a recursive query:
 ```text
 Is CAM-001 inside Ahmedabad District?
 
-CAM-001 → Site: Ring Road Junction
+CAM-001 → Ring Road Jn
         → Village X
         → Daskroi
         → Ahmedabad District   ← match
@@ -188,13 +194,13 @@ Scope records must never list descendant IDs. Doing so means a newly added villa
 
 ## Deactivation
 
-Deactivating an area that still has active children or sites is **refused, never guessed**. The request returns `409 Conflict` with the affected children listed, and the operator resubmits with an explicit strategy.
+Deactivating an area that still has active child areas is **refused, never guessed**. The request returns `409 Conflict` with the affected children listed, and the operator resubmits with an explicit strategy.
 
 ```text
-PUT /api/v1/geographic-areas/{id}   status = INACTIVE
+POST /api/v1/geographic-areas/{id}/deactivate
         |
         v
-  Active children or sites?
+  Active child areas?
         |
    +----+----+
    |         |
@@ -203,8 +209,7 @@ PUT /api/v1/geographic-areas/{id}   status = INACTIVE
    v         v
 Deactivate  409 Conflict
             {
-              affectedAreas: [...],
-              affectedSites: [...],
+              affectedChildren: [...],
               resolutions: ["cascade", "reparent"]
             }
                   |
@@ -212,30 +217,29 @@ Deactivate  409 Conflict
        |                     |
    cascade               reparent
        |                     |
-Deactivate the area     Move direct children and
-and every descendant    sites to a new parent,
-area and site           then deactivate this area
+Deactivate the area     Move direct child areas
+and every descendant    to a new parent, then
+area                    deactivate this area
 ```
 
 ### Strategies
 
 | Strategy | Effect |
 |---|---|
-| `cascade` | The area, every descendant area, and every site beneath them become INACTIVE |
-| `reparent` | Direct child areas and sites are moved to `newParentId`, then the area alone becomes INACTIVE. Grandchildren follow their parents |
+| `cascade` | The area and every descendant area become INACTIVE |
+| `reparent` | Direct child areas are moved to `newParentId`, then the area alone becomes INACTIVE. Grandchildren follow their parents |
 
 ```http
-PUT /api/v1/geographic-areas/{id}
-{ "status": "INACTIVE", "childStrategy": "cascade" }
+POST /api/v1/geographic-areas/{id}/deactivate
+{ "childStrategy": "cascade" }
 
-PUT /api/v1/geographic-areas/{id}
-{ "status": "INACTIVE", "childStrategy": "reparent",
-  "newParentId": "…", "newAreaIdForSites": "…" }
+POST /api/v1/geographic-areas/{id}/deactivate
+{ "childStrategy": "reparent", "newParentId": "…" }
 ```
 
 `newParentId` is validated before anything moves: it must exist, be ACTIVE, and must not be the area being deactivated or any of its descendants — otherwise reparenting would detach a whole subtree from the root and leave it unreachable.
 
-**Concurrency.** Every deactivation of the geographic hierarchy takes one advisory lock for the whole hierarchy, held until its transaction commits, so two operators cannot interleave two deactivations (a reparent is a `childStrategy` inside a deactivate, not a standalone operation). Creating or reparenting an area or site under a non-ACTIVE parent is rejected (`400`, "does not exist or is not ACTIVE"), so the sequential "deactivate an area, then add a child under it" path cannot strand a live node.
+**Concurrency.** Every deactivation of the geographic hierarchy takes one advisory lock for the whole hierarchy, held until its transaction commits, so two operators cannot interleave two deactivations. Creating or reparenting an area under a non-ACTIVE parent is rejected (`400`, "does not exist or is not ACTIVE"), so the sequential "deactivate an area, then add a child under it" path cannot strand a live node.
 
 One narrow race remains: a *grandchild* created under a still-active mid-tree node in the instant an ancestor is being cascaded can be left ACTIVE under an INACTIVE ancestor. This is a list/report inconsistency only — scope resolution walks the tree ignoring `status`, so no camera or event access is silently gained or lost. `OPERATIONS.md` carries a reconciliation query that finds ACTIVE nodes with an INACTIVE ancestor; re-running the deactivation clears them.
 
@@ -250,16 +254,18 @@ Making the operator choose turns an invisible side effect into a visible decisio
 
 ## Important Rules
 
-- Geographic area and site IDs are immutable.
+- Geographic area IDs are immutable.
 - Areas cannot form circular parent relationships.
-- `area_type` values are defined by the operator, not fixed by the schema.
-- Area and site codes should be unique.
+- A child area must be a strictly finer level than its parent (`level_order` containment); changing an `area_type` coarser than an existing child is refused. Both return `400`.
+- `area_type` values are defined by the operator (rows in `geographic_area_types`), not fixed by the schema.
+- Area codes are unique **within a parent**, not globally.
 - Prefer deactivation over destructive deletion when historical records exist.
-- Organization must remain a separate hierarchy.
-- Cameras attach to geography through a site, never directly to an area.
-- Coordinates must be validated before storage.
-- Deactivating an area with active children or sites is refused until the operator chooses `cascade` or `reparent`. Neither outcome is applied silently.
+- Organization must remain a separate hierarchy. `organization_units.geographic_area_id` is a descriptive "home area" label only — never an authorization input (see `DEPARTMENT-SCHEMA.md`).
+- Cameras attach directly to a `geographic_area_id` at any level. VMS targets and events carry an optional one.
+- Camera coordinates must be validated before storage.
+- Deactivating an area with active child areas is refused until the operator chooses `cascade` or `reparent`. Neither outcome is applied silently.
 - A reparent target must be active and must not be a descendant of the area being deactivated.
+- `PUT /api/v1/geographic-areas/{id}` edits `code` / `name` / `areaType` / `description`; it refuses a `parentAreaId` change (400) — reparenting is the `/deactivate` `reparent` flow.
 
 ## API Examples
 
@@ -267,34 +273,26 @@ Making the operator choose turns an invisible side effect into a visible decisio
 POST /api/v1/geographic-areas
 GET  /api/v1/geographic-areas
 GET  /api/v1/geographic-areas/{id}
-PUT  /api/v1/geographic-areas/{id}
+PUT  /api/v1/geographic-areas/{id}          # edit fields; refuses a parent change
 
 GET  /api/v1/geographic-areas/{id}/children
 GET  /api/v1/geographic-areas/{id}/ancestors
-GET  /api/v1/geographic-areas/tree
+GET  /api/v1/geographic-areas/types         # the geographic_area_types registry
 
-# Deactivation. Returns 409 with affected children until a strategy is supplied.
-PUT  /api/v1/geographic-areas/{id}
-     { "status": "INACTIVE", "childStrategy": "cascade" }
-     { "status": "INACTIVE", "childStrategy": "reparent", "newParentId": "…" }
-
-POST /api/v1/sites
-GET  /api/v1/sites
-GET  /api/v1/sites/{id}
-PUT  /api/v1/sites/{id}
-
-GET  /api/v1/geographic-areas/{id}/sites
-GET  /api/v1/geographic-areas/{id}/cameras
+# Deactivation. Returns 409 with affectedChildren until a strategy is supplied.
+POST /api/v1/geographic-areas/{id}/deactivate
+     { "childStrategy": "cascade" }
+     { "childStrategy": "reparent", "newParentId": "…" }
 ```
+
+There is no `/api/v1/sites` — the `sites` table was removed in `v1.11`.
 
 ## Relationship With Models 1, 2 and 3
 
 ```text
                   GEOGRAPHIC AREA
                          |
-                       SITE
-                         |
-                      CAMERA
+                      CAMERA   (attaches at any area level)
                          |
        ┌─────────────────┼─────────────────┐
        |                 |                 |
@@ -304,4 +302,4 @@ GET  /api/v1/geographic-areas/{id}/cameras
 
 - **Model 1** renders coverage and gaps within an area.
 - **Model 2** inherits an observation's location from its camera.
-- **Model 3** scopes VMS integrations and events, and may attach a connector target to a site so an NVR can be geographically scoped in its own right.
+- **Model 3** scopes VMS integrations and events, and may attach a connector target to a `geographic_area_id` so an NVR can be geographically scoped in its own right.

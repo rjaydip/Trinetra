@@ -22,6 +22,31 @@ PostGIS); `Federation.Storage` `CameraRepository`, `GisQueryRepository`, `Camera
 deferred). Camera access is scoped on organization **and** geography, ANDed, via
 `CallerContext.IsUnscopedFor` / `IsUnscopedForGeography`.
 
+**Sites removed (`v1.11`).** There is no `sites` table. A camera, VMS target and event attach
+directly to a `geographic_area_id` at **any** level of the operator-defined geographic
+hierarchy — there is no fixed bottom tier. `geographic_areas.area_type` is now a required FK
+into `geographic_area_types` (a level registry, seeded with a baseline in `v1.11`); the acyclic
+trigger enforces **level-order containment** — a child area must sit at a strictly finer level
+than its parent (`child.level_order > parent.level_order`; same-level and coarser are rejected,
+skipping intervening levels is fine), and it fires on `area_type` changes too.
+`geographic_areas.code` is unique **per parent**, not globally.
+`organization_units.geographic_area_id` is a **descriptive** "home area" label only — validated
+for existence + ACTIVE, never a scope input (invariant 12). Hierarchy nodes
+(`organization_units`, `geographic_areas`, `geographic_area_types`) carry an optional
+`description`. `PUT /api/v1/organization-units/{id}` and `PUT /api/v1/geographic-areas/{id}`
+edit fields but refuse a parent change (400) — reparenting stays on the locked `/deactivate`
+`reparent` flow.
+
+**Editable roles (`v1.11`).** The seeded roles are **presets**, not a locked set: `role.manage`
+(new permission) allows renaming and re-composing them and creating custom roles via
+`/api/v1/roles` CRUD. Only `SUPER_ADMIN` is immutable. Every role write runs the same
+escalation guard as access groups — a caller not unscoped for `role.manage` cannot put a
+permission into a role they don't hold. `roles.customized_at` marks an edited preset; **a future
+migration that re-seeds preset name/description/permissions must scope its writes to
+`WHERE customized_at IS NULL`** (the `SUPER_ADMIN` permission backfill stays unconditional).
+Access groups gained `PUT /{id}` + `/activate` + `/disable` (activating a scope-incomplete group
+needs unscoped `group.manage`).
+
 Stack: **.NET 10 / ASP.NET Core minimal API**, PostgreSQL (no extensions — see below), Kafka,
 OpenSearch, deployed on **on-prem bare metal** with systemd — no Kubernetes. Scale target is **80,000
 cameras in production**, validated against a simulator; first-phase rollout is 100+ cameras.

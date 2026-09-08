@@ -95,7 +95,7 @@ public static class DetectionEndpoints
                 statusCode: StatusCodes.Status400BadRequest);
         }
 
-        var (targetId, nativeCameraId, cameraId, organizationUnitId, siteId) = resolved.Value;
+        var (targetId, nativeCameraId, cameraId, organizationUnitId, geographicAreaId) = resolved.Value;
 
         var plateRaw = request.Attributes?.GetValueOrDefault(PlateNumberKey);
         var plateNormalized = string.IsNullOrEmpty(plateRaw)
@@ -119,7 +119,7 @@ public static class DetectionEndpoints
         await using var work = await UnitOfWork.BeginAsync(db, ct);
 
         var inserted = await detections.IngestAsync(
-            evt, targetId, nativeCameraId, cameraId, organizationUnitId, siteId,
+            evt, targetId, nativeCameraId, cameraId, organizationUnitId, geographicAreaId,
             plateNormalized, caller, work, ct);
 
         if (inserted)

@@ -50,9 +50,6 @@ try
         ["area", "add"]     => await ProvisioningCommands.AddAreaAsync(options, AdminServices.Geography(db), db, cancellation.Token),
         ["area", "list"]    => await ProvisioningCommands.ListAreasAsync(AdminServices.Geography(db), cancellation.Token),
 
-        ["site", "add"]     => await ProvisioningCommands.AddSiteAsync(options, AdminServices.Geography(db), db, cancellation.Token),
-        ["site", "list"]    => await ProvisioningCommands.ListSitesAsync(AdminServices.Geography(db), cancellation.Token),
-
         ["user", "add"]     => await ProvisioningCommands.AddUserAsync(options, AdminServices.Users(db), db, cancellation.Token),
         ["user", "list"]    => await ProvisioningCommands.ListUsersAsync(AdminServices.Users(db), cancellation.Token),
         ["user", "grant"]   => await ProvisioningCommands.GrantGroupAsync(options, AdminServices.Users(db), db, cancellation.Token),
@@ -149,11 +146,8 @@ static void PrintUsage() => Console.WriteLine("""
       unit list
 
     GEOGRAPHY  (where a camera is) — levels are yours to define
-      area add  --code AHM --name Ahmedabad --type DISTRICT [--parent GJ]
+      area add  --code AHM --name Ahmedabad --type DISTRICT [--parent GJ] [--description …]
       area list
-      site add  --code SITE-RR --name "Ring Road Junction" --area VILX
-                [--type JUNCTION] [--lat 23.0225] [--lon 72.5714]
-      site list
 
     ACCESS
       user add   --username rahul --name "Rahul" [--email …]     (prompts for password)
@@ -170,7 +164,7 @@ static void PrintUsage() => Console.WriteLine("""
 
       target add  --code AHM-NVR-01 --unit AHM-CP --endpoint http://10.0.0.5
                   --vendor Onvif|HikvisionIsapi|DahuaCgi --credential vault://vms/1
-                  [--site SITE-RR] [--name …] [--expect-cameras 32] [--no-verify-tls]
+                  [--area VILX] [--name …] [--expect-cameras 32] [--no-verify-tls]
           CP Plus and other Dahua OEM units use --vendor DahuaCgi.
 
       target list

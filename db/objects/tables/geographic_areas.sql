@@ -7,6 +7,7 @@ CREATE TABLE federation.geographic_areas (
     code character varying(50) NOT NULL,
     name character varying(255) NOT NULL,
     area_type character varying(50) NOT NULL,
+    description text,
     status character varying(20) DEFAULT 'ACTIVE'::character varying NOT NULL,
     metadata jsonb DEFAULT '{}'::jsonb NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
@@ -15,11 +16,11 @@ CREATE TABLE federation.geographic_areas (
 );
 
 --
--- Name: geographic_areas geographic_areas_code_key; Type: CONSTRAINT; Schema: federation; Owner: -
+-- Name: geographic_areas geographic_areas_parent_code_key; Type: CONSTRAINT; Schema: federation; Owner: -
 --
 
 ALTER TABLE ONLY federation.geographic_areas
-    ADD CONSTRAINT geographic_areas_code_key UNIQUE (code);
+    ADD CONSTRAINT geographic_areas_parent_code_key UNIQUE NULLS NOT DISTINCT (parent_area_id, code);
 
 --
 -- Name: geographic_areas geographic_areas_pkey; Type: CONSTRAINT; Schema: federation; Owner: -
@@ -44,7 +45,7 @@ CREATE INDEX ix_geo_area_type ON federation.geographic_areas USING btree (area_t
 -- Name: geographic_areas trg_geo_area_acyclic; Type: TRIGGER; Schema: federation; Owner: -
 --
 
-CREATE TRIGGER trg_geo_area_acyclic BEFORE INSERT OR UPDATE OF parent_area_id ON federation.geographic_areas FOR EACH ROW EXECUTE FUNCTION federation.assert_geographic_area_acyclic();
+CREATE TRIGGER trg_geo_area_acyclic BEFORE INSERT OR UPDATE OF parent_area_id, area_type ON federation.geographic_areas FOR EACH ROW EXECUTE FUNCTION federation.assert_geographic_area_acyclic();
 
 --
 -- Name: geographic_areas geographic_areas_parent_area_id_fkey; Type: FK CONSTRAINT; Schema: federation; Owner: -
@@ -52,3 +53,10 @@ CREATE TRIGGER trg_geo_area_acyclic BEFORE INSERT OR UPDATE OF parent_area_id ON
 
 ALTER TABLE ONLY federation.geographic_areas
     ADD CONSTRAINT geographic_areas_parent_area_id_fkey FOREIGN KEY (parent_area_id) REFERENCES federation.geographic_areas(id);
+
+--
+-- Name: geographic_areas geographic_areas_area_type_fkey; Type: FK CONSTRAINT; Schema: federation; Owner: -
+--
+
+ALTER TABLE ONLY federation.geographic_areas
+    ADD CONSTRAINT geographic_areas_area_type_fkey FOREIGN KEY (area_type) REFERENCES federation.geographic_area_types(code);

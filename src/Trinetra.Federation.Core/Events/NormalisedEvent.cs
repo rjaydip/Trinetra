@@ -49,14 +49,14 @@ public sealed record NormalisedEvent
     public required Guid OrganizationUnitId { get; init; }
 
     /// <summary>
-    /// Physical site, when known.
+    /// Geographic area, when known — the event's geo-scope key.
     /// </summary>
     /// <remarks>
     /// Populated from the connector target today. Once Model 1's camera registry exists and
     /// reconciliation runs, it will come from the camera — which is what completes geographic
     /// scoping for events.
     /// </remarks>
-    public Guid? SiteId { get; init; }
+    public Guid? GeographicAreaId { get; init; }
 
     public required EventType EventType { get; init; }
 

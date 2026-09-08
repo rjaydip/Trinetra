@@ -52,6 +52,15 @@ public static class HierarchyEndpoints
               + "An organization on its own owns nothing — add units beneath it before a VMS "
               + "target can be assigned anywhere.");
 
+        group.MapPut("/{id:guid}", UpdateOrganizationAsync)
+          .RequirePermission("organization.manage")
+          .WithSummary("Update an organization")
+          .WithDescription(
+              "Replaces `code`, `name`, `organizationType` and `description`; `status` is left "
+              + "as-is when omitted (deactivate through the lifecycle route, not by clearing a "
+              + "field). Unscoped `organization.manage` only, the same as create — editing an "
+              + "organization affects every department inside it. 404 if the id is unknown.");
+
         group.MapGet("/{id:guid}/units", ListUnitsAsync)
           .RequirePermission("organization.read")
           .WithSummary("List an organization's units")
@@ -69,6 +78,26 @@ public static class HierarchyEndpoints
               + "Placement is a security decision, not just taxonomy: a caller granted a unit is "
               + "granted everything beneath it, so a unit created in the wrong place widens who "
               + "can see the targets assigned to it.");
+
+        app.MapGet("/api/v1/organization-units/{id:guid}", GetUnitAsync)
+          .RequireAuthorization().WithTags(ApiTags.Organizations)
+          .RequirePermission("organization.read")
+          .WithSummary("Read one organization unit")
+          .WithDescription(
+              "Code, name, type, parent and status for a single unit. A unit the caller has no "
+              + "grant over returns 404.");
+
+        app.MapPut("/api/v1/organization-units/{id:guid}", UpdateUnitAsync)
+          .RequireAuthorization().WithTags(ApiTags.Organizations)
+          .RequirePermission("organization.manage")
+          .WithSummary("Update an organization unit")
+          .WithDescription(
+              "Edits `code`, `name` and `unitType`; `status` is left as-is when omitted. "
+              + "`organizationId` in the body is ignored (a unit cannot move between "
+              + "organizations) and `parentUnitId` must match the current parent — re-parenting "
+              + "has its own locked flow (`/deactivate` with `childStrategy: \"reparent\"`) and a "
+              + "PUT that changes it is refused with 400. 404 if the id is unknown or out of the "
+              + "caller's reach.");
 
         app.MapPost("/api/v1/organization-units/{id:guid}/deactivate", DeactivateUnitAsync)
           .RequireAuthorization().WithTags(ApiTags.Organizations)
@@ -139,44 +168,35 @@ public static class HierarchyEndpoints
           .WithSummary("Create a geographic area")
           .WithDescription(
               "Adds a node to the geographic hierarchy. `areaType` must be one of the codes from "
-              + "`GET /geographic-areas/types`; omit `parentAreaId` for a root.\n\n"
+              + "`GET /geographic-areas/types`; omit `parentAreaId` for a root. The area's level "
+              + "must be strictly finer than its parent's (`levelOrder`) — a District under a "
+              + "Village is refused with 400.\n\n"
               + "Like an organization unit, where an area sits decides who can see what is inside "
               + "it — a grant on a parent reaches every descendant.");
+
+        areas.MapPut("/{id:guid}", UpdateAreaAsync)
+          .RequirePermission("geography.manage")
+          .WithSummary("Update a geographic area")
+          .WithDescription(
+              "Edits `code`, `name`, `areaType` and `description`; `status` is left as-is when "
+              + "omitted. `areaType` must be a code from `GET /geographic-areas/types`, and "
+              + "changing it to a level equal to or coarser than this area's parent — or coarser "
+              + "than one of its own children — is refused with 400. `parentAreaId` must match "
+              + "the current parent — re-parenting has its own locked flow (`/deactivate` with "
+              + "`childStrategy: \"reparent\"`) and a PUT that changes it is refused with 400. "
+              + "404 if the id is unknown or out of the caller's reach.");
 
         areas.MapPost("/{id:guid}/deactivate", DeactivateAreaAsync)
           .RequirePermission("geography.manage")
           .WithSummary("Deactivate a geographic area")
           .WithDescription(
               "Marks an area inactive, with the same two-step refusal as unit deactivation: an "
-              + "area with active children or sites beneath it returns 409 listing what would be "
+              + "area with active child areas beneath it returns 409 listing what would be "
               + "affected, and the caller re-sends with `childStrategy` `cascade` or `reparent` "
               + "plus `newParentId`.\n\n"
               + "A reparent target inside the branch being deactivated is a 400 — it would leave "
               + "the children under an inactive ancestor.");
 
-        var sites = app.MapGroup("/api/v1/sites")
-                       .WithTags(ApiTags.Geography)
-                       .RequireAuthorization();
-
-        sites.MapGet("/", ListSitesAsync)
-          .RequirePermission("geography.read")
-          .WithSummary("List sites")
-          .WithDescription(
-              "Physical installations — a control room, junction, campus or building — each "
-              + "pinned to a geographic area and carrying an address and coordinates. Filter to "
-              + "one area with `areaId`.\n\n"
-              + "A site is what a VMS target's `siteId` points at, so this is the list to draw a "
-              + "site picker from during onboarding.");
-
-        sites.MapPost("/", CreateSiteAsync)
-          .RequirePermission("geography.manage")
-          .WithSummary("Create a site")
-          .WithDescription(
-              "Registers a physical location inside a geographic area. Latitude and longitude are "
-              + "plain decimals with range checks — the platform stores no spatial types, and "
-              + "coverage geometry belongs to Model 1 rather than to this API.\n\n"
-              + "Create the site before the VMS targets installed at it, so each target can be "
-              + "assigned one at registration.");
     }
 
     // Explicit projections rather than serialising the storage records directly: a column added
@@ -186,14 +206,11 @@ public static class HierarchyEndpoints
         new(o.Id, o.Code, o.Name, o.OrganizationType, o.Description, o.Status);
 
     private static OrganizationUnitResponse ToResponse(OrganizationUnit u) =>
-        new(u.Id, u.OrganizationId, u.ParentUnitId, u.Code, u.Name, u.UnitType, u.Status);
+        new(u.Id, u.OrganizationId, u.ParentUnitId, u.Code, u.Name, u.UnitType,
+            u.Description, u.GeographicAreaId, u.Status);
 
     private static GeographicAreaResponse ToResponse(GeographicArea a) =>
-        new(a.Id, a.ParentAreaId, a.Code, a.Name, a.AreaType, a.Status);
-
-    private static SiteResponse ToResponse(Site s) =>
-        new(s.Id, s.Code, s.Name, s.GeographicAreaId, s.SiteType, s.Address,
-            s.Latitude, s.Longitude, s.Status);
+        new(a.Id, a.ParentAreaId, a.Code, a.Name, a.AreaType, a.Description, a.Status);
 
     /// <summary>
     /// Shared deactivation flow for both hierarchies.
@@ -236,8 +253,7 @@ public static class HierarchyEndpoints
                     statusCode: StatusCodes.Status409Conflict,
                     extensions: new Dictionary<string, object?>
                     {
-                        ["affectedAreas"] = conflict.AffectedAreas,
-                        ["affectedSites"] = conflict.AffectedSites,
+                        ["affectedChildren"] = conflict.AffectedChildren,
                         ["resolutions"] = Resolutions,
                     });
             }
@@ -301,6 +317,96 @@ public static class HierarchyEndpoints
         return TypedResults.Created($"/api/v1/organizations/{id}", new CreatedResponse(id));
     }
 
+    private static async Task<Results<Ok<OrganizationResponse>, NotFound>> UpdateOrganizationAsync(
+        Guid id, [FromBody] OrganizationRequest request, OrganizationRepository repo,
+        NpgsqlDataSource db, HttpContext http, CancellationToken ct)
+    {
+        var caller = CallerContextFactory.From(http);
+        caller.Require("organization.manage");
+
+        if (await repo.GetAsync(id, caller, ct) is not { } prior)
+        {
+            return TypedResults.NotFound();
+        }
+
+        await using var work = await UnitOfWork.BeginAsync(db, ct);
+
+        var updated = new Organization
+        {
+            Id = id,
+            Code = request.Code,
+            Name = request.Name,
+            OrganizationType = request.OrganizationType,
+            Description = request.Description,
+            Status = request.Status ?? prior.Status,
+        };
+        await repo.UpsertAsync(updated, caller, work, ct);
+
+        await work.AuditAsync(caller, "update", "organization", id.ToString(),
+            before: ToResponse(prior), after: ToResponse(updated), organizationUnitId: null, ct);
+        await work.CommitAsync(ct);
+
+        return TypedResults.Ok(ToResponse(updated));
+    }
+
+    private static async Task<Results<Ok<OrganizationUnitResponse>, NotFound>> GetUnitAsync(
+        Guid id, OrganizationRepository repo, HttpContext http, CancellationToken ct)
+    {
+        var caller = CallerContextFactory.From(http);
+        var unit = await repo.GetUnitAsync(id, caller, ct);
+        return unit is null ? TypedResults.NotFound() : TypedResults.Ok(ToResponse(unit));
+    }
+
+    private static async Task<Results<Ok<OrganizationUnitResponse>, NotFound, ProblemHttpResult>> UpdateUnitAsync(
+        Guid id, [FromBody] OrganizationUnitRequest request, OrganizationRepository repo,
+        NpgsqlDataSource db, HttpContext http, CancellationToken ct)
+    {
+        var caller = CallerContextFactory.From(http);
+        caller.Require("organization.manage");
+
+        if (await repo.GetUnitAsync(id, caller, ct) is not { } prior)
+        {
+            return TypedResults.NotFound();
+        }
+
+        // Re-parenting is structural, not a field edit: it moves a whole subtree and everyone's
+        // view of it, and has its own locked flow. A PUT that tries to change the parent is
+        // refused and pointed there.
+        if (request.ParentUnitId != prior.ParentUnitId)
+        {
+            return TypedResults.Problem(
+                title: "Cannot re-parent through this route",
+                detail: "Changing parentUnitId moves the unit and everything beneath it. Use "
+                      + "POST /api/v1/organization-units/{id}/deactivate with "
+                      + "childStrategy 'reparent', or deactivate and recreate.",
+                statusCode: StatusCodes.Status400BadRequest);
+        }
+
+        await using var work = await UnitOfWork.BeginAsync(db, ct);
+
+        var updated = new OrganizationUnit
+        {
+            Id = id,
+            OrganizationId = prior.OrganizationId,   // a unit never moves between organizations
+            ParentUnitId = prior.ParentUnitId,
+            Code = request.Code,
+            Name = request.Name,
+            UnitType = request.UnitType,
+            Description = request.Description,
+            GeographicAreaId = request.GeographicAreaId,   // descriptive "home area" only (invariant 12)
+            Status = request.Status ?? prior.Status,
+        };
+        // parentIsChanging: false — the 400 guard above proved the parent is unchanged, so a
+        // rename must not be blocked by an INACTIVE current parent.
+        await repo.UpsertUnitAsync(updated, caller, work, ct, parentIsChanging: false);
+
+        await work.AuditAsync(caller, "update", "organization_unit", id.ToString(),
+            before: ToResponse(prior), after: ToResponse(updated), organizationUnitId: id, ct);
+        await work.CommitAsync(ct);
+
+        return TypedResults.Ok(ToResponse(updated));
+    }
+
     private static async Task<Ok<IReadOnlyList<OrganizationUnitResponse>>> ListUnitsAsync(
         Guid id, OrganizationRepository repo, HttpContext http, CancellationToken ct)
     {
@@ -325,6 +431,8 @@ public static class HierarchyEndpoints
             Code = request.Code,
             Name = request.Name,
             UnitType = request.UnitType,
+            Description = request.Description,
+            GeographicAreaId = request.GeographicAreaId,   // descriptive "home area" only (invariant 12)
             Status = request.Status ?? "ACTIVE",
         }, caller, work, ct);
 
@@ -400,12 +508,16 @@ public static class HierarchyEndpoints
 
         await using var work = await UnitOfWork.BeginAsync(db, ct);
 
+        // A bad area_type (not in the registry), a level-order containment violation from
+        // trg_geo_area_acyclic, or a duplicate code under the same parent all surface as a
+        // constraint / raised exception and are mapped to 400/409 by the global handler.
         var id = await repo.UpsertAreaAsync(new GeographicArea
         {
             ParentAreaId = request.ParentAreaId,
             Code = request.Code,
             Name = request.Name,
             AreaType = request.AreaType,
+            Description = request.Description,
             Status = request.Status ?? "ACTIVE",
         }, caller, work, ct);
 
@@ -430,39 +542,52 @@ public static class HierarchyEndpoints
             request, caller, work, "geographic_area", id, ct);
     }
 
-    private static async Task<Ok<IReadOnlyList<SiteResponse>>> ListSitesAsync(
-        Guid? areaId, GeographyRepository repo, HttpContext http, CancellationToken ct)
-    {
-        var caller = CallerContextFactory.From(http);
-        var found = await repo.ListSitesAsync(areaId, caller, ct);
-        return TypedResults.Ok<IReadOnlyList<SiteResponse>>([.. found.Select(ToResponse)]);
-    }
-
-    private static async Task<Created<CreatedResponse>> CreateSiteAsync(
-        [FromBody] SiteRequest request, GeographyRepository repo,
+    private static async Task<Results<Ok<GeographicAreaResponse>, NotFound, ProblemHttpResult>> UpdateAreaAsync(
+        Guid id, [FromBody] GeographicAreaRequest request, GeographyRepository repo,
         NpgsqlDataSource db, HttpContext http, CancellationToken ct)
     {
         var caller = CallerContextFactory.From(http);
         caller.Require("geography.manage");
 
+        if (await repo.GetAreaAsync(id, caller, ct) is not { } prior)
+        {
+            return TypedResults.NotFound();
+        }
+
+        // Re-parenting is structural — it moves a whole subtree and everyone's view of it — and
+        // has its own locked flow. A PUT that tries to change the parent is refused and pointed
+        // there.
+        if (request.ParentAreaId != prior.ParentAreaId)
+        {
+            return TypedResults.Problem(
+                title: "Cannot re-parent through this route",
+                detail: "Changing parentAreaId moves the area and everything beneath it. Use "
+                      + "POST /api/v1/geographic-areas/{id}/deactivate with "
+                      + "childStrategy 'reparent', or deactivate and recreate.",
+                statusCode: StatusCodes.Status400BadRequest);
+        }
+
         await using var work = await UnitOfWork.BeginAsync(db, ct);
 
-        var id = await repo.UpsertSiteAsync(new Site
+        var updated = new GeographicArea
         {
+            Id = id,
+            ParentAreaId = prior.ParentAreaId,
             Code = request.Code,
             Name = request.Name,
-            GeographicAreaId = request.GeographicAreaId,
-            SiteType = request.SiteType,
-            Address = request.Address,
-            Latitude = request.Latitude,
-            Longitude = request.Longitude,
-            Status = request.Status ?? "ACTIVE",
-        }, caller, work, ct);
+            AreaType = request.AreaType,
+            Description = request.Description,
+            Status = request.Status ?? prior.Status,
+        };
+        // parentIsChanging: false — the 400 guard above proved the parent is unchanged, so a
+        // rename must not be blocked by an INACTIVE current parent. An areaType change is still
+        // level-order checked (against parent and children) by trg_geo_area_acyclic → 400.
+        await repo.UpsertAreaAsync(updated, caller, work, ct, parentIsChanging: false);
 
-        await work.AuditAsync(caller, "create", "site", id.ToString(),
-            before: null, after: request, organizationUnitId: null, ct);
+        await work.AuditAsync(caller, "update", "geographic_area", id.ToString(),
+            before: ToResponse(prior), after: ToResponse(updated), organizationUnitId: null, ct);
         await work.CommitAsync(ct);
 
-        return TypedResults.Created($"/api/v1/sites/{id}", new CreatedResponse(id));
+        return TypedResults.Ok(ToResponse(updated));
     }
 }

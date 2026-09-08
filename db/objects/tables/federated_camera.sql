@@ -6,7 +6,7 @@ CREATE TABLE federation.federated_camera (
     native_camera_id text NOT NULL,
     camera_id uuid,
     organization_unit_id uuid NOT NULL,
-    site_id uuid,
+    geographic_area_id uuid,
     name text,
     vendor_model text,
     firmware text,
@@ -57,11 +57,11 @@ ALTER TABLE ONLY federation.federated_camera
     ADD CONSTRAINT federated_camera_organization_unit_id_fkey FOREIGN KEY (organization_unit_id) REFERENCES federation.organization_units(id);
 
 --
--- Name: federated_camera federated_camera_site_id_fkey; Type: FK CONSTRAINT; Schema: federation; Owner: -
+-- Name: federated_camera federated_camera_geographic_area_id_fkey; Type: FK CONSTRAINT; Schema: federation; Owner: -
 --
 
 ALTER TABLE ONLY federation.federated_camera
-    ADD CONSTRAINT federated_camera_site_id_fkey FOREIGN KEY (site_id) REFERENCES federation.sites(id);
+    ADD CONSTRAINT federated_camera_geographic_area_id_fkey FOREIGN KEY (geographic_area_id) REFERENCES federation.geographic_areas(id);
 
 --
 -- Name: federated_camera federated_camera_target_id_fkey; Type: FK CONSTRAINT; Schema: federation; Owner: -
