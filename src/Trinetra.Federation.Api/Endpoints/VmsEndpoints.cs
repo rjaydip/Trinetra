@@ -38,13 +38,15 @@ public static class VmsEndpoints
         var group = app.MapGroup("/api/v1/vms").WithTags(ApiTags.Vms).RequireAuthorization();
 
         group.MapGet("/", ListAsync)
+          .WithPaginatedResponse<VmsResponse>()
           .RequirePermission("vms.read")
           .WithSummary("List the VMS targets the caller can reach")
           .WithDescription(
               "Every connector target within the caller's organization and geography scope, with "
               + "its vendor, endpoint, current state and expected camera count. Targets outside "
               + "scope are absent rather than refused. Credential *references* appear here; "
-              + "credential values never do.");
+              + "credential values never do.\n\n"
+              + Paginate.Doc);
 
         group.MapGet("/{id:guid}", GetAsync)
           .RequirePermission("vms.read")
@@ -151,6 +153,7 @@ public static class VmsEndpoints
               + "— check its state and its connection test before reading anything into it.");
 
         group.MapGet("/{id:guid}/cameras", CamerasAsync)
+          .WithPaginatedResponse<FederatedCameraResponse>()
           .RequirePermission("vms.read")
           .WithSummary("List the cameras discovered behind this target")
           .WithDescription(
@@ -301,11 +304,16 @@ public static class VmsEndpoints
         State = t.State.ToString(),
     };
 
-    private static async Task<Ok<IReadOnlyList<VmsResponse>>> ListAsync(
-        ConnectorTargetRepository repo, HttpContext http, CancellationToken ct)
+    private const int TargetListHardCap = 1000;
+
+    private static async Task<IResult> ListAsync(
+        int? page, int? pageSize, ConnectorTargetRepository repo, HttpContext http, CancellationToken ct)
     {
-        var targets = await repo.ListAsync(CallerContextFactory.From(http), ct);
-        return TypedResults.Ok<IReadOnlyList<VmsResponse>>([.. targets.Select(ToResponse)]);
+        var q = new PageQuery(page, pageSize);
+        var targets = await repo.ListAsync(
+            CallerContextFactory.From(http),
+            new PageWindow(q.Limit(TargetListHardCap, TargetListHardCap), q.Offset(TargetListHardCap)), ct);
+        return Paginate.Render(http, q, TargetListHardCap, [.. targets.Items.Select(ToResponse)], targets.Total);
     }
 
     private static async Task<Results<Ok<VmsResponse>, NotFound>> GetAsync(

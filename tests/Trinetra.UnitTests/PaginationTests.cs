@@ -38,6 +38,14 @@ public sealed class PaginationTests
     }
 
     [Fact]
+    public void Offset_ComputedInLong_DoesNotOverflow()
+    {
+        // ?page=50_000_000&pageSize=1000 → 5e10, which wraps int to a negative value.
+        new PageQuery(50_000_000, 1000).Offset(1000).ShouldBe(49_999_999_000L);
+        new PageQuery(int.MaxValue, 1000).Offset(1000).ShouldBeGreaterThan(0L);
+    }
+
+    [Fact]
     public void PageResult_ComputesTotalPages()
     {
         new PageResult<int>([], 1, 50, 0).TotalPages.ShouldBe(0);

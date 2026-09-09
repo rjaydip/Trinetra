@@ -36,35 +36,47 @@ public sealed class WatchlistRepository
 
     public WatchlistRepository(NpgsqlDataSource dataSource) => _dataSource = dataSource;
 
-    public async Task<IReadOnlyList<WatchlistEntry>> ListAsync(
-        CallerContext caller, CancellationToken ct)
+    /// <summary>
+    /// One page of watchlist entries within the caller's reach, with the full match count. A
+    /// plate watchlist can run to tens of thousands of rows, so this is always bounded.
+    /// <paramref name="active"/> filters to active (<c>true</c>) or retired (<c>false</c>)
+    /// entries; null returns both.
+    /// </summary>
+    public async Task<PagedRows<WatchlistEntry>> ListAsync(
+        bool? active, PageWindow window, CallerContext caller, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(caller);
         caller.Require("alert.read");
 
-        var sql = caller.IsUnscopedFor("alert.read")
-            ? """
-              SELECT id, organization_unit_id, plate_number_normalized, reason, severity,
-                     is_active, created_at, created_by
-              FROM federation.watchlist_entry ORDER BY created_at DESC;
-              """
+        var reachClause = caller.IsUnscopedFor("alert.read")
+            ? ""
             : """
-              SELECT id, organization_unit_id, plate_number_normalized, reason, severity,
-                     is_active, created_at, created_by
-              FROM federation.watchlist_entry
-              WHERE organization_unit_id IN (
+              AND organization_unit_id IN (
                   SELECT organization_unit_id
                   FROM federation.authorized_org_units(
                            p_user_id => @UserId, p_api_key_id => @ApiKeyId,
                            p_permission => 'alert.read'))
-              ORDER BY created_at DESC;
               """;
 
         await using var c = await _dataSource.OpenConnectionAsync(ct);
-        var rows = await c.QueryAsync<EntryRow>(new CommandDefinition(
-            sql, new { caller.UserId, caller.ApiKeyId }, cancellationToken: ct));
+        var rows = (await c.QueryAsync<EntryRow, long, (EntryRow E, long T)>(
+            new CommandDefinition($"""
+                SELECT id, organization_unit_id, plate_number_normalized, reason, severity,
+                       is_active, created_at, created_by, count(*) OVER() AS total_count
+                FROM federation.watchlist_entry
+                WHERE (@active::bool IS NULL OR is_active = @active)
+                  {reachClause}
+                ORDER BY created_at DESC, id
+                LIMIT @limit OFFSET @offset;
+                """, new
+            {
+                active, caller.UserId, caller.ApiKeyId,
+                limit = window.Limit, offset = window.Offset,
+            }, cancellationToken: ct),
+            (e, t) => (e, t), splitOn: "total_count")).ToList();
 
-        return [.. rows.Select(r => r.ToDomain())];
+        return new PagedRows<WatchlistEntry>(
+            [.. rows.Select(r => r.E.ToDomain())], rows.Count > 0 ? PagedCount.From(rows[0].T) : 0);
     }
 
     public async Task<Guid> CreateAsync(
@@ -180,8 +192,17 @@ public sealed class WatchlistRepository
     /// (<c>false</c>) alerts; null returns both. <paramref name="plate"/> is matched against the
     /// entry's normalised plate.
     /// </summary>
+    /// <summary>
+    /// One page of raised alerts within the caller's reach, with the full match count. Filters:
+    /// <paramref name="acknowledged"/> (true = acked / false = outstanding / null = both),
+    /// <paramref name="plate"/> (exact normalised plate), <paramref name="entryId"/> (one
+    /// watchlist entry), <paramref name="severity"/>, and a <paramref name="from"/>/<paramref
+    /// name="to"/> window on <c>raised_at</c>.
+    /// </summary>
     public async Task<PagedRows<WatchlistAlertRow>> ListAlertsAsync(
-        bool? acknowledged, string? plate, PageWindow window, CallerContext caller, CancellationToken ct)
+        bool? acknowledged, string? plate, Guid? entryId, string? severity,
+        DateTimeOffset? from, DateTimeOffset? to,
+        PageWindow window, CallerContext caller, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(caller);
         caller.Require("alert.read");
@@ -208,18 +229,23 @@ public sealed class WatchlistRepository
                        OR (@acknowledged AND a.acknowledged_at IS NOT NULL)
                        OR (NOT @acknowledged AND a.acknowledged_at IS NULL))
                   AND (@plate::text IS NULL OR w.plate_number_normalized = @plate)
+                  AND (@entryId::uuid IS NULL OR a.watchlist_entry_id = @entryId)
+                  AND (@severity::text IS NULL OR w.severity = @severity)
+                  AND (@from::timestamptz IS NULL OR a.raised_at >= @from)
+                  AND (@to::timestamptz IS NULL OR a.raised_at < @to)
                   {reachClause}
                 ORDER BY a.raised_at DESC, a.id
                 LIMIT @limit OFFSET @offset;
                 """, new
             {
-                acknowledged, plate, caller.UserId, caller.ApiKeyId,
+                acknowledged, plate, entryId, severity, from, to,
+                caller.UserId, caller.ApiKeyId,
                 limit = window.Limit, offset = window.Offset,
             }, cancellationToken: ct),
             (r, t) => (r, t), splitOn: "total_count")).ToList();
 
         return new PagedRows<WatchlistAlertRow>(
-            [.. rows.Select(x => x.R)], rows.Count > 0 ? (int)rows[0].T : 0);
+            [.. rows.Select(x => x.R)], rows.Count > 0 ? PagedCount.From(rows[0].T) : 0);
     }
 
     /// <summary>

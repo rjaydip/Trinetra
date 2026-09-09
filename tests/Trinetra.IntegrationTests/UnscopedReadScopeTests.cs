@@ -336,6 +336,20 @@ public sealed class UnscopedReadScopeTests : IClassFixture<PostgresFixture>, IAs
     }
 
     [Fact]
+    public async Task GroupMembers_ListPage_NonEmptyRoster_Maps()
+    {
+        // Regression: the paged member query's splitOn was wrong and threw on any non-empty
+        // roster — the suite stayed green only because every fixture group had an empty page.
+        var page = await Groups.ListMembersPageAsync(
+            GroupInReach, UnscopedCaller(), new PageWindow(10, 0), CancellationToken.None);
+
+        page.Total.ShouldBeGreaterThan(0);
+        page.Items.Count.ShouldBe(page.Total);
+        page.Items.Select(m => m.UserId).ShouldContain(UserInReach);
+        page.Items.ShouldAllBe(m => !string.IsNullOrEmpty(m.Username));
+    }
+
+    [Fact]
     public async Task GroupMembers_UnscopedCaller_SeesEveryMember()
     {
         var members = (await Groups.ListMembersAsync(GroupInReach, UnscopedCaller(), CancellationToken.None))

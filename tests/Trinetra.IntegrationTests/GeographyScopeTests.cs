@@ -163,8 +163,9 @@ public sealed class GeographyScopeTests : IClassFixture<PostgresFixture>, IAsync
     public async Task Vms_ListAsync_ReturnsInDistrictAndSiteLess_NotOutOfDistrict()
     {
         var repo = new ConnectorTargetRepository(_fixture.DataSource);
-        var ids = (await repo.ListAsync(ScopedCaller(), CancellationToken.None))
-            .Select(t => t.Id).ToHashSet();
+        var ids = (await repo.ListAsync(
+                ScopedCaller(), PageWindow.UpTo(1000), CancellationToken.None))
+            .Items.Select(t => t.Id).ToHashSet();
 
         ids.ShouldContain(TargetIn);
         ids.ShouldContain(TargetNoSite);

@@ -78,7 +78,7 @@ public sealed class GisQueryRepository
             (r, t) => (r, t), splitOn: "total_count")).ToList();
 
         return new PagedRows<GisCameraRow>(
-            [.. rows.Select(x => x.R)], rows.Count > 0 ? (int)rows[0].T : 0);
+            [.. rows.Select(x => x.R)], rows.Count > 0 ? PagedCount.From(rows[0].T) : 0);
     }
 
     /// <summary>One camera's point and coverage inputs, or null if the caller cannot reach it.</summary>
@@ -200,4 +200,4 @@ public readonly record struct GisFeedFilter(
     Guid? OrganizationUnitId,
     string? OperationalStatus,
     string? MaintenanceStatus,
-    int Offset = 0);
+    long Offset = 0);

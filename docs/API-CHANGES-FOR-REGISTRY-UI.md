@@ -1,11 +1,11 @@
 # API changes since the `d/registry-ui` fork
 
 Everything the `d/registry-ui` frontend (`frontend/src/api/`) must adapt to when it rebases onto
-`main`, through **`v1.11`** (drop sites, editable roles, group lifecycle) and **`v1.12`** (role
-& access-group status lifecycle, cross-organization unit move, `role.read`). Grouped
-**breaking → new → additive**. Each change names where it is documented: the live OpenAPI
-(`.WithSummary` / `.WithDescription` on every route, served at `/scalar` and
-`/openapi/v1.json`) plus the `docs/*.md` reference.
+`main`, through **`v1.11`** (drop sites, editable roles, group lifecycle), **`v1.12`** (role
+& access-group status lifecycle, cross-organization unit move, `role.read`) and the
+**list-pagination wave** (§5). Grouped **breaking → new → additive**. Each change names where
+it is documented: the live OpenAPI (`.WithSummary` / `.WithDescription` on every route, served
+at `/scalar` and `/openapi/v1.json`) plus the `docs/*.md` reference.
 
 The frontend client of record is `frontend/src/api/endpoints.ts` + `frontend/src/api/models.ts`.
 
@@ -197,9 +197,63 @@ Not required for the registry UI unless an audit view is wanted.
 
 ---
 
-## 4. Not changed (frontend already correct)
+## 5. LIST PAGINATION (additive, but changes response shape when opted in)
 
-`GET /api/v1/cameras` paging, `GET /api/v1/gis/*`, `POST /api/v1/vms/{id}/test`, credential
-`PUT`/`status`, watchlist, api-keys, `GET /api/v1/overview`, camera health/maintenance — all
-unchanged in shape. The camera list `geographicAreaId` filter already existed; only `siteId`
-was removed from it.
+**Opt-in.** These list endpoints now accept `?page` (1-based) and `?pageSize` (default 50,
+clamped to the endpoint's max):
+
+`GET /users` · `/access-groups` · `/access-groups/{id}/members` · `/organizations` ·
+`/organizations/{id}/units` · `/geographic-areas` · `/geographic-areas/{id}/children` ·
+`/api-keys` · `/vms` · `/vms/{id}/cameras` · `/watchlist` · `/watchlist/alerts` · `/worker-health`
+
+### Two response shapes
+
+| Request | Body |
+|---|---|
+| **no `?page`** | the **bare array**, unchanged from today — but capped at a safety maximum (1000; 2000 for `/vms/{id}/cameras`; 5000 for the GIS feed) |
+| **with `?page`** | `{ "items": [...], "page": N, "pageSize": M, "total": T, "totalPages": P }` |
+
+### Headers (both shapes)
+
+- **`X-Total-Count`** — the full match count, always set.
+- **`X-Result-Capped: true`** — set only on the bare-array form when the safety cap trimmed the
+  result. A client that shows a list *must* check this or it will silently display a partial
+  set.
+- **`X-Page` / `X-Page-Size`** — echoed on the GIS feed only (see below).
+
+> **CORS:** the API now sends `Access-Control-Expose-Headers: X-Total-Count, X-Result-Capped,
+> X-Page, X-Page-Size`. A browser `fetch` cannot read these otherwise.
+
+### The GIS feed is the exception
+
+`GET /api/v1/gis/cameras` still returns a GeoJSON `FeatureCollection` (never a wrapper).
+Pagination is entirely via `?page` / `?pageSize` + the `X-*` headers above. Without `?page` it
+caps at 5000 features and sets `X-Result-Capped`.
+
+### New filters
+
+- **`GET /watchlist`** — `?active` (`true` / `false`, omit for both).
+- **`GET /watchlist/alerts`** — `?acknowledged` (`true` / `false`), `?plate` (exact normalised
+  plate), `?entryId`, `?severity`, `?from` / `?to` (on the raised time).
+
+### Detection search is *not* paginated
+
+`GET /api/v1/detections` (`15-M2`) stays a bare array. It now enforces a **31-day max window**
+(400 otherwise) and caps `limit` at **500** — or **5000** when `?plateNumber` is set.
+
+### Not paginated (bounded by design)
+
+`GET /api/v1/cameras` and `/events` already use keyset cursors — unchanged. `/roles`,
+`/permissions`, `/geographic-areas/types` are small reference sets.
+
+- **Docs:** `docs/API-REVIEW-FINDINGS.md` "PAGINATION WAVE"; each route's OpenAPI description
+  carries the boilerplate. `frontend/src/api/endpoints.ts` — each of the 13 routes above needs a
+  union return type and to branch on "did I send `?page`".
+
+---
+
+## 6. Not changed (frontend already correct)
+
+`GET /api/v1/cameras` paging, `POST /api/v1/vms/{id}/test`, credential `PUT`/`status`,
+`GET /api/v1/overview`, camera health/maintenance — all unchanged in shape. The camera list
+`geographicAreaId` filter already existed; only `siteId` was removed from it.

@@ -122,10 +122,44 @@ all.
   `limit` hard-capped at 500.
 - **`10-M2`** GIS feed: body stays a `FeatureCollection` (can't wrap GeoJSON); pagination via
   `page`/`pageSize` + `X-Total-Count` / `X-Result-Capped` / `X-Page` / `X-Page-Size` headers.
-- Tests: `PaginationTests` (9 unit), `UnscopedReadScopeTests.Users_ListPage_*` (2, offset
-  sabotage-checked). Suite: 116 unit / 236 integration + 18 pre-existing.
+- Tests: `PaginationTests` (10 unit), `UnscopedReadScopeTests.Users_ListPage_*` +
+  `GroupMembers_ListPage_*` (3, sabotage-checked). Suite: 117 unit / 237 integration + 18 pre-existing.
 - NOT covered (own findings, not this wave): `17-M1/M2/M3` heartbeat spoofing, `17-L3` worker
   list is still unscoped (hostname disclosure).
+
+**PR9 REVIEW (BA + dotnet-expert, retrospective, 2026-09-09) — committed `f0f8eb6`, fixes uncommitted.**
+Both agents reviewed the committed wave. Fixes applied on top:
+- **[BLOCKER, dotnet] `AccessGroupRepository.ListMembersPageAsync` — wrong `splitOn`, 500 on any
+  non-empty roster.** The 4-type primitive multi-map used `splitOn: "expires_at,total_count"`
+  (needs 3 splits, first must be `username`). The suite stayed green because every fixture
+  group's page was empty. Fixed: `MemberRow` class + `<MemberRow, long>` map + `splitOn:
+  "total_count"`. New `GroupMembers_ListPage_NonEmptyRoster_Maps` test, sabotage-checked (revert
+  → `Multi-map error: splitOn column 'expires_at' was not found`).
+- **[BLOCKER, dotnet] `PageQuery.Offset` int overflow.** `(Page-1)*pageSize` with an unbounded
+  `?page` wraps `int` → negative `OFFSET` → PG error. Fixed: computed in `long` + `Math.Max(0, …)`;
+  `PageWindow.Offset` is now `long`. New `Offset_ComputedInLong_DoesNotOverflow` test.
+- **[BLOCKER, BA / SHOULD, dotnet] CORS did not expose the `X-*` headers** — a browser `fetch`
+  could not read `X-Total-Count` / `X-Result-Capped` / `X-Page` / `X-Page-Size`, so the entire
+  cap signal (the exact `10-M2` failure) was invisible to the SPA. Fixed:
+  `.WithExposedHeaders(…)` in `ApiHttpExtensions`.
+- **[SHOULD, dotnet] `Task<IResult>` erased the 200 schema from OpenAPI.** Added
+  `.WithPaginatedResponse<T>()` (`.Produces<PageResult<T>>` + `.Produces<IReadOnlyList<T>>`) on
+  all 13 list routes.
+- **[NIT, dotnet] unchecked `(int)` cast of `count(*) OVER()`** → `PagedCount.From` (saturating).
+  `PagedRows<T>` is a `sealed record` (no null-`Items` default).
+- **[SHOULD, BA] Two list endpoints were missed** — added the opt-in pattern to
+  **`GET /watchlist`** (entries, + `?active` filter) and **`GET /vms`** (targets).
+- **[SHOULD, BA] `16-M4` filters** — `/watchlist/alerts` gained `entryId`, `severity`,
+  `from`/`to` (on top of `acknowledged` + `plate`).
+- **[SHOULD, BA] Detection search 500-row ceiling blocked "a month of one plate"** — the cap is
+  now **5000 when `?plateNumber` is set**, 500 otherwise.
+- **OWNER DECISIONS:** keep the soft `X-Result-Capped` header (not a 400) on the 1000-cap admin
+  lists; add the two missing endpoints + alert filters now; lift detection cap only with a plate.
+- **NOT fixed (accepted / deferred):** over-paged request reports `total: 0` — documented, client
+  computes `totalPages` from page 1 (dotnet #3). `/vms/{id}/cameras` has no page-number ceiling —
+  `OFFSET` grows with `page` (BA #4). `FederationQueryRepository.CamerasAsync` still takes no
+  `CallerContext` — pre-existing, F9 wave (dotnet #8). Sort control, keyset cursor for detection
+  search, `17-L3` scoping — future.
 
 **VALIDATION / ERROR-SHAPE WAVE:**
 `5-M2` area_type free text, `5-M9` over-long code → 500, `5-M10` phantom 204, `6-M2/M3` scope-field
@@ -746,7 +780,7 @@ Review 2026-09-04. Write paths are meticulously guarded (escalation chokepoint +
 - **6-M5** Email unvalidated + not unique on `CreateAsync`/`UpdateAsync` — needed for F2 (forgot
   password) and F3 (SSO account linking). Add format check + unique constraint + (later)
   verification state.
-- **6-M6** ✅ PR9 — `?page`/`?pageSize` on users / groups / members; `count(*) OVER()`.
+- **6-M6** ✅ PR9 (+ review fix — the paged members query 500'd on any non-empty roster; fixed).
 - **6-M6 (orig)** No pagination on `ListAsync` (users), `ListAsync` (groups), `MembersAsync`. Same class
   as 5-M7. Thousands of users/members at scale.
 - **6-M7** `CreateAsync` (group) and `AddScopeAsync` audit `after: request` — raw DTO incl.
@@ -1335,7 +1369,7 @@ Review 2026-09-04.
 - **16-M3** `AcknowledgeAsync` audit `organizationUnitId: null` + `before: null` — loses the org
   dimension; doesn't record prior ack state. Behaviour of acknowledging an already-acked alert
   (re-ack vs 404) unclear from `AcknowledgeAlertAsync` bool.
-- **16-M4** ✅ PR9 — `?page`/`?pageSize` + `acknowledged` (bool) and `plate` filters on `/watchlist/alerts`.
+- **16-M4** ✅ PR9 + review — `?page`/`?pageSize` + `acknowledged` / `plate` / `entryId` / `severity` / `from` / `to` filters on `/watchlist/alerts`.
 - **16-M4 (orig)** `ListAlertsAsync` — only `limit`. No filter by entry / plate / acknowledged-state /
   time window, no cursor. An operator working the alert queue can't filter to unacknowledged or
   to a plate. Usability + unbounded-ish scan.

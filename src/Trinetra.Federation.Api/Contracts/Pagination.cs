@@ -20,8 +20,13 @@ public sealed record PageQuery(int? Page = null, int? PageSize = null)
     /// <summary>Rows per page, clamped to <paramref name="max"/>.</summary>
     public int ResolvedPageSize(int max) => Math.Clamp(PageSize ?? DefaultPageSize, 1, max);
 
-    /// <summary>Rows to skip for the requested page (0 when not paginated).</summary>
-    public int Offset(int max) => Enabled ? (Page!.Value - 1) * ResolvedPageSize(max) : 0;
+    /// <summary>
+    /// Rows to skip for the requested page (0 when not paginated). Computed in <c>long</c> — a
+    /// large <c>?page</c> times a large <c>?pageSize</c> overflows <c>int</c>, and a negative
+    /// <c>OFFSET</c> is a PostgreSQL error, not a clamp.
+    /// </summary>
+    public long Offset(int max) =>
+        Enabled ? Math.Max(0L, ((long)Page!.Value - 1) * ResolvedPageSize(max)) : 0L;
 
     /// <summary>The SQL <c>LIMIT</c> for this request: the page size, or the hard cap.</summary>
     public int Limit(int hardCap, int max) => Enabled ? ResolvedPageSize(max) : hardCap;
@@ -43,6 +48,16 @@ public sealed record PageResult<T>(IReadOnlyList<T> Items, int Page, int PageSiz
 /// </summary>
 internal static class Paginate
 {
+    /// <summary>
+    /// Declares both 200 shapes on a paginable list route: the <see cref="PageResult{T}"/>
+    /// envelope (sent when <c>?page</c> is present) and the bare array (sent otherwise). Keeps the
+    /// generated OpenAPI honest now that these handlers return <c>IResult</c>.
+    /// </summary>
+    public static RouteHandlerBuilder WithPaginatedResponse<T>(this RouteHandlerBuilder builder) =>
+        builder
+            .Produces<PageResult<T>>(StatusCodes.Status200OK)
+            .Produces<IReadOnlyList<T>>(StatusCodes.Status200OK);
+
     /// <summary>Boilerplate appended to the OpenAPI description of every paginable list.</summary>
     public const string Doc =
         "**Pagination is opt-in.** Send `page` (1-based) and optionally `pageSize` (default 50) "

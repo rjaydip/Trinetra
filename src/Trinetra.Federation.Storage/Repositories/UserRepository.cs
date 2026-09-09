@@ -406,7 +406,7 @@ public sealed class UserRepository
             (u, t) => (u, t), splitOn: "total_count")).ToList();
 
         return new PagedRows<PlatformUser>(
-            [.. rows.Select(r => r.U)], rows.Count > 0 ? (int)rows[0].T : 0);
+            [.. rows.Select(r => r.U)], rows.Count > 0 ? PagedCount.From(rows[0].T) : 0);
     }
 
     /// <summary>

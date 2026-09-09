@@ -34,6 +34,7 @@ public static class AccessGroupEndpoints
                        .RequireAuthorization();
 
         group.MapGet("/", ListAsync)
+          .WithPaginatedResponse<AccessGroupResponse>()
           .RequirePermission("group.read")
           .WithSummary("List access groups")
           .WithDescription(
@@ -61,6 +62,7 @@ public static class AccessGroupEndpoints
               + "A group outside your reach returns `404`, identical to one that does not exist.");
 
         group.MapGet("/{id:guid}/members", MembersAsync)
+          .WithPaginatedResponse<GroupMemberResponse>()
           .RequirePermission("group.read")
           .WithSummary("List a group's members")
           .WithDescription(

@@ -201,7 +201,7 @@ public sealed class AccessGroupRepository
             (g, t) => (g, t), splitOn: "total_count")).ToList();
 
         var groups = groupRows.Select(x => x.G).ToList();
-        var total = groupRows.Count > 0 ? (int)groupRows[0].T : 0;
+        var total = groupRows.Count > 0 ? PagedCount.From(groupRows[0].T) : 0;
 
         if (groups.Count == 0)
         {
@@ -482,10 +482,10 @@ public sealed class AccessGroupRepository
         p.Add("offset", window.Offset);
 
         await using var c = await _dataSource.OpenConnectionAsync(ct);
-        var rows = (await c.QueryAsync<Guid, string, DateTimeOffset?, long,
-            (Guid U, string N, DateTimeOffset? E, long T)>(
+        var rows = (await c.QueryAsync<MemberRow, long, (MemberRow M, long T)>(
             new CommandDefinition($"""
-                SELECT pu.id, pu.username, ug.expires_at, count(*) OVER() AS total_count
+                SELECT pu.id AS Id, pu.username AS Username, ug.expires_at AS ExpiresAt,
+                       count(*) OVER() AS total_count
                 FROM federation.user_groups ug
                 JOIN federation.platform_users pu ON pu.id = ug.user_id
                 WHERE ug.group_id = @groupId AND ug.status = 'ACTIVE'
@@ -493,10 +493,18 @@ public sealed class AccessGroupRepository
                 ORDER BY pu.username, pu.id
                 LIMIT @limit OFFSET @offset;
                 """, p, cancellationToken: ct),
-            (u, n, e, t) => (u, n, e, t), splitOn: "expires_at,total_count")).ToList();
+            (m, t) => (m, t), splitOn: "total_count")).ToList();
 
         return new PagedRows<(Guid, string, DateTimeOffset?)>(
-            [.. rows.Select(r => (r.U, r.N, r.E))], rows.Count > 0 ? (int)rows[0].T : 0);
+            [.. rows.Select(r => (r.M.Id, r.M.Username, r.M.ExpiresAt))],
+            rows.Count > 0 ? PagedCount.From(rows[0].T) : 0);
+    }
+
+    private sealed class MemberRow
+    {
+        public Guid Id { get; init; }
+        public string Username { get; init; } = "";
+        public DateTimeOffset? ExpiresAt { get; init; }
     }
 
     public async Task<bool> RevokeMembershipAsync(

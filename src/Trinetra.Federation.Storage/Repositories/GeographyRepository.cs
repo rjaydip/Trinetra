@@ -74,7 +74,7 @@ public sealed class GeographyRepository
             (a, t) => (a, t), splitOn: "total_count")).ToList();
 
         return new PagedRows<GeographicArea>(
-            [.. rows.Select(r => r.A)], rows.Count > 0 ? (int)rows[0].T : 0);
+            [.. rows.Select(r => r.A)], rows.Count > 0 ? PagedCount.From(rows[0].T) : 0);
     }
 
     public async Task<GeographicArea?> GetAreaAsync(

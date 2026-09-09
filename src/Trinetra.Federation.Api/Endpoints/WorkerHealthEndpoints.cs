@@ -24,6 +24,7 @@ public static class WorkerHealthEndpoints
               + "already gets: non-sensitive, high-frequency, observability only.");
 
         group.MapGet("/", ListAsync)
+          .WithPaginatedResponse<AiWorkerHealthResponse>()
           .RequirePermission("worker.heartbeat")
           .WithSummary("List known AI workers and their last heartbeat")
           .WithDescription(

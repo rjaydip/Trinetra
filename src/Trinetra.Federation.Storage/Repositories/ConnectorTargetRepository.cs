@@ -72,8 +72,12 @@ public sealed class ConnectorTargetRepository
 
     public ConnectorTargetRepository(NpgsqlDataSource dataSource) => _dataSource = dataSource;
 
-    public async Task<IReadOnlyList<ConnectorTarget>> ListAsync(
-        CallerContext caller, CancellationToken ct)
+    /// <summary>
+    /// One page of connector targets within the caller's scope, with the full match count. An
+    /// 80k-camera estate is a few hundred to a few thousand targets, so this is always bounded.
+    /// </summary>
+    public async Task<PagedRows<ConnectorTarget>> ListAsync(
+        CallerContext caller, PageWindow window, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(caller);
         caller.Require("vms.read");
@@ -85,15 +89,22 @@ public sealed class ConnectorTargetRepository
         // matches nothing, which is the safe reading: "reaches nothing", never "reaches
         // everything" (that inversion is how an admin check becomes an estate-wide leak).
         var args = ScopeArgs(caller, "vms.read");
+        args.Add("limit", window.Limit);
+        args.Add("offset", window.Offset);
 
         await using var c = await _dataSource.OpenConnectionAsync(ct);
-        var rows = await c.QueryAsync<TargetRow>(new CommandDefinition($"""
-            SELECT {Columns} FROM federation.connector_target t
-            WHERE ({Scope("t", "vms.read")})
-            ORDER BY t.code;
-            """, args, cancellationToken: ct));
+        var rows = (await c.QueryAsync<TargetRow, long, (TargetRow R, long T)>(
+            new CommandDefinition($"""
+                SELECT {Columns}, count(*) OVER() AS total_count
+                FROM federation.connector_target t
+                WHERE ({Scope("t", "vms.read")})
+                ORDER BY t.code, t.id
+                LIMIT @limit OFFSET @offset;
+                """, args, cancellationToken: ct),
+            (r, t) => (r, t), splitOn: "total_count")).ToList();
 
-        return rows.Select(r => r.ToDomain()).ToList();
+        return new PagedRows<ConnectorTarget>(
+            [.. rows.Select(x => x.R.ToDomain())], rows.Count > 0 ? PagedCount.From(rows[0].T) : 0);
     }
 
     public async Task<ConnectorTarget?> GetAsync(

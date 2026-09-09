@@ -77,8 +77,9 @@ public static class DetectionEndpoints
           .WithDescription(
               "Detections within a time window, optionally filtered by plate number or VMS "
               + "target — the \"search metadata\" step of the demo path. `from`/`to` default to "
-              + "the last 24 hours and may span at most 31 days (400 otherwise); `limit` is "
-              + "capped at 500.");
+              + "the last 24 hours and may span at most 31 days (400 otherwise). `limit` is "
+              + "capped at 500 for an open search, or 5000 when filtered to one `plateNumber` — "
+              + "a month of one plate is a bounded investigation result.");
     }
 
     private static async Task<Results<Accepted, ProblemHttpResult>> IngestAsync(
@@ -213,8 +214,14 @@ public static class DetectionEndpoints
     /// <summary>The widest window a single search may span — matches the events feed (14-M1).</summary>
     private static readonly TimeSpan MaxSearchWindow = TimeSpan.FromDays(31);
 
-    /// <summary>Hard ceiling on <c>limit</c>, whatever the caller asks for.</summary>
+    /// <summary>Hard ceiling on <c>limit</c> for an open search (no plate filter).</summary>
     private const int MaxSearchRows = 500;
+
+    /// <summary>
+    /// Ceiling when the search is filtered to one plate — a single plate over the max window is
+    /// a bounded, legitimate investigation result, so the open-search cap would truncate it.
+    /// </summary>
+    private const int MaxSearchRowsByPlate = 5000;
 
     private static async Task<Results<Ok<IReadOnlyList<DetectionResponse>>, ProblemHttpResult>> SearchAsync(
         string? plateNumber, Guid? targetId, DateTimeOffset? from, DateTimeOffset? to, int? limit,
@@ -247,9 +254,10 @@ public static class DetectionEndpoints
             ? null
             : PlateNormalizer.Normalize(plateNumber);
 
+        var cap = plateNormalized is null ? MaxSearchRows : MaxSearchRowsByPlate;
         var rows = await detections.SearchAsync(
             plateNormalized, targetId, start, end,
-            Math.Clamp(limit ?? 100, 1, MaxSearchRows), caller, ct);
+            Math.Clamp(limit ?? 100, 1, cap), caller, ct);
 
         return TypedResults.Ok<IReadOnlyList<DetectionResponse>>(
         [

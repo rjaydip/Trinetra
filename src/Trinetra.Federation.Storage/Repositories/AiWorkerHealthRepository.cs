@@ -56,6 +56,6 @@ public sealed class AiWorkerHealthRepository
             (r, t) => (r, t), splitOn: "total_count")).ToList();
 
         return new PagedRows<AiWorkerHealthRow>(
-            [.. rows.Select(x => x.R)], rows.Count > 0 ? (int)rows[0].T : 0);
+            [.. rows.Select(x => x.R)], rows.Count > 0 ? PagedCount.From(rows[0].T) : 0);
     }
 }

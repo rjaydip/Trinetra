@@ -28,6 +28,7 @@ public static class HierarchyEndpoints
                        .RequireAuthorization();
 
         group.MapGet("/", ListOrganizationsAsync)
+          .WithPaginatedResponse<OrganizationResponse>()
           .RequirePermission("organization.read")
           .WithSummary("List organizations")
           .WithDescription(
@@ -63,6 +64,7 @@ public static class HierarchyEndpoints
               + "organization affects every department inside it. 404 if the id is unknown.");
 
         group.MapGet("/{id:guid}/units", ListUnitsAsync)
+          .WithPaginatedResponse<OrganizationUnitResponse>()
           .RequirePermission("organization.read")
           .WithSummary("List an organization's units")
           .WithDescription(
@@ -151,6 +153,7 @@ public static class HierarchyEndpoints
                        .RequireAuthorization();
 
         areas.MapGet("/", ListAreasAsync)
+          .WithPaginatedResponse<GeographicAreaResponse>()
           .RequirePermission("geography.read")
           .WithSummary("List geographic areas")
           .WithDescription(
@@ -170,6 +173,7 @@ public static class HierarchyEndpoints
         // Both directions of the tree, because a UI needs to render downward and a scope check
         // needs to reason upward.
         areas.MapGet("/{id:guid}/children", ListAreaChildrenAsync)
+          .WithPaginatedResponse<GeographicAreaResponse>()
           .RequirePermission("geography.read")
           .WithSummary("List an area's immediate children")
           .WithDescription(

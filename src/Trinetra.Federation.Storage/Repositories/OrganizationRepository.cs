@@ -85,7 +85,7 @@ public sealed class OrganizationRepository
             (o, t) => (o, t), splitOn: "total_count")).ToList();
 
         return new PagedRows<Organization>(
-            [.. rows.Select(r => r.O)], rows.Count > 0 ? (int)rows[0].T : 0);
+            [.. rows.Select(r => r.O)], rows.Count > 0 ? PagedCount.From(rows[0].T) : 0);
     }
 
     public async Task<Organization?> GetAsync(Guid id, CallerContext caller, CancellationToken ct)
@@ -220,7 +220,7 @@ public sealed class OrganizationRepository
             (u, t) => (u, t), splitOn: "total_count")).ToList();
 
         return new PagedRows<OrganizationUnit>(
-            [.. rows.Select(r => r.U)], rows.Count > 0 ? (int)rows[0].T : 0);
+            [.. rows.Select(r => r.U)], rows.Count > 0 ? PagedCount.From(rows[0].T) : 0);
     }
 
     /// <summary>Creates or updates a unit, within the caller's reach.</summary>

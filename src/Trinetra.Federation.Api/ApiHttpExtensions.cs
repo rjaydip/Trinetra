@@ -51,7 +51,15 @@ internal static class ApiHttpExtensions
             var origins = authOptions?.AllowedOrigins.ToArray() ?? [];
             if (origins.Length > 0)
             {
-                policy.WithOrigins(origins).AllowAnyHeader().AllowAnyMethod().AllowCredentials();
+                policy.WithOrigins(origins)
+                      .AllowAnyHeader()
+                      .AllowAnyMethod()
+                      .AllowCredentials()
+                      // A browser fetch() can only read these response headers if they are
+                      // explicitly exposed. The list endpoints put pagination metadata here
+                      // (the body carries the envelope only when ?page was sent).
+                      .WithExposedHeaders(
+                          "X-Total-Count", "X-Result-Capped", "X-Page", "X-Page-Size");
             }
         }));
 

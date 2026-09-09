@@ -181,7 +181,7 @@ public sealed class ApiKeyRepository
             (k, t) => (k, t), splitOn: "total_count")).ToList();
 
         return new PagedRows<ApiKeySummary>(
-            [.. rows.Select(r => r.K)], rows.Count > 0 ? (int)rows[0].T : 0);
+            [.. rows.Select(r => r.K)], rows.Count > 0 ? PagedCount.From(rows[0].T) : 0);
     }
 
     /// <summary>

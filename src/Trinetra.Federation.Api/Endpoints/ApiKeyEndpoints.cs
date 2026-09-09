@@ -24,6 +24,7 @@ public static class ApiKeyEndpoints
             .WithTags(ApiTags.ApiKeys).RequireAuthorization();
 
         group.MapGet("/", ListAsync)
+          .WithPaginatedResponse<ApiKeyResponse>()
           .RequirePermission("apikey.read")
           .WithSummary("List provisioned API keys")
           .WithDescription(

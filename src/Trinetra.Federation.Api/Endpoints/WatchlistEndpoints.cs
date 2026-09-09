@@ -20,9 +20,13 @@ public static class WatchlistEndpoints
             .WithTags(ApiTags.Watchlist).RequireAuthorization();
 
         group.MapGet("/", ListAsync)
+          .WithPaginatedResponse<WatchlistEntryResponse>()
           .RequirePermission("alert.read")
           .WithSummary("List watchlist entries")
-          .WithDescription("Every entry within the caller's organization reach, active or not.");
+          .WithDescription(
+              "Entries within the caller's organization reach. Filter with `active` "
+              + "(`true` / `false` — omit for both). "
+              + Paginate.Doc);
 
         group.MapPost("/", CreateAsync)
           .RequirePermission("watchlist.manage")
@@ -41,13 +45,15 @@ public static class WatchlistEndpoints
               + "their reason on record. A later entry for the same plate is unaffected.");
 
         group.MapGet("/alerts", ListAlertsAsync)
+          .WithPaginatedResponse<WatchlistAlertResponse>()
           .RequirePermission("alert.read")
           .WithSummary("List raised watchlist alerts")
           .WithDescription(
               "Newest first. Raised automatically when a freshly-ingested detection's plate "
               + "matches an active watchlist entry — never by a client calling this API.\n\n"
-              + "Filter with `acknowledged` (`true` / `false` — omit for both) and `plate` (an "
-              + "exact normalised plate). "
+              + "Filters: `acknowledged` (`true` / `false` — omit for both), `plate` (exact "
+              + "normalised plate), `entryId` (one watchlist entry), `severity`, and "
+              + "`from`/`to` on the raised time. "
               + Paginate.Doc);
 
         group.MapPost("/alerts/{id:guid}/acknowledge", AcknowledgeAsync)
@@ -58,17 +64,23 @@ public static class WatchlistEndpoints
               + "audit row). 404 only when the alert id is unknown.");
     }
 
-    private static async Task<Ok<IReadOnlyList<WatchlistEntryResponse>>> ListAsync(
+    private const int EntriesHardCap = 1000;
+
+    private static async Task<IResult> ListAsync(
+        bool? active, int? page, int? pageSize,
         WatchlistRepository repo, HttpContext http, CancellationToken ct)
     {
-        var entries = await repo.ListAsync(CallerContextFactory.From(http), ct);
+        var q = new PageQuery(page, pageSize);
+        var entries = await repo.ListAsync(
+            active,
+            new PageWindow(q.Limit(EntriesHardCap, EntriesHardCap), q.Offset(EntriesHardCap)),
+            CallerContextFactory.From(http), ct);
 
-        return TypedResults.Ok<IReadOnlyList<WatchlistEntryResponse>>(
-        [
-            .. entries.Select(e => new WatchlistEntryResponse(
+        return Paginate.Render(http, q, EntriesHardCap,
+            [.. entries.Items.Select(e => new WatchlistEntryResponse(
                 e.Id, e.OrganizationUnitId, e.PlateNumberNormalized, e.Reason, e.Severity,
-                e.IsActive, e.CreatedAt)),
-        ]);
+                e.IsActive, e.CreatedAt))],
+            entries.Total);
     }
 
     private static async Task<Created<CreatedResponse>> CreateAsync(
@@ -123,14 +135,16 @@ public static class WatchlistEndpoints
     private const int AlertsHardCap = 1000;
 
     private static async Task<IResult> ListAlertsAsync(
-        bool? acknowledged, string? plate, int? page, int? pageSize,
+        bool? acknowledged, string? plate, Guid? entryId, string? severity,
+        DateTimeOffset? from, DateTimeOffset? to, int? page, int? pageSize,
         WatchlistRepository repo, HttpContext http, CancellationToken ct)
     {
         var q = new PageQuery(page, pageSize);
         var normalized = string.IsNullOrWhiteSpace(plate) ? null : PlateNormalizer.Normalize(plate);
 
         var rows = await repo.ListAlertsAsync(
-            acknowledged, normalized,
+            acknowledged, normalized, entryId,
+            string.IsNullOrWhiteSpace(severity) ? null : severity, from, to,
             new PageWindow(q.Limit(AlertsHardCap, AlertsHardCap), q.Offset(AlertsHardCap)),
             CallerContextFactory.From(http), ct);
 

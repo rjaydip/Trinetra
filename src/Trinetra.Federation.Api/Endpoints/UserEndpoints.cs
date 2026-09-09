@@ -38,6 +38,7 @@ public static class UserEndpoints
         var group = app.MapGroup("/api/v1/users").WithTags(ApiTags.Users).RequireAuthorization();
 
         group.MapGet("/", ListAsync)
+          .WithPaginatedResponse<UserResponse>()
           .RequirePermission("user.read")
           .WithSummary("List user accounts")
           .WithDescription(
