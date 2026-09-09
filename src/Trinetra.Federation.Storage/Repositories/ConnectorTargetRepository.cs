@@ -4,6 +4,9 @@ using Trinetra.Federation.Core.Model;
 
 namespace Trinetra.Federation.Storage.Repositories;
 
+/// <summary>A target's state before a change, with its owning org unit — for the audit row.</summary>
+public sealed record TargetStateChange(string PriorState, Guid OrganizationUnitId);
+
 /// <summary>
 /// Connector targets, scoped to what the caller may reach.
 /// </summary>
@@ -258,7 +261,11 @@ public sealed class ConnectorTargetRepository
     /// re-locks an integration account in a loop: the credential is still wrong, so the worker
     /// retries, fails, and quarantines again indefinitely.
     /// </remarks>
-    public async Task<bool> SetStateAsync(
+    /// <summary>
+    /// Changes a target's state and returns its <b>prior</b> state and owning organization unit
+    /// (for the audit row). Null when the id is unknown or out of the caller's scope.
+    /// </summary>
+    public async Task<TargetStateChange?> SetStateAsync(
         Guid id, TargetState state, CallerContext caller, UnitOfWork work, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(caller);
@@ -270,17 +277,26 @@ public sealed class ConnectorTargetRepository
         args.Add("State", state.ToString());
         args.Add("ActorId", caller.UserId);
 
+        var scope = Scope("connector_target", "vms.update");
         var c = work.Connection;
-        var affected = await c.ExecuteAsync(new CommandDefinition($"""
-            UPDATE federation.connector_target
-            SET state = @State::federation.target_state,
-                leased_by = NULL, lease_expires_at = NULL,
-                updated_by = @ActorId, updated_at = now()
-            WHERE id = @id
-              AND ({Scope("connector_target", "vms.update")});
+        return await c.QuerySingleOrDefaultAsync<TargetStateChange>(new CommandDefinition($"""
+            WITH prev AS (
+                SELECT state::text AS prior_state, organization_unit_id
+                FROM federation.connector_target
+                WHERE id = @id AND ({scope})
+            ),
+            upd AS (
+                UPDATE federation.connector_target
+                SET state = @State::federation.target_state,
+                    leased_by = NULL, lease_expires_at = NULL,
+                    updated_by = @ActorId, updated_at = now()
+                WHERE id = @id AND ({scope})
+                RETURNING id
+            )
+            SELECT prev.prior_state AS PriorState,
+                   prev.organization_unit_id AS OrganizationUnitId
+            FROM prev, upd;
             """, args, work.Transaction, cancellationToken: ct));
-
-        return affected > 0;
     }
 
     /// <summary>

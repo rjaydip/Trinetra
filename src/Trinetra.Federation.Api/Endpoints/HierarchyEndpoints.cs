@@ -306,10 +306,18 @@ public static class HierarchyEndpoints
                 statusCode: StatusCodes.Status400BadRequest);
         }
 
+        // Record the resolution actually taken — a cascade can take a whole department offline
+        // and a reparent moves a subtree, so the strategy and (for reparent) the destination
+        // belong in the trail. For a unit, key the org dimension off the unit itself.
         await work.AuditAsync(caller, "update", entityType, id.ToString(),
             before: new { status = "ACTIVE" },
-            after: new { status = "INACTIVE", childStrategy = strategy.ToString() },
-            organizationUnitId: null, ct);
+            after: new
+            {
+                status = "INACTIVE",
+                childStrategy = strategy.ToString(),
+                newParentId = strategy == ChildStrategy.Reparent ? request.NewParentId : null,
+            },
+            organizationUnitId: entityType == "organization_unit" ? id : null, ct);
         await work.CommitAsync(ct);
 
         return TypedResults.NoContent();
@@ -340,17 +348,20 @@ public static class HierarchyEndpoints
 
         await using var work = await UnitOfWork.BeginAsync(db, ct);
 
-        var id = await repo.UpsertAsync(new Organization
+        var created = new Organization
         {
             Code = request.Code,
             Name = request.Name,
             OrganizationType = request.OrganizationType,
             Description = request.Description,
             Status = request.Status ?? "ACTIVE",
-        }, caller, work, ct);
+        };
+        var id = await repo.UpsertAsync(created, caller, work, ct);
 
+        // Audit the persisted record — generated id + the status the server actually applied —
+        // not the raw request DTO.
         await work.AuditAsync(caller, "create", "organization", id.ToString(),
-            before: null, after: request, organizationUnitId: null, ct);
+            before: null, after: ToResponse(created with { Id = id }), organizationUnitId: null, ct);
         await work.CommitAsync(ct);
 
         return TypedResults.Created($"/api/v1/organizations/{id}", new CreatedResponse(id));
@@ -587,7 +598,7 @@ public static class HierarchyEndpoints
 
         await using var work = await UnitOfWork.BeginAsync(db, ct);
 
-        var unitId = await repo.UpsertUnitAsync(new OrganizationUnit
+        var created = new OrganizationUnit
         {
             OrganizationId = id,
             ParentUnitId = request.ParentUnitId,
@@ -597,10 +608,12 @@ public static class HierarchyEndpoints
             Description = request.Description,
             GeographicAreaId = request.GeographicAreaId,   // descriptive "home area" only (invariant 12)
             Status = request.Status ?? "ACTIVE",
-        }, caller, work, ct);
+        };
+        var unitId = await repo.UpsertUnitAsync(created, caller, work, ct);
 
         await work.AuditAsync(caller, "create", "organization_unit", unitId.ToString(),
-            before: null, after: request, organizationUnitId: unitId, ct);
+            before: null, after: ToResponse(created with { Id = unitId }),
+            organizationUnitId: unitId, ct);
         await work.CommitAsync(ct);
 
         return TypedResults.Created($"/api/v1/organization-units/{unitId}", new CreatedResponse(unitId));
@@ -674,7 +687,7 @@ public static class HierarchyEndpoints
         // A bad area_type (not in the registry), a level-order containment violation from
         // trg_geo_area_acyclic, or a duplicate code under the same parent all surface as a
         // constraint / raised exception and are mapped to 400/409 by the global handler.
-        var id = await repo.UpsertAreaAsync(new GeographicArea
+        var created = new GeographicArea
         {
             ParentAreaId = request.ParentAreaId,
             Code = request.Code,
@@ -682,10 +695,11 @@ public static class HierarchyEndpoints
             AreaType = request.AreaType,
             Description = request.Description,
             Status = request.Status ?? "ACTIVE",
-        }, caller, work, ct);
+        };
+        var id = await repo.UpsertAreaAsync(created, caller, work, ct);
 
         await work.AuditAsync(caller, "create", "geographic_area", id.ToString(),
-            before: null, after: request, organizationUnitId: null, ct);
+            before: null, after: ToResponse(created with { Id = id }), organizationUnitId: null, ct);
         await work.CommitAsync(ct);
 
         return TypedResults.Created($"/api/v1/geographic-areas/{id}", new CreatedResponse(id));

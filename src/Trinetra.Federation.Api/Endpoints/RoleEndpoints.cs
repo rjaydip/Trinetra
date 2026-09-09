@@ -130,8 +130,10 @@ public static class RoleEndpoints
             return problem;
         }
 
+        // Audit the persisted role — generated id, the status the server applied (DRAFT unless
+        // asked otherwise), the exact permission set — not the raw request DTO.
         await work.AuditAsync(caller, "create", "role", result.Id.ToString(),
-            before: null, after: request, organizationUnitId: null, ct);
+            before: null, after: ToResponse(result.Detail!), organizationUnitId: null, ct);
         await work.CommitAsync(ct);
 
         return TypedResults.Created($"/api/v1/roles/{result.Id}", new CreatedResponse(result.Id));
@@ -161,13 +163,15 @@ public static class RoleEndpoints
             return problem;
         }
 
-        var updated = await repo.GetAsync(id, caller, ct);
+        // result.Detail is the role read back INSIDE the transaction — re-reading via GetAsync
+        // here would open a fresh connection that cannot see the uncommitted change.
+        var updated = result.Detail!;
         await work.AuditAsync(caller, "update", "role", id.ToString(),
-            before: prior is null ? null : ToResponse(prior), after: request,
+            before: prior is null ? null : ToResponse(prior), after: ToResponse(updated),
             organizationUnitId: null, ct);
         await work.CommitAsync(ct);
 
-        return TypedResults.Ok(ToResponse(updated!));
+        return TypedResults.Ok(ToResponse(updated));
     }
 
     private static async Task<Results<NoContent, NotFound, ProblemHttpResult>> DeleteAsync(

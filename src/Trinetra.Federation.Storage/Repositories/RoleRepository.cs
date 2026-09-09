@@ -60,14 +60,22 @@ public enum RoleWriteError
     InvalidStatus,
 }
 
-/// <summary>Outcome of a role write: an error and, for <see cref="RoleWriteError.Escalation"/>, the offending codes.</summary>
+/// <summary>
+/// Outcome of a role write: an error and, for <see cref="RoleWriteError.Escalation"/>, the
+/// offending codes. On success, <see cref="Detail"/> is the role as it stands <b>after</b> the
+/// write, read inside the same transaction — the caller uses it for the response and the audit
+/// row rather than re-reading on a separate connection (which would not see the uncommitted
+/// change).
+/// </summary>
 public readonly record struct RoleWriteResult(
-    RoleWriteError Error, IReadOnlyList<string> Exceeding, Guid Id)
+    RoleWriteError Error, IReadOnlyList<string> Exceeding, Guid Id, RoleDetail? Detail = null)
 {
     public static readonly RoleWriteResult Ok = new(RoleWriteError.None, [], Guid.Empty);
     public static RoleWriteResult Fail(RoleWriteError error) => new(error, [], Guid.Empty);
     public static RoleWriteResult Exceeds(IReadOnlyList<string> codes) =>
         new(RoleWriteError.Escalation, codes, Guid.Empty);
+    public static RoleWriteResult Succeeded(RoleDetail detail) =>
+        new(RoleWriteError.None, [], detail.Id, detail);
 }
 
 /// <summary>
@@ -276,7 +284,7 @@ public sealed class RoleRepository
 
         await ReplacePermissionsAsync(c, work.Transaction, id, permissions, ct);
 
-        return new RoleWriteResult(RoleWriteError.None, [], id);
+        return RoleWriteResult.Succeeded((await LoadAsync(c, work.Transaction, id, ct))!);
     }
 
     /// <summary>
@@ -357,7 +365,7 @@ public sealed class RoleRepository
 
         await ReplacePermissionsAsync(c, work.Transaction, id, permissions, ct);
 
-        return RoleWriteResult.Ok;
+        return RoleWriteResult.Succeeded((await LoadAsync(c, work.Transaction, id, ct))!);
     }
 
     /// <summary>

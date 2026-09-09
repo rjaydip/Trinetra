@@ -118,7 +118,7 @@ public static class CameraReconciliationEndpoints
         await work.AuditAsync(caller, "reconcile", "camera", id.ToString(),
             before: null,
             after: new { result.TargetId, result.NativeCameraId, result.VmsId },
-            organizationUnitId: null, ct);
+            result.OrganizationUnitId, ct);
         await work.CommitAsync(ct);
 
         return TypedResults.Ok(new ReconcileResponse(

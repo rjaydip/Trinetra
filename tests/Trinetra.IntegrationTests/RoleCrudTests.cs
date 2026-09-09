@@ -125,9 +125,17 @@ public sealed class RoleCrudTests : IClassFixture<PostgresFixture>, IAsyncLifeti
 
         await using (var work = await BeginAsync())
         {
-            (await Repo.UpdateAsync(
-                id, "Repl", null, null, ["event.read"], Unscoped(), work,
-                CancellationToken.None)).Error.ShouldBe(RoleWriteError.None);
+            var result = await Repo.UpdateAsync(
+                id, "Repl v2", null, null, ["event.read"], Unscoped(), work,
+                CancellationToken.None);
+            result.Error.ShouldBe(RoleWriteError.None);
+
+            // result.Detail reflects the POST-update state, read inside this transaction — a
+            // fresh-connection read here would still see the pre-update row.
+            result.Detail.ShouldNotBeNull();
+            result.Detail!.Name.ShouldBe("Repl v2");
+            result.Detail.Permissions.ShouldBe(["event.read"]);
+
             await work.CommitAsync(CancellationToken.None);
         }
 

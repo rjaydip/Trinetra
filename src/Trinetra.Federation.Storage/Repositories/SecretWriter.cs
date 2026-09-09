@@ -77,24 +77,19 @@ public sealed class SecretWriter
             sealedSecret.Ciphertext, sealedSecret.Nonce, sealedSecret.Tag, sealedSecret.KeyId,
         }, work.Transaction, cancellationToken: ct));
 
-        await c.ExecuteAsync(new CommandDefinition("""
-            INSERT INTO federation.config_audit
-                (actor, actor_user_id, actor_api_key_id, action, entity_type, entity_id,
-                 before_state, after_state, source_address)
-            VALUES (@Actor, @UserId, @ApiKeyId, 'credential_set', 'secret', @credentialReference,
-                    NULL, @after::jsonb, @SourceAddress);
-            """, new
-        {
-            caller.Actor, caller.UserId, caller.ApiKeyId, credentialReference, caller.SourceAddress,
-            // Deliberately records only non-secret facts. A "before/after" that included the
-            // value would put every camera password in the audit log in plaintext.
-            after = JsonSerializer.Serialize(new
+        // The highest-privilege action lands in the MAIN config-audit trail, through the same
+        // UnitOfWork path (and JSON shape) as every other mutation — not a hand-rolled INSERT.
+        // Only non-secret facts: a before/after carrying the value would put every camera
+        // password in the audit log in plaintext.
+        await work.AuditAsync(caller, "credential_set", "secret", credentialReference,
+            before: null,
+            after: new
             {
                 username,
                 hasPassword = !string.IsNullOrEmpty(password),
                 hasToken = !string.IsNullOrEmpty(token),
-            }),
-        }, work.Transaction, cancellationToken: ct));
+            },
+            organizationUnitId: null, ct);
     }
 
     /// <summary>Whether a credential exists. Reports presence only, never content.</summary>

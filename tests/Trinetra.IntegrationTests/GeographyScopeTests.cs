@@ -178,7 +178,7 @@ public sealed class GeographyScopeTests : IClassFixture<PostgresFixture>, IAsync
         await using var work = await UnitOfWork.BeginAsync(_fixture.DataSource, CancellationToken.None);
 
         (await repo.SetStateAsync(TargetOut, TargetState.Quarantined, ScopedCaller(), work,
-            CancellationToken.None)).ShouldBeFalse();
+            CancellationToken.None)).ShouldBeNull();
     }
 
     [Fact]

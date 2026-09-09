@@ -37,7 +37,8 @@ public enum ReconcileStatus
 
 /// <summary>The result of a reconcile attempt.</summary>
 public sealed record ReconcileResult(
-    ReconcileStatus Status, Guid CameraId, Guid TargetId, string NativeCameraId, Guid? VmsId);
+    ReconcileStatus Status, Guid CameraId, Guid TargetId, string NativeCameraId, Guid? VmsId,
+    Guid? OrganizationUnitId = null);
 
 /// <summary>
 /// Links registry cameras to the cameras a VMS reports (<c>federated_camera</c>).
@@ -198,21 +199,23 @@ public sealed class ReconciliationRepository
 
         var firstStream = fed.StreamReferences is { Length: > 0 } ? fed.StreamReferences[0] : null;
 
-        var vmsId = await c.ExecuteScalarAsync<Guid?>(new CommandDefinition("""
+        var linked = await c.QuerySingleAsync<LinkedRow>(new CommandDefinition("""
             UPDATE federation.cameras
             SET vms_id = CASE WHEN @AdoptVms AND vms_id IS NULL THEN @targetId ELSE vms_id END,
                 stream_reference = CASE WHEN @AdoptStream AND stream_reference IS NULL AND @FirstStream IS NOT NULL
                                         THEN @FirstStream ELSE stream_reference END,
                 updated_by = @ActorId, updated_at = now()
             WHERE id = @cameraId
-            RETURNING vms_id;
+            RETURNING vms_id AS VmsId, organization_unit_id AS OrganizationUnitId;
             """, new
         {
             cameraId, targetId, AdoptVms = adoptVmsId, AdoptStream = adoptStreamReference,
             FirstStream = firstStream, ActorId = caller.UserId,
         }, tx, cancellationToken: ct));
 
-        return new ReconcileResult(ReconcileStatus.Linked, cameraId, targetId, nativeCameraId, vmsId);
+        return new ReconcileResult(
+            ReconcileStatus.Linked, cameraId, targetId, nativeCameraId,
+            linked.VmsId, linked.OrganizationUnitId);
     }
 
     private sealed record FederatedLinkRow
@@ -223,4 +226,6 @@ public sealed class ReconciliationRepository
         public string[] StreamReferences { get; init; } = [];
         public Guid TargetId { get; init; }
     }
+
+    private sealed record LinkedRow(Guid? VmsId, Guid OrganizationUnitId);
 }

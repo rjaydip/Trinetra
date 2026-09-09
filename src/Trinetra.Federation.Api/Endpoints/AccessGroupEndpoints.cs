@@ -214,7 +214,7 @@ public static class AccessGroupEndpoints
 
         await using var work = await UnitOfWork.BeginAsync(db, ct);
 
-        var id = await repo.UpsertAsync(new AccessGroup
+        var created = new AccessGroup
         {
             Code = request.Code,
             Name = request.Name,
@@ -222,10 +222,15 @@ public static class AccessGroupEndpoints
             RoleId = request.RoleId,
             // DRAFT by default: a group is assembled and reviewed before it grants anything.
             Status = request.Status ?? "DRAFT",
-        }, caller.UserId, work, ct);
+        };
+        var id = await repo.UpsertAsync(created, caller.UserId, work, ct);
 
+        // The persisted row — generated id, and the status the server actually applied (DRAFT
+        // unless the caller asked otherwise) — not the raw request DTO.
         await work.AuditAsync(caller, "create", "access_group", id.ToString(),
-            before: null, after: request, organizationUnitId: null, ct);
+            before: null,
+            after: new { id, created.Code, created.Name, created.Description, created.RoleId, created.Status },
+            organizationUnitId: null, ct);
         await work.CommitAsync(ct);
 
         return TypedResults.Created($"/api/v1/access-groups/{id}", new CreatedResponse(id));
@@ -477,8 +482,17 @@ public static class AccessGroupEndpoints
             id, scopeType, request.OrganizationUnitId, request.GeographicAreaId,
             request.ResourceType, request.ResourceId, request.Description, work, ct);
 
+        // The persisted scope — generated id + the normalised scope type — keyed on the affected
+        // group. `organizationUnitId` carries the scoped unit when this is an ORGANIZATION scope.
         await work.AuditAsync(caller, "update", "group_scope", id.ToString(),
-            before: null, after: request, organizationUnitId: null, ct);
+            before: null,
+            after: new
+            {
+                scopeId, groupId = id, scopeType,
+                request.OrganizationUnitId, request.GeographicAreaId,
+                request.ResourceType, request.ResourceId, request.Description,
+            },
+            organizationUnitId: scopeType == "ORGANIZATION" ? request.OrganizationUnitId : null, ct);
         await work.CommitAsync(ct);
 
         return TypedResults.Created($"/api/v1/access-groups/{id}/scopes/{scopeId}", new CreatedResponse(scopeId));

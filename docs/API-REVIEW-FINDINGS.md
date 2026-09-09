@@ -64,15 +64,44 @@ The **Priority Index & Implementation Sequence** below is the working order; the
     ✅ algorithm pinned (PR7a); key ring still open → PR7d
 22. **4-H5** API-key AUTH path: no rate limit + DB round trip pre-auth (brute-force +
     amplification). Related **8-NEW-H**: `TouchAsync` write + 3rd connection on every M2M request.
-23. **8-H3** API-key creation doesn't reject a DRAFT/DISABLED group → latent grant on activation.
+23. **8-H3** API-key creation doesn't reject a DRAFT/DISABLED group → latent grant on activation. ✅ done (`GroupGrantGuard` rejects non-ACTIVE with 409, since `2504dde`; regression test + doc added 2026-09-08)
 
 ### P2 · MEDIUM — correctness / robustness
 
-**AUDIT-FIDELITY WAVE** (many endpoints, small mechanical fixes):
+**AUDIT-FIDELITY WAVE** ✅ done 2026-09-08 (uncommitted), +6 tests (`WatchlistRepositoryTests` ×4,
+`VmsLifecycleTests.SetState_ReturnsThePriorStateAndOrgUnit`, sabotage-checked):
 `5-M6, 5-M5b, 6-M7, 9-L1, 9-NEW-M, 10-L4, 13-M1, 16-M2, 16-M3` — audit rows that pass
 `before:null` / `after:<request DTO>` / `organizationUnitId:null`, or (16-M2) record nothing at
-all. Sweep: capture prior state, persist the stored row not the request, always pass the
-entity's org unit.
+all.
+- **16-M2** — `WatchlistRepository.DeactivateAsync` now returns the entry; the audit `before`
+  carries the plate/reason/severity and the org dimension = the entry's unit.
+- **16-M3** — `AcknowledgeAlertAsync` returns `{OrganizationUnitId, AlreadyAcknowledged}`; the
+  endpoint records the transition (before/after ack) with the alert's org, and a no-op re-ack
+  is now a **204** (no audit row), not a 404.
+- **9-L1** — `ConnectorTargetRepository.SetStateAsync` returns `TargetStateChange{PriorState,
+  OrganizationUnitId}` via a CTE; audit records both (was `before:null` + `organizationUnitId:null`).
+- **9-NEW-M** — VMS `RegisterAsync` audits the persisted target (`Redact(target!)`) and keys the
+  org dimension off it, not the raw request DTO.
+- **10-L4** — `ReconcileResult` gained `OrganizationUnitId` (from the `cameras` UPDATE RETURNING);
+  reconcile audit now carries it (was null).
+- **5-M5b** — Hierarchy create org/unit/area audits `ToResponse(entity with {Id})` — generated
+  id + the status the server applied — not `after: request`.
+- **6-M7** — `AccessGroupEndpoints` create-group + AddScope audit the persisted shape (id +
+  effective status / normalised scope type); ORGANIZATION scope adds carry the scoped unit.
+- **5-M6** — deactivate audit `after` now includes `childStrategy` + `newParentId`, and the org
+  dimension is keyed on the unit for `organization_unit` deactivations. **PARTIAL:** the list
+  of cascaded / reparented descendant ids is still not recorded — needs `DeactivateUnitAsync` /
+  `DeactivateAreaAsync` to return that set on success (follow-up).
+- **13-M1** — VERIFIED: `SecretWriter.WriteAsync` already wrote to the main `config_audit`
+  trail; switched it from a hand-rolled INSERT to `work.AuditAsync` so its JSON shape matches
+  every other audit row.
+- Adjacent: **`RoleEndpoints.UpdateAsync` stale-read bug** (v1.12) — line ~164
+  `repo.GetAsync(id, caller, ct)` ran on a NEW pooled connection after the in-transaction
+  `UpdateAsync`, returning PRE-update data (wrong response body + weak audit `after: request`).
+  ✅ FIXED 2026-09-08: `RoleWriteResult` gained `Detail` — `RoleRepository.Create/UpdateAsync`
+  now reload via `LoadAsync(c, work.Transaction, id, ct)` (in-transaction) and return it; the
+  endpoint uses `result.Detail` for both the response and the audit `after` (create audit also
+  moved off `after: request`). +1 assertion in `RoleCrudTests`, sabotage-checked.
 
 **PAGINATION WAVE** (no cursor / unbounded):
 `5-M7` (areas/sites/units), `6-M6` (users/groups/members), `8-M5` (api-keys), `9-M3` (VMS camera
@@ -889,11 +918,13 @@ revoke-what-you-cannot-see bypasses the fix).
 
 ### MEDIUM
 
-- **8-H3** CONFIRMED, severity Medium-High, downgraded from 500 → 400. FK violation maps to 400
-  (`ConstraintViolationExceptionHandler:42-46`). Real issue: binding to an existing
-  DRAFT/DISABLED group succeeds; `principal_groups` filters `status='ACTIVE'` so grants nothing
-  NOW but springs to full life with no re-review when the group is activated. Reject non-ACTIVE
-  groups at creation. (Worse once F7 approval lands.)
+- **8-H3** ✅ **FIXED.** `GroupGrantGuard.CheckAsync` (shared by `ApiKeyEndpoints.CreateAsync`
+  and `UserEndpoints.AddToGroupAsync`) rejects a non-ACTIVE group with **409** — ahead of the
+  unscoped short-circuit, so even a platform admin cannot bind a key or membership to a
+  `DRAFT`/`INACTIVE` group. Landed in `2504dde` but was never marked; regression test
+  `GroupGrantGuardTests` (4, sabotage-checked) + doc-comment refresh (post-v1.12
+  `DISABLED`→`INACTIVE`) added 2026-09-08 (uncommitted). The old note below (500→400, FK
+  violation) was the *unfixed* behaviour.
 - **8-M1** CONFIRMED. `ExpiresAt` optional, `api_key.expires_at` nullable, `FindAsync` treats
   NULL = never expires. No server max. Cap + require + near-expiry warning.
 - **8-M2** CONFIRMED. No rotation endpoint / overlap window → pushes people to non-expiring keys.

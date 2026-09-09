@@ -69,6 +69,22 @@ public sealed class VmsLifecycleTests : IClassFixture<PostgresFixture>, IAsyncLi
         CredentialReference = "vault://new",
     };
 
+    [Fact]
+    public async Task SetState_ReturnsThePriorStateAndOrgUnit_ForTheAuditRow()
+    {
+        // Finding 9-L1: the state-change audit row must carry the prior state and the org
+        // dimension. SetStateAsync returns both; a target starts Active in the fixture seed.
+        var repo = new ConnectorTargetRepository(_fixture.DataSource);
+        await using var work = await UnitOfWork.BeginAsync(_fixture.DataSource, CancellationToken.None);
+
+        var change = await repo.SetStateAsync(
+            TargetId, TargetState.Disabled, SystemCaller(), work, CancellationToken.None);
+
+        change.ShouldNotBeNull();
+        change!.PriorState.ShouldBe("Active");
+        change.OrganizationUnitId.ShouldBe(PostgresFixture.PoliceUnit);
+    }
+
     // ---- 9-NEW-H: replace never touches state ----------------------------
 
     [Fact]
@@ -79,7 +95,7 @@ public sealed class VmsLifecycleTests : IClassFixture<PostgresFixture>, IAsyncLi
         await using (var work = await UnitOfWork.BeginAsync(_fixture.DataSource, CancellationToken.None))
         {
             (await repo.SetStateAsync(TargetId, TargetState.Quarantined, SystemCaller(), work,
-                CancellationToken.None)).ShouldBeTrue();
+                CancellationToken.None)).ShouldNotBeNull();
             await work.CommitAsync(CancellationToken.None);
         }
 

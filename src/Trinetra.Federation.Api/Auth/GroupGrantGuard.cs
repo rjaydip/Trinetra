@@ -10,9 +10,9 @@ namespace Trinetra.Federation.Api.Auth;
 /// </summary>
 /// <remarks>
 /// <para>
-/// The group must be <c>ACTIVE</c>: a <c>DRAFT</c> or <c>DISABLED</c> group grants nothing today,
+/// The group must be <c>ACTIVE</c>: a <c>DRAFT</c> or <c>INACTIVE</c> group grants nothing today,
 /// but binding a membership or a key to one anyway leaves a grant that springs to full life with
-/// no re-review the moment someone else activates it.
+/// no re-review the moment someone else activates it (finding 8-H3).
 /// </para>
 /// <para>
 /// A caller unscoped for the gating permission on <b>both</b> dimensions has no ceiling to

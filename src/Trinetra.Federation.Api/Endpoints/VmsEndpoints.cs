@@ -333,8 +333,11 @@ public static class VmsEndpoints
         await using var work = await UnitOfWork.BeginAsync(db, ct);
 
         var id = await repo.UpsertAsync(target!, caller, work, ct);
+
+        // Audit the target that was persisted (its state defaults to Active on register), and
+        // key the org dimension off that record — not off the raw request DTO.
         await work.AuditAsync(caller, "create", "connector_target", id.ToString(),
-            before: null, after: Redact(request), request.OrganizationUnitId, ct);
+            before: null, after: Redact(target!), target!.OrganizationUnitId, ct);
         await work.CommitAsync(ct);
 
         return TypedResults.Created($"/api/v1/vms/{id}", new CreatedResponse(id));
@@ -383,13 +386,15 @@ public static class VmsEndpoints
 
         await using var work = await UnitOfWork.BeginAsync(db, ct);
 
-        if (!await repo.SetStateAsync(id, state, caller, work, ct))
+        if (await repo.SetStateAsync(id, state, caller, work, ct) is not { } change)
         {
             return TypedResults.NotFound();
         }
 
         await work.AuditAsync(caller, "update", "connector_target", id.ToString(),
-            before: null, after: new { state = state.ToString() }, organizationUnitId: null, ct);
+            before: new { state = change.PriorState },
+            after: new { state = state.ToString() },
+            change.OrganizationUnitId, ct);
         await work.CommitAsync(ct);
 
         return TypedResults.NoContent();

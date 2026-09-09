@@ -4,6 +4,9 @@ using Trinetra.Federation.Core.Model;
 
 namespace Trinetra.Federation.Storage.Repositories;
 
+/// <summary>The outcome of acknowledging an alert: whose org owns it, and whether it was already done.</summary>
+public sealed record AlertAcknowledgement(Guid OrganizationUnitId, bool AlreadyAcknowledged);
+
 /// <summary>A raised watchlist alert, joined with the entry and detection that produced it.</summary>
 public sealed record WatchlistAlertRow
 {
@@ -103,18 +106,25 @@ public sealed class WatchlistRepository
         }, work.Transaction, cancellationToken: ct));
     }
 
-    public async Task<bool> DeactivateAsync(
+    /// <summary>
+    /// Deactivates an entry and returns it as it was (for the audit "before"). Null when the id
+    /// is unknown.
+    /// </summary>
+    public async Task<WatchlistEntry?> DeactivateAsync(
         Guid id, CallerContext caller, UnitOfWork work, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(caller);
         ArgumentNullException.ThrowIfNull(work);
         caller.Require("watchlist.manage");
 
-        var affected = await work.Connection.ExecuteAsync(new CommandDefinition("""
-            UPDATE federation.watchlist_entry SET is_active = FALSE WHERE id = @id;
+        var row = await work.Connection.QuerySingleOrDefaultAsync<EntryRow>(new CommandDefinition("""
+            UPDATE federation.watchlist_entry SET is_active = FALSE
+            WHERE id = @id
+            RETURNING id, organization_unit_id, plate_number_normalized, reason, severity,
+                      is_active, created_at, created_by;
             """, new { id }, work.Transaction, cancellationToken: ct));
 
-        return affected > 0;
+        return row?.ToDomain();
     }
 
     /// <summary>The active watchlist entry matching any of a detection's OCR-variant plates, if any.</summary>
@@ -200,21 +210,38 @@ public sealed class WatchlistRepository
         return [.. rows];
     }
 
-    public async Task<bool> AcknowledgeAlertAsync(
+    /// <summary>
+    /// Acknowledges an alert, idempotently. Returns the alert's owning organization unit (via its
+    /// entry) and whether it was <b>already</b> acknowledged before this call; null when the
+    /// alert id is unknown.
+    /// </summary>
+    public async Task<AlertAcknowledgement?> AcknowledgeAlertAsync(
         Guid alertId, CallerContext caller, UnitOfWork work, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(caller);
         ArgumentNullException.ThrowIfNull(work);
         caller.Require("alert.acknowledge");
 
-        var affected = await work.Connection.ExecuteAsync(new CommandDefinition("""
-            UPDATE federation.watchlist_alert
-            SET acknowledged_at = now(), acknowledged_by = @ActorId
-            WHERE id = @id AND acknowledged_at IS NULL;
+        return await work.Connection.QuerySingleOrDefaultAsync<AlertAcknowledgement>(
+            new CommandDefinition("""
+            WITH target AS (
+                SELECT a.id, (a.acknowledged_at IS NOT NULL) AS already_acknowledged,
+                       w.organization_unit_id
+                FROM federation.watchlist_alert a
+                JOIN federation.watchlist_entry w ON w.id = a.watchlist_entry_id
+                WHERE a.id = @id
+            ),
+            upd AS (
+                UPDATE federation.watchlist_alert
+                SET acknowledged_at = now(), acknowledged_by = @ActorId
+                WHERE id = @id AND acknowledged_at IS NULL
+                RETURNING id
+            )
+            SELECT organization_unit_id AS OrganizationUnitId,
+                   already_acknowledged AS AlreadyAcknowledged
+            FROM target;
             """, new { id = alertId, ActorId = caller.UserId },
             work.Transaction, cancellationToken: ct));
-
-        return affected > 0;
     }
 
     private sealed record EntryRow

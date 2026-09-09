@@ -49,7 +49,10 @@ public static class WatchlistEndpoints
 
         group.MapPost("/alerts/{id:guid}/acknowledge", AcknowledgeAsync)
           .RequirePermission("alert.acknowledge")
-          .WithSummary("Acknowledge a watchlist alert");
+          .WithSummary("Acknowledge a watchlist alert")
+          .WithDescription(
+              "Idempotent: acknowledging an already-acknowledged alert is a 204 no-op (no second "
+              + "audit row). 404 only when the alert id is unknown.");
     }
 
     private static async Task<Ok<IReadOnlyList<WatchlistEntryResponse>>> ListAsync(
@@ -99,13 +102,16 @@ public static class WatchlistEndpoints
 
         await using var work = await UnitOfWork.BeginAsync(db, ct);
 
-        if (!await repo.DeactivateAsync(id, caller, work, ct))
+        if (await repo.DeactivateAsync(id, caller, work, ct) is not { } entry)
         {
             return TypedResults.NotFound();
         }
 
+        // Record which plate was taken off, under which org — "who removed MH12AB1234 and when".
         await work.AuditAsync(caller, "delete", "watchlist_entry", id.ToString(),
-            before: null, after: null, organizationUnitId: null, ct);
+            before: new { entry.PlateNumberNormalized, entry.Reason, entry.Severity },
+            after: new { isActive = false },
+            entry.OrganizationUnitId, ct);
         await work.CommitAsync(ct);
 
         return TypedResults.NoContent();
@@ -132,13 +138,20 @@ public static class WatchlistEndpoints
 
         await using var work = await UnitOfWork.BeginAsync(db, ct);
 
-        if (!await repo.AcknowledgeAlertAsync(id, caller, work, ct))
+        if (await repo.AcknowledgeAlertAsync(id, caller, work, ct) is not { } ack)
         {
             return TypedResults.NotFound();
         }
 
-        await work.AuditAsync(caller, "update", "watchlist_alert", id.ToString(),
-            before: null, after: new { acknowledged = true }, organizationUnitId: null, ct);
+        // A no-op re-acknowledge changed nothing — no audit row for it (invariant 10: audit
+        // rows go with mutations). A real transition is recorded, with the alert's org.
+        if (!ack.AlreadyAcknowledged)
+        {
+            await work.AuditAsync(caller, "acknowledge", "watchlist_alert", id.ToString(),
+                before: new { acknowledged = false }, after: new { acknowledged = true },
+                ack.OrganizationUnitId, ct);
+        }
+
         await work.CommitAsync(ct);
 
         return TypedResults.NoContent();
