@@ -1437,20 +1437,50 @@ Review 2026-09-04.
 Review 2026-09-04. Smallest surface. Deliberately unaudited (high-freq observability, matches
 `worker_node`). But the trust model is too loose for a monitoring signal.
 
+**WORKER-HARDENING WAVE ✅ (v1.13, uncommitted 2026-09-09).** BA + dotnet-expert reviewed the
+plan (both proceed-with-changes; all changes folded in). `db/versions/v1.13.sql` drops and
+recreates `ai_worker_health` — no live consumer (`BACKEND_HEARTBEAT_URL` unset), rows are
+ephemeral, no FK depends on it.
+- **17-M1 ✅** identity is now `(api_key_id, worker_id, hostname)`; `api_key_id NOT NULL
+  REFERENCES api_key(id) ON DELETE CASCADE`. `UpsertHeartbeatAsync` takes a required
+  `CallerContext` and writes only under `caller.ApiKeyId`; a non-key caller is 403 at the
+  endpoint. Cross-key spoofing closed; intra-key (leaked shared `DETECTION_WORKER` key faking
+  its own fleet siblings) is an inherent fleet-key limit — documented, not fixed. `hostname` in
+  the PK so two hosts on the same `WORKER_INDEX` show as two rows, not one merged.
+- **17-M2 ✅** `last_heartbeat_at` written server-side `now()` always; client's `reportedAt`
+  kept as `reported_at` (nullable, advisory). Response exposes `clockDriftSeconds`.
+- **17-M3 ✅** new `worker.read` (list) + `worker.manage` (retire); `worker.heartbeat` is
+  submit-only. v1.13 grants `worker.read` to SUPER_ADMIN (unconditional CROSS JOIN) +
+  STATE_ADMIN + DEPARTMENT_ADMIN, `worker.manage` to SUPER_ADMIN + STATE_ADMIN, and **deletes
+  `worker.heartbeat` from STATE_ADMIN** (v1.4 copy-paste). `DETECTION_WORKER` keeps
+  `worker.heartbeat` only.
+- **17-L1 ✅** `DELETE /api/v1/worker-health/{id}` (`worker.manage`, audited via `UnitOfWork`) —
+  clears a decommissioned worker or the stale rows a `WORKER_COUNT` 4→2 resize leaves. Pruning
+  job still deferred (17-L4-adjacent).
+- **17-L2 ✅** endpoint validates `workerId` (required, ≤128, `[A-Za-z0-9._:-]`) and `hostname`
+  (required, ≤253, same charset) → 400 with a field message (PR10's 22001→400 is the backstop).
+  `WorkerHeartbeatRequest.ReportedAt` kept nullable — a poster that omits it gets a null
+  `clockDriftSeconds`, not a `0001-01-01` drift.
+- **17-L3** STILL OPEN — list not org/geo scoped; AI workers aren't org/geo entities (same call
+  as 8-H2). **17-L4** STILL OPEN — no rate limit on `/heartbeat`.
+- Tests: `WorkerHealthHardeningTests` (9, cross-key isolation / server-time / user-rejected /
+  permission split / retire / STATE_ADMIN grant delta), M2 sabotage-checked. 248 integ / 123
+  unit + 18 pre-existing.
+
 ### MEDIUM
 
-- **17-M1** **Heartbeat spoofing defeats the signal.** `WorkerHeartbeatRequest.WorkerId` is a
+- ✅ **17-M1** **Heartbeat spoofing defeats the signal.** `WorkerHeartbeatRequest.WorkerId` is a
   client-supplied free string; `UpsertHeartbeatAsync` takes NO `CallerContext` and does an
   unaudited upsert. Any `worker.heartbeat` holder can POST `{workerId: "<a real worker>",
   reportedAt: now}` and keep a dead worker looking alive — the doc says "a stale `lastHeartbeatAt`
   is the operational signal that instance has died", and nothing binds a workerId to the key
   reporting it. Also lets an attacker flood fake worker ids to bury a real outage. Fix: bind
   workerId to the caller (derive from / pin to the API key), reject cross-key updates.
-- **17-M2** `lastHeartbeatAt` is set from client-supplied `request.ReportedAt`. A future-dated
+- ✅ **17-M2** `lastHeartbeatAt` is set from client-supplied `request.ReportedAt`. A future-dated
   value (clock skew or malice) makes a worker look alive indefinitely. Use server `now()` for
   `last_heartbeat_at`; keep the client value as `reported_at` for drift diagnosis only (CLAUDE.md
   #6 — clocks drift).
-- **17-M3** `POST /heartbeat` and `GET /` share one permission (`worker.heartbeat`). A worker that
+- ✅ **17-M3** `POST /heartbeat` and `GET /` share one permission (`worker.heartbeat`). A worker that
   can report a heartbeat can also enumerate every other worker + hostname — target list for
   17-M1. Split: `worker.read` for the list, `worker.heartbeat` for submit only. Related:
   `worker.heartbeat` is granted to `STATE_ADMIN` (v1.4.sql:55) — a human admin has no reason to
@@ -1459,9 +1489,9 @@ Review 2026-09-04. Smallest surface. Deliberately unaudited (high-freq observabi
 
 ### LOW
 
-- **17-L1** No unregister / delete / pruning — a decommissioned worker stays forever with an
+- ✅ **17-L1** No unregister / delete / pruning — a decommissioned worker stays forever with an
   ever-staler heartbeat, indistinguishable from a crash. Add a retire endpoint + retention.
-- **17-L2** No length/charset validation on `WorkerId` / `Hostname` — over-long → `22001` → 500.
+- ✅ **17-L2** No length/charset validation on `WorkerId` / `Hostname` — over-long → `22001` → 500.
 - **17-L3** `ListAsync` unscoped (hostname disclosure) — STILL OPEN (PR9 paginated `/worker-health` but did not scope it). AI
   workers aren't org/geo entities so arguably acceptable — same call as 8-H2.
 - **17-L4** No rate limiting on `/heartbeat` — a wedged worker or attacker hammers the upsert.

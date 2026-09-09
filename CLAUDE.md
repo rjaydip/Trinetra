@@ -73,6 +73,17 @@ dimension is 409 unless the caller is unscoped there **and** sends `confirmUnsco
 403); it is also 409 when the group's role is not `ACTIVE`. `AccessGroupResponse` gained
 `createdAt` / `updatedAt` / `grantsEffective`; a scope add/remove bumps `updated_at`.
 
+**AI-worker heartbeat hardening (`v1.13`).** `ai_worker_health` is dropped and recreated (no
+live consumer — the `ai-worker` push is a no-op until `BACKEND_HEARTBEAT_URL` is set). A worker
+is identified by `(api_key_id, worker_id, hostname)`: `api_key_id` is `NOT NULL` and a heartbeat
+can only ever touch a row under the caller's own key (Finding 17-M1); a non-API-key caller is
+403. `last_heartbeat_at` is server-set on every heartbeat; the client's claimed time is kept as
+`reported_at` (advisory, surfaced as `clockDriftSeconds`). New permissions **`worker.read`**
+(gates `GET /worker-health`, → SUPER_ADMIN/STATE_ADMIN/DEPARTMENT_ADMIN) and **`worker.manage`**
+(gates the new audited `DELETE /api/v1/worker-health/{id}`, → SUPER_ADMIN/STATE_ADMIN);
+`worker.heartbeat` is submit-only and **removed from `STATE_ADMIN`** (v1.4 copy-paste).
+`DETECTION_WORKER` keeps `worker.heartbeat` only.
+
 Stack: **.NET 10 / ASP.NET Core minimal API**, PostgreSQL (no extensions — see below), Kafka,
 OpenSearch, deployed on **on-prem bare metal** with systemd — no Kubernetes. Scale target is **80,000
 cameras in production**, validated against a simulator; first-phase rollout is 100+ cameras.

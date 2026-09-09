@@ -154,6 +154,34 @@ that string-matches `"DISABLED"` in a status badge/filter must switch to `"INACT
 
 - **Docs:** OpenAPI `/disable`; `docs/RBAC-LOGICAL-FLOW.md` §25.
 
+### 1.8 Worker-health (`v1.13`) — permission split, response shape, key binding
+
+Only relevant if the UI shows the AI-worker fleet list. The heartbeat *submit* path is
+machine-only (the `ai-worker` process) and unchanged for the UI.
+
+- **`GET /api/v1/worker-health` now needs `worker.read`**, not `worker.heartbeat`. New
+  `worker.manage` gates the retire route below. `worker.read` is granted to `SUPER_ADMIN`,
+  `STATE_ADMIN`, `DEPARTMENT_ADMIN`; `worker.manage` to `SUPER_ADMIN`, `STATE_ADMIN`.
+- **`AiWorkerHealthResponse` shape changed:**
+  ```diff
+  - { workerId, hostname, firstSeenAt, lastHeartbeatAt }
+  + { id, apiKeyId, apiKeyName, workerId, hostname, firstSeenAt, lastHeartbeatAt,
+  +   reportedAt, clockDriftSeconds }
+  ```
+  `hostname` is now always present. `lastHeartbeatAt` is server-authoritative;
+  `reportedAt` is the worker's own claimed time and `clockDriftSeconds`
+  = `lastHeartbeatAt − reportedAt`. It always includes network + queue latency, so a small
+  positive value (sub-second to a few seconds) is **normal**; positive means the worker's clock
+  is behind the server, negative means ahead. Only a large magnitude (tens of seconds+) is a
+  clock problem. `reportedAt` and `clockDriftSeconds` are **both `null`** when the poster
+  omitted `reportedAt` (the `ai-worker` client always sends it).
+  A worker is now identified by `(apiKeyId, workerId, hostname)`, so the list can show two rows
+  with the same `workerId` under different keys — key them on `id`.
+- **New `DELETE /api/v1/worker-health/{id}`** (`worker.manage`) — retire a decommissioned
+  worker or clear the stale rows a fleet resize leaves behind. 204 / 404.
+
+- **Docs:** OpenAPI on all three routes; `docs/OPERATIONS.md` (worker health); `db/versions/v1.13.sql`.
+
 ---
 
 ## 2. NEW ENDPOINTS the UI now needs

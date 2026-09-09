@@ -57,6 +57,12 @@ scoped to the target's organization unit. That role carries `vms.read`, `observa
 `scripts/create-detection-api-key.sh` to provision one, or `scripts/check-detection-api-key.sql`
 to audit and repair a key that already exists (e.g. one issued before v1.5).
 
+`monitoring/heartbeat.py` posts through the same key. From `db/versions/v1.13.sql` a heartbeat
+is bound to that key: the worker is `(key, WORKER_INDEX-of-COUNT, hostname)`, `worker.heartbeat`
+is submit-only, and the server — not the worker's clock — stamps the last-seen time (the worker's
+reported time is kept only to show clock drift). Nothing to change here; the push stays a no-op
+until `BACKEND_HEARTBEAT_URL` is set.
+
 ### RTSP stream credentials
 
 `streamReferences` from the registry never include a username/password (credentials are

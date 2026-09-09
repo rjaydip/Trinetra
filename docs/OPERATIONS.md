@@ -398,6 +398,33 @@ reports before/after, then grants the permission, re-roles and activates the gro
 idempotent. Organization/geography scope is not touched — set that with
 `create-detection-api-key.sh` or `POST /api/v1/access-groups/{id}/scopes`.
 
+### AI-worker health (`ai_worker_health`, `v1.13`)
+
+A worker is identified by the API key it authenticates with **plus** its own `workerId`
+(`ai-worker-{index}-of-{count}`) and `hostname`. A heartbeat can only ever create or refresh a
+row under its own key — one integration cannot report liveness for another's workers, and a
+user token cannot heartbeat at all (403).
+
+`last_heartbeat_at` is the **server** clock, set on every heartbeat. The worker's own claimed
+time is stored separately as `reported_at` and surfaced as `clockDriftSeconds`
+(= `last_heartbeat_at − reported_at`) in the list. That figure always includes network and queue
+latency, so a small positive value is normal; only a large magnitude means that host's clock is
+wrong — never that the worker is unhealthy.
+
+Staleness is judged **only** on `last_heartbeat_at`. Workers heartbeat every
+`BACKEND_HEARTBEAT_INTERVAL_SECONDS` (default **15 s**, in `ai-worker`'s config); treat a row as
+stale once `last_heartbeat_at` is older than roughly **3× that interval (~45 s)**. The API does
+not return the interval — a monitoring consumer sets its own cutoff from the deployed value.
+
+`GET /api/v1/worker-health` needs `worker.read` (SUPER_ADMIN, STATE_ADMIN, DEPARTMENT_ADMIN).
+`DELETE /api/v1/worker-health/{id}` needs `worker.manage` (SUPER_ADMIN, STATE_ADMIN) and is
+audited.
+
+**After a fleet resize** (`WORKER_COUNT` 4 → 2): `ai-worker-2-of-4` and `ai-worker-3-of-4` stop
+reporting and their rows go stale permanently — every consumer reads that as a crash. Clear
+them with `DELETE /api/v1/worker-health/{id}` (get the ids from the list). There is no
+automatic pruning yet.
+
 ### Permission coverage
 
 The API logs its authorization surface at startup:

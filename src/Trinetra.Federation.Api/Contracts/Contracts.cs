@@ -215,10 +215,18 @@ public sealed record WatchlistAlertResponse(
     DateTimeOffset RaisedAt, DateTimeOffset? AcknowledgedAt);
 
 /// <summary>Heartbeat body posted by <c>ai-worker/monitoring/heartbeat.py</c>.</summary>
-public sealed record WorkerHeartbeatRequest(string WorkerId, string? Hostname, DateTimeOffset ReportedAt);
+/// <remarks>
+/// The worker is identified by the API key it authenticates with plus <c>WorkerId</c> and
+/// <c>Hostname</c> — a heartbeat can only touch a row under the caller's own key (Finding
+/// 17-M1). <c>ReportedAt</c> is the worker's own clock and is stored for drift diagnosis only;
+/// the server stamps the authoritative "last seen" time itself (Finding 17-M2).
+/// </remarks>
+public sealed record WorkerHeartbeatRequest(string WorkerId, string Hostname, DateTimeOffset? ReportedAt);
 
 public sealed record AiWorkerHealthResponse(
-    string WorkerId, string? Hostname, DateTimeOffset FirstSeenAt, DateTimeOffset LastHeartbeatAt);
+    Guid Id, Guid ApiKeyId, string ApiKeyName, string WorkerId, string Hostname,
+    DateTimeOffset FirstSeenAt, DateTimeOffset LastHeartbeatAt,
+    DateTimeOffset? ReportedAt, double? ClockDriftSeconds);
 
 public sealed record CreateApiKeyRequest(
     string DisplayName, Guid GroupId, DateTimeOffset? ExpiresAt = null);

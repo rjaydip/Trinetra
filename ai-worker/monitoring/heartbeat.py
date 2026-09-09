@@ -55,7 +55,9 @@ class HeartbeatSender:
                         self._url,
                         json={
                             "workerId": self._worker_id,
-                            "hostname": platform.node(),
+                            # The backend requires a hostname; platform.node() is "" on a host
+                            # with no resolvable name, which the backend rejects with 400.
+                            "hostname": platform.node() or "unknown",
                             "reportedAt": datetime.now(timezone.utc).isoformat(),
                         },
                     )
