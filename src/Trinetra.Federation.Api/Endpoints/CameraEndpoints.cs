@@ -559,13 +559,13 @@ public static class CameraEndpoints
                     built.Set("name", "p_name", RequireString(prop.Value, "name", errors, 255));
                     break;
                 case "manufacturer":
-                    built.Set("manufacturer", "p_manufacturer", NullableString(prop.Value, 255));
+                    built.Set("manufacturer", "p_manufacturer", NullableString(prop.Value, "manufacturer", errors, 255));
                     break;
                 case "model":
-                    built.Set("model", "p_model", NullableString(prop.Value, 255));
+                    built.Set("model", "p_model", NullableString(prop.Value, "model", errors, 255));
                     break;
                 case "serialNumber":
-                    built.Set("serial_number", "p_serial", NullableString(prop.Value, 255));
+                    built.Set("serial_number", "p_serial", NullableString(prop.Value, "serialNumber", errors, 255));
                     break;
                 case "cameraType":
                     var t = Upper(prop.Value.GetString());
@@ -610,22 +610,22 @@ public static class CameraEndpoints
                     built.Set("effective_range", "p_range", NullableDouble(prop.Value, "effectiveRange", 0.001, 5000, errors));
                     break;
                 case "ipAddress":
-                    built.Set("ip_address", "p_ip", NullableString(prop.Value, 45));
+                    built.Set("ip_address", "p_ip", NullableString(prop.Value, "ipAddress", errors, 45));
                     break;
                 case "port":
                     built.Set("port", "p_port", NullableInt(prop.Value, "port", 1, 65535, errors));
                     break;
                 case "protocol":
-                    built.Set("protocol", "p_proto", NullableString(prop.Value, 50));
+                    built.Set("protocol", "p_proto", NullableString(prop.Value, "protocol", errors, 50));
                     break;
                 case "vmsId":
                     built.Set("vms_id", "p_vms", NullableGuid(prop.Value, "vmsId", errors));
                     break;
                 case "streamReference":
-                    built.Set("stream_reference", "p_stream", NullableString(prop.Value, 512));
+                    built.Set("stream_reference", "p_stream", NullableString(prop.Value, "streamReference", errors, 512));
                     break;
                 case "credentialReference":
-                    built.Set("credential_reference", "p_cred", NullableString(prop.Value, 255));
+                    built.Set("credential_reference", "p_cred", NullableString(prop.Value, "credentialReference", errors, 255));
                     break;
                 case "installationDate":
                     built.Set("installation_date", "p_install",
@@ -709,7 +709,7 @@ public static class CameraEndpoints
         return s;
     }
 
-    private static string? NullableString(JsonElement e, int max)
+    private static string? NullableString(JsonElement e, string field, List<string> errors, int max)
     {
         if (e.ValueKind != JsonValueKind.String)
         {
@@ -717,7 +717,12 @@ public static class CameraEndpoints
         }
 
         var s = Trim(e.GetString());
-        return s is not null && s.Length > max ? s[..max] : s;
+        if (s is not null && s.Length > max)
+        {
+            errors.Add($"{field} is at most {max} characters.");
+        }
+
+        return s;
     }
 
     private static Guid? RequireGuid(JsonElement e, string field, List<string> errors)

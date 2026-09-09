@@ -334,13 +334,13 @@ public sealed class HierarchyScopeTests : IClassFixture<PostgresFixture>, IAsync
     }
 
     [Fact]
-    public async Task Org_DeactivateUnit_InScope_NoChildren_ReturnsNull()
+    public async Task Org_DeactivateUnit_InScope_NoChildren_Deactivates()
     {
         await using var work = await UnitOfWork.BeginAsync(_fixture.DataSource, CancellationToken.None);
 
-        var conflict = await Orgs.DeactivateUnitAsync(
+        var result = await Orgs.DeactivateUnitAsync(
             UnitLeaf, ChildStrategy.Refuse, null, ScopedCaller(), work, CancellationToken.None);
-        conflict.ShouldBeNull();
+        result.Outcome.ShouldBe(DeactivationOutcome.Deactivated);
         await work.CommitAsync(CancellationToken.None);
 
         var status = await _fixture.ScalarAsync<string>(
@@ -358,13 +358,13 @@ public sealed class HierarchyScopeTests : IClassFixture<PostgresFixture>, IAsync
     }
 
     [Fact]
-    public async Task Geo_DeactivateArea_InScope_ReturnsNull()
+    public async Task Geo_DeactivateArea_InScope_Deactivates()
     {
         await using var work = await UnitOfWork.BeginAsync(_fixture.DataSource, CancellationToken.None);
 
-        var conflict = await Geo.DeactivateAreaAsync(
+        var result = await Geo.DeactivateAreaAsync(
             AreaLeaf, ChildStrategy.Refuse, null, ScopedCaller(), work, CancellationToken.None);
-        conflict.ShouldBeNull();
+        result.Outcome.ShouldBe(DeactivationOutcome.Deactivated);
         await work.CommitAsync(CancellationToken.None);
 
         var status = await _fixture.ScalarAsync<string>(
@@ -375,24 +375,50 @@ public sealed class HierarchyScopeTests : IClassFixture<PostgresFixture>, IAsync
     // ---- 5-H2: already-inactive deactivate is an idempotent no-op ---------
 
     [Fact]
-    public async Task Org_DeactivateUnit_AlreadyInactive_ReturnsNull_NotAChildrenConflict()
+    public async Task Org_DeactivateUnit_AlreadyInactive_ReportsAlreadyInactive_NotAChildrenConflict()
     {
         // UnitInactive is seeded INACTIVE with an ACTIVE child. Without the "already inactive"
         // early return, the Refuse path would surface that child as a 409 conflict on a node
-        // that is already retired. NOTE: the repo returns null the same way a real deactivation
-        // does, so the endpoint still writes a status-change audit row and returns 204 for this
-        // no-op — a known fidelity gap owned by finding 5-M10, unchanged by PR6.
+        // that is already retired. Post-5-M10 the repo distinguishes this from a real
+        // deactivation, so the endpoint returns 409 "already inactive" and writes no audit row.
         await using var work = await UnitOfWork.BeginAsync(_fixture.DataSource, CancellationToken.None);
 
-        var conflict = await Orgs.DeactivateUnitAsync(
+        var result = await Orgs.DeactivateUnitAsync(
             UnitInactive, ChildStrategy.Refuse, null, ScopedCaller(), work, CancellationToken.None);
 
-        conflict.ShouldBeNull();
+        result.Outcome.ShouldBe(DeactivationOutcome.AlreadyInactive);
         await work.CommitAsync(CancellationToken.None);
     }
 
     [Fact]
-    public async Task Geo_DeactivateArea_AlreadyInactive_ReturnsNull()
+    public async Task Org_DeactivateUnit_NonexistentId_ReportsNotFound_NoWrite()
+    {
+        // 5-M10: an unscoped caller deactivating an id that does not exist used to fall through
+        // to an UPDATE that hit zero rows — a phantom 204 and a false audit row. The repo now
+        // reports NotFound before touching anything.
+        await using var work = await UnitOfWork.BeginAsync(_fixture.DataSource, CancellationToken.None);
+
+        var result = await Orgs.DeactivateUnitAsync(
+            Guid.NewGuid(), ChildStrategy.Refuse, null, UnscopedCaller(), work, CancellationToken.None);
+
+        result.Outcome.ShouldBe(DeactivationOutcome.NotFound);
+        await work.CommitAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task Geo_DeactivateArea_NonexistentId_ReportsNotFound()
+    {
+        await using var work = await UnitOfWork.BeginAsync(_fixture.DataSource, CancellationToken.None);
+
+        var result = await Geo.DeactivateAreaAsync(
+            Guid.NewGuid(), ChildStrategy.Refuse, null, UnscopedCaller(), work, CancellationToken.None);
+
+        result.Outcome.ShouldBe(DeactivationOutcome.NotFound);
+        await work.CommitAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task Geo_DeactivateArea_AlreadyInactive_ReportsAlreadyInactive()
     {
         await using (var first = await UnitOfWork.BeginAsync(_fixture.DataSource, CancellationToken.None))
         {
@@ -404,7 +430,7 @@ public sealed class HierarchyScopeTests : IClassFixture<PostgresFixture>, IAsync
         await using var second = await UnitOfWork.BeginAsync(_fixture.DataSource, CancellationToken.None);
         (await Geo.DeactivateAreaAsync(
             AreaLeaf, ChildStrategy.Cascade, null, ScopedCaller(), second, CancellationToken.None))
-            .ShouldBeNull();
+            .Outcome.ShouldBe(DeactivationOutcome.AlreadyInactive);
         await second.CommitAsync(CancellationToken.None);
     }
 
@@ -416,9 +442,9 @@ public sealed class HierarchyScopeTests : IClassFixture<PostgresFixture>, IAsync
         // CcMid, reparent its children onto CcRoot (in reach, not inside the branch).
         await using var work = await UnitOfWork.BeginAsync(_fixture.DataSource, CancellationToken.None);
 
-        var conflict = await Orgs.DeactivateUnitAsync(
+        var result = await Orgs.DeactivateUnitAsync(
             CcMid, ChildStrategy.Reparent, CcRoot, ScopedCaller(), work, CancellationToken.None);
-        conflict.ShouldBeNull();
+        result.Outcome.ShouldBe(DeactivationOutcome.Deactivated);
         await work.CommitAsync(CancellationToken.None);
 
         var leafParent = await _fixture.ScalarAsync<Guid>(
@@ -508,7 +534,7 @@ public sealed class HierarchyScopeTests : IClassFixture<PostgresFixture>, IAsync
 
         (await Orgs.DeactivateUnitAsync(
             CcLeaf, ChildStrategy.Cascade, null, ScopedCaller(), workA, CancellationToken.None))
-            .ShouldBeNull();
+            .Outcome.ShouldBe(DeactivationOutcome.Deactivated);
 
         var bCompleted = false;
         var taskB = Task.Run(async () =>

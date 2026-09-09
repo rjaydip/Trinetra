@@ -50,6 +50,13 @@ public sealed class ConstraintViolationExceptionHandler : IExceptionHandler
                 "Value not allowed",
                 "One of the supplied values is outside what this field accepts."),
 
+            // A string longer than its column. A caller overran a length limit — a 400, not a
+            // platform fault. Endpoints validate lengths they know about; this catches the rest.
+            PostgresErrorCodes.StringDataRightTruncation => (
+                StatusCodes.Status400BadRequest,
+                "Value too long",
+                "One of the supplied values is longer than this field allows."),
+
             // Raised by the cycle-prevention triggers in 0001, which is the one case where the
             // database's own message is written for an operator and worth passing through.
             PostgresErrorCodes.RaiseException => (

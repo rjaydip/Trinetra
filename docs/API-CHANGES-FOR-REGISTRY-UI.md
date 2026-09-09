@@ -77,6 +77,42 @@ when refused with `409`:
 
 - **Docs:** OpenAPI on both `/deactivate` routes; `docs/GEOGRAPHY-SCHEMA.md` (Deactivation).
 
+### 1.4a Deactivating a missing node now 404s (and no phantom audit row)
+
+Same two `/deactivate` routes:
+
+- A node **id that is unknown or out of your scope** → **`404`** for an unscoped caller
+  (`organization.manage` / `geography.manage` held estate-wide); a **scoped** caller still gets
+  **`403`**. Previously an unscoped caller got a silent `204` plus a false `ACTIVE → INACTIVE`
+  audit row for a node that was never touched.
+- A node that is **already `INACTIVE`** stays an **idempotent `204`** — but it no longer writes
+  an audit row. Retrying a deactivate after a timeout is still safe.
+
+If `HierarchyPage` treated `204` as "done", that is unchanged; it must additionally treat `404`
+on these routes as "already gone", not a hard error.
+
+### 1.4b Validation errors that were `500` are now `400`
+
+- Any string field longer than its column (most visibly `code`) → **`400` "Value too long"**
+  (was: `500`).
+- **Camera `PATCH`** with an over-long optional string (`manufacturer`, `model`,
+  `serialNumber`, `ipAddress`, `protocol`, `streamReference`, `credentialReference`) → **`400`**
+  with `"<field> is at most <n> characters."` (was: the value was **silently truncated** and
+  saved).
+- `POST/PUT` a VMS target whose `endpoint` is not an `http(s)` URL (e.g. `file://…`) → **`400`
+  "Invalid endpoint"** (was: accepted). A bare `host` or `host:port` is still fine — it is read
+  as `http://host[:port]`.
+- `POST /api/v1/access-groups/{id}/scopes` with fields that do not match `scopeType` (an
+  `ORGANIZATION` scope with no `organizationUnitId`, a `GEOGRAPHY` scope carrying a
+  `resourceId`, etc.) → **`400` "Scope fields do not match its type"** with a specific message
+  (was: a generic `400`, or in some shapes a `500`).
+
+### 1.4c `GET /api/v1/vms/{id}/capabilities` — 404 body no longer distinguishes the reason
+
+A `404` is now returned with **no body detail** whether the target is outside your scope or
+simply has not been probed by a worker yet. The two are deliberately indistinguishable; do not
+show the user "target exists but not probed" copy based on this response.
+
 ### 1.5 `RoleResponse` shape changed
 
 ```diff

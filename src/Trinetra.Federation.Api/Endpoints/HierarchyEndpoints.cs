@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Npgsql;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Mvc;
@@ -143,7 +144,10 @@ public static class HierarchyEndpoints
               + "branch, or `\"reparent\"` plus `newParentId` to move the children somewhere "
               + "else first. Neither is ever applied by default: cascading silently takes a "
               + "department's whole estate out of scope, and silently reparenting hides a "
-              + "structural change no one approved.");
+              + "structural change no one approved.\n\n"
+              + "An id that is unknown or out of the caller's reach is **404** (a scoped caller "
+              + "gets **403**); a unit that is already inactive is an idempotent **204** — "
+              + "neither writes an audit row.");
     }
 
     private static void MapGeography(IEndpointRouteBuilder app)
@@ -242,7 +246,10 @@ public static class HierarchyEndpoints
               + "affected, and the caller re-sends with `childStrategy` `cascade` or `reparent` "
               + "plus `newParentId`.\n\n"
               + "A reparent target inside the branch being deactivated is a 400 — it would leave "
-              + "the children under an inactive ancestor.");
+              + "the children under an inactive ancestor.\n\n"
+              + "An id that is unknown or out of the caller's reach is **404** (a scoped caller "
+              + "gets **403**); an area that is already inactive is an idempotent **204** — "
+              + "neither writes an audit row.");
 
     }
 
@@ -268,8 +275,8 @@ public static class HierarchyEndpoints
     /// outcome is ever applied by default — see GEOGRAPHY-SCHEMA.md for why both silent
     /// behaviours are harmful.
     /// </remarks>
-    private static async Task<Results<NoContent, ProblemHttpResult>> DeactivateAsync(
-        Func<ChildStrategy, Task<DeactivationConflict?>> deactivate,
+    private static async Task<Results<NoContent, NotFound, ProblemHttpResult>> DeactivateAsync(
+        Func<ChildStrategy, Task<DeactivationResult>> deactivate,
         DeactivateRequest request,
         CallerContext caller,
         // The caller opens the unit and passes it in: the deactivation and its audit row must
@@ -288,21 +295,39 @@ public static class HierarchyEndpoints
 
         try
         {
-            var conflict = await deactivate(strategy);
+            var result = await deactivate(strategy);
 
-            if (conflict is not null)
+            switch (result.Outcome)
             {
-                return TypedResults.Problem(
-                    title: "Active children must be resolved first",
-                    detail: "Re-send with childStrategy 'cascade' to deactivate everything "
-                          + "beneath this node, or 'reparent' with newParentId to move its "
-                          + "children elsewhere first.",
-                    statusCode: StatusCodes.Status409Conflict,
-                    extensions: new Dictionary<string, object?>
-                    {
-                        ["affectedChildren"] = conflict.AffectedChildren,
-                        ["resolutions"] = Resolutions,
-                    });
+                case DeactivationOutcome.NotFound:
+                    return TypedResults.NotFound();
+
+                case DeactivationOutcome.AlreadyInactive:
+                    // Idempotent no-op: the node is already where the caller is asking it to be,
+                    // so this stays a 204 (a retry after a timeout must not surface a 409). The
+                    // fix for 5-M10 is that we return here *without* falling through to the audit
+                    // write — previously a phantom "ACTIVE → INACTIVE" trail row was recorded for
+                    // a node that never changed.
+                    return TypedResults.NoContent();
+
+                case DeactivationOutcome.ChildrenBlocked:
+                    return TypedResults.Problem(
+                        title: "Active children must be resolved first",
+                        detail: "Re-send with childStrategy 'cascade' to deactivate everything "
+                              + "beneath this node, or 'reparent' with newParentId to move its "
+                              + "children elsewhere first.",
+                        statusCode: StatusCodes.Status409Conflict,
+                        extensions: new Dictionary<string, object?>
+                        {
+                            ["affectedChildren"] = result.Conflict!.AffectedChildren,
+                            ["resolutions"] = Resolutions,
+                        });
+
+                case DeactivationOutcome.Deactivated:
+                    break;
+
+                default:
+                    throw new UnreachableException($"Unhandled deactivation outcome {result.Outcome}.");
             }
         }
         catch (InvalidOperationException ex)
@@ -633,7 +658,7 @@ public static class HierarchyEndpoints
         return TypedResults.Created($"/api/v1/organization-units/{unitId}", new CreatedResponse(unitId));
     }
 
-    private static async Task<Results<NoContent, ProblemHttpResult>> DeactivateUnitAsync(
+    private static async Task<Results<NoContent, NotFound, ProblemHttpResult>> DeactivateUnitAsync(
         Guid id, [FromBody] DeactivateRequest request, OrganizationRepository repo,
         NpgsqlDataSource db, HttpContext http, CancellationToken ct)
     {
@@ -725,7 +750,7 @@ public static class HierarchyEndpoints
         return TypedResults.Created($"/api/v1/geographic-areas/{id}", new CreatedResponse(id));
     }
 
-    private static async Task<Results<NoContent, ProblemHttpResult>> DeactivateAreaAsync(
+    private static async Task<Results<NoContent, NotFound, ProblemHttpResult>> DeactivateAreaAsync(
         Guid id, [FromBody] DeactivateRequest request, GeographyRepository repo,
         NpgsqlDataSource db, HttpContext http, CancellationToken ct)
     {

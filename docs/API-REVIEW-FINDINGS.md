@@ -167,6 +167,49 @@ validation, `9-M1` VerifyTls non-nullable (TLS downgrade), `9-M2` org/site ACTIV
 `9-M4` CapabilitiesAsync 404 leak, `10-M3` NullableString silent truncation, `16-M1` dup plate →
 500 not 409, `9-NEW-L` file:// endpoint, `9-NEW-L` malformed notes JSON → 500.
 
+**PR10 (validation / error-shape wave) — done, uncommitted:**
+- **5-M9** ✅ `ConstraintViolationExceptionHandler` now maps `22001`
+  (`StringDataRightTruncation`) → 400 "Value too long". Any over-length string that slips past
+  an endpoint's own length check lands as a 400, not a platform 500. Unit test +
+  sabotage-checked.
+- **5-M10** ✅ `OrganizationRepository.DeactivateUnitAsync` /
+  `GeographyRepository.DeactivateAreaAsync` return a `DeactivationResult`
+  (`Deactivated | NotFound | AlreadyInactive | ChildrenBlocked`) instead of a bare
+  `DeactivationConflict?`. The shared `HierarchyEndpoints.DeactivateAsync` helper returns
+  **404** for a missing node (unscoped caller; a scoped caller still gets 403) and keeps
+  **204** for one already INACTIVE — but both paths `return` **before** the audit write, so
+  no phantom 204 / false `ACTIVE→INACTIVE` trail row. (BA + dotnet-expert both preferred the
+  idempotent 204 over a 409 for already-inactive — a retry after timeout must not surface a
+  conflict.) `default:` arm of the outcome switch now `throw new UnreachableException()` so a
+  future outcome can't silently fall into the audit-write path. Integration tests assert the
+  repo outcomes (NotFound + AlreadyInactive), sabotage-checked. **Coverage gap (accepted, same
+  as 6-M2):** no `WebApplicationFactory`, so the "helper writes no audit row on the no-op
+  paths" behaviour is not directly asserted — a regression moving `work.AuditAsync` above the
+  switch would not be caught by a test.
+- **10-M3** ✅ `CameraEndpoints.NullableString` takes `(field, errors)` and appends
+  "`{field}` is at most `{max}` characters." instead of silently doing `s[..max]`. Matches
+  `RequireString`.
+- **9-M4** ✅ `VmsEndpoints.CapabilitiesAsync` — out-of-scope target and never-probed target
+  both return a bare `TypedResults.NotFound()` (no distinguishing body); route doc says the two
+  are deliberately indistinguishable.
+- **9-NEW-L (notes JSON)** ✅ `CapabilitiesAsync` wraps `JsonSerializer.Deserialize` of the
+  worker-written notes blob in `try/catch (JsonException)` → empty notes, never a 500.
+- **9-NEW-L (endpoint scheme)** ✅ `VmsEndpoints.TryBuild` rejects a target endpoint whose URI
+  scheme is not http/https (400) — `file://`, `gopher://` etc. no longer accepted. A bare
+  `host[:port]` is still taken as `http://host[:port]`.
+- **6-M2** ✅ `AccessGroupEndpoints.AddScopeAsync` validates the populated dimension per scope
+  type (ORGANIZATION→organizationUnitId only, GEOGRAPHY→geographicAreaId only,
+  RESOURCE→resourceType+resourceId only) with a named 400 before opening a transaction, ahead
+  of the DB's `ck_scope_single_dimension` CHECK (which would 400 as an opaque "value not
+  allowed"). Endpoint-level; not integration-tested (no WebApplicationFactory).
+- **6-M3** — deferred. No resource-type vocabulary exists in the codebase yet; a RESOURCE-scope
+  existence/allow-list check waits until one does.
+- **5-M2** — resolved by v1.11: `geographic_areas.area_type` is a required FK into
+  `geographic_area_types`, so an unknown value is a `ForeignKeyViolation` → 400 via the global
+  handler. No new code.
+- **16-M1** — already 409: the dup-active-plate insert violates the `ux_watchlist_active`
+  partial unique index → `UniqueViolation` → 409 via the global handler. No new code.
+
 **ESCALATION / SCOPE (non-P1):**
 `6-M1` geography asymmetry in group scope add/remove, `5-M1` org read perm mismatch
 (`geography.read` vs `organization.read`) ✅ PR6.
@@ -230,7 +273,7 @@ rule does not bite — still prefer new `v1.7+` files over editing `v1.sql`. Bra
 | —    | 4-H6 API-key entropy — **refuted**, keys already server-generated 256-bit CSPRNG | — |
 | PR8  | **Audit-fidelity wave** (P2) | — |
 | PR9  | **Pagination wave** (P2) | — |
-| PR10 | **Validation / error-shape wave** (P2) | — |
+| PR10 | **Validation / error-shape wave** (P2) — ✅ done (5-M9, 5-M10, 6-M2, 10-M3, 9-M4, 9-NEW-L ×2; 5-M2 / 16-M1 already covered by the global constraint handler; 6-M3 deferred) | `DeactivationResult` in Storage |
 | PR11 | **P3 sweep** incl. F1 | — |
 | F7   | separate feature branch, **after** the design decision | approval tables |
 
@@ -603,7 +646,7 @@ Desktop).
   the repo so not an exposure, but a group with `organization.read` & not `geography.read` is
   wrongly 403'd at the filter, and OpenAPI advertises a false requirement. All seeded roles pair
   the two so latent. Fix both → `organization.read`.
-- **5-M2** `area_type` unvalidated free text. No FK to `geographic_area_types`, no check in
+- ✅ **5-M2** `area_type` unvalidated free text. No FK to `geographic_area_types`, no check in
   endpoint or `UpsertAreaAsync`, no `level_order` check vs parent — contradicts route description
   (":141-142") and DDL comment ("reject a district inside a village"). Validate in Storage.
 - **5-M3** Codes globally unique estate-wide (`organizations/units/areas.code` bare UNIQUE).
@@ -639,10 +682,10 @@ Desktop).
   + not-in-branch, never ACTIVE. Defeats the deactivation flow. FIXED in PR6 — see the PR6
   RESOLUTION block above (`RequireActiveParentAsync` / `RequireActiveAreaAsync` →
   `InvalidReferenceException` → 400).
-- **5-M9** Over-length `code` → 500. `code` VARCHAR(50) (sites 100); 51 chars raises `22001`, not
+- ✅ **5-M9** Over-length `code` → 500. `code` VARCHAR(50) (sites 100); 51 chars raises `22001`, not
   in `ConstraintViolationExceptionHandler` switch (→500). No length/charset validation on
   Code/Name/Address at endpoint. Add DTO validation and/or map `22001`.
-- **5-M10** Phantom 204 + false audit on deactivating a nonexistent / already-INACTIVE node
+- ✅ **5-M10** Phantom 204 + false audit on deactivating a nonexistent / already-INACTIVE node
   (unscoped caller): UPDATE hits 0 rows → null → still writes audit `before:{ACTIVE}`
   `after:{INACTIVE}` and returns 204. Check existence/current status → 404 / 409.
 
@@ -768,7 +811,7 @@ Review 2026-09-04. Write paths are meticulously guarded (escalation chokepoint +
   outside their geographic reach. `RemoveScopeAsync` widening guard (:265) also only covers the
   last ORGANIZATION scope — removing the last GEOGRAPHY scope widens to every area unchecked.
   Add the symmetric geo checks (`IsUnscopedForGeography` / caller geo reach).
-- **6-M2** `AddScopeAsync` no per-scope-type field validation: ORGANIZATION scope with null
+- ✅ **6-M2** `AddScopeAsync` no per-scope-type field validation: ORGANIZATION scope with null
   `OrganizationUnitId` (or GEOGRAPHY w/ null area, RESOURCE w/ null resourceType/Id) passes —
   could store a nonsense/over-broad scope row. Validate required field per type.
 - **6-M3** `AddScopeAsync` RESOURCE scope: `ResourceType`/`ResourceId` unvalidated — no check the
@@ -1089,7 +1132,7 @@ dimension is broken across read AND write.
   ORDER BY native_camera_id` no LIMIT; one aggregating VMS = thousands of cameras, unbounded
   response, double array-materialised. (Target `ListAsync` also unpaginated but bounded by design
   — camera list is the real one.)
-- **9-M4** CONFIRMED info leak. `CapabilitiesAsync`: out-of-scope → 404 "Not found"; in-scope
+- ✅ **9-M4** CONFIRMED info leak. `CapabilitiesAsync`: out-of-scope → 404 "Not found"; in-scope
   unprobed → 404 "Not probed yet". Distinguishable bodies → probe which ids exist. Every sibling
   endpoint returns bare `TypedResults.NotFound()` for both. Fix the lone inconsistency.
 - **9-NEW-M** (second pass) `RegisterAsync` audit passes `organizationUnitId:
@@ -1140,7 +1183,7 @@ Findings are mostly M/L.
   2°×2° bbox with >5000 in-scope cameras drops rows with no `nextCursor`, no `truncated` flag, no
   error. The camera list endpoint paginates properly; the map source just loses data. Add a
   truncation signal or paginate.
-- **10-M3** `NullableString` (CameraEndpoints.cs:712-721) silently **truncates** over-length
+- ✅ **10-M3** `NullableString` (CameraEndpoints.cs:712-721) silently **truncates** over-length
   values (`s[..max]`) instead of erroring — a 60-char `ipAddress` PATCH becomes a corrupt 45-char
   string. `RequireString` errors on over-length; the nullable variant corrupts. Make it error too.
 - **10-M4** `BulkImportAsync` — up to 500 rows, each its own `BeginAsync`/`CommitAsync` executed

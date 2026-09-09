@@ -224,7 +224,7 @@ public sealed class GeographyRepository
     /// Deactivates an area, resolving active child areas by the chosen strategy.
     /// </summary>
     /// <returns>Null on success; what would be affected when the strategy is Refuse.</returns>
-    public async Task<DeactivationConflict?> DeactivateAreaAsync(
+    public async Task<DeactivationResult> DeactivateAreaAsync(
         Guid areaId, ChildStrategy strategy, Guid? newParentId, CallerContext caller, UnitOfWork work, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(caller);
@@ -252,9 +252,14 @@ public sealed class GeographyRepository
             SELECT status FROM federation.geographic_areas WHERE id = @areaId FOR UPDATE;
             """, new { areaId }, work.Transaction, cancellationToken: ct)).ConfigureAwait(false);
 
+        if (rootStatus is null)
+        {
+            return DeactivationResult.NotFound;
+        }
+
         if (rootStatus == "INACTIVE")
         {
-            return null;
+            return DeactivationResult.AlreadyInactive;
         }
 
         var areas = (await c.QueryAsync<string>(new CommandDefinition("""
@@ -264,7 +269,7 @@ public sealed class GeographyRepository
 
         if (areas.Count > 0 && strategy == ChildStrategy.Refuse)
         {
-            return new DeactivationConflict(areas);
+            return DeactivationResult.Blocked(areas);
         }
 
         if (strategy == ChildStrategy.Reparent && areas.Count > 0)
@@ -313,7 +318,7 @@ public sealed class GeographyRepository
                 WHERE id = @areaId;
                 """, new { areaId }, work.Transaction, cancellationToken: ct));
         }
-        return null;
+        return DeactivationResult.Ok;
     }
 
     /// <summary>

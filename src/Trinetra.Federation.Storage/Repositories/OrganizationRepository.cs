@@ -358,7 +358,7 @@ public sealed class OrganizationRepository
     /// Deactivates a unit, resolving active children by the chosen strategy.
     /// </summary>
     /// <returns>Null on success; the affected children when the strategy is Refuse.</returns>
-    public async Task<DeactivationConflict?> DeactivateUnitAsync(
+    public async Task<DeactivationResult> DeactivateUnitAsync(
         Guid unitId, ChildStrategy strategy, Guid? newParentId, CallerContext caller, UnitOfWork work, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(caller);
@@ -393,12 +393,16 @@ public sealed class OrganizationRepository
             SELECT status FROM federation.organization_units WHERE id = @unitId FOR UPDATE;
             """, new { unitId }, work.Transaction, cancellationToken: ct)).ConfigureAwait(false);
 
-        // Already inactive (or a concurrent deactivation won the lock first): nothing to do.
-        // A missing row falls through to the UPDATE, which hits nothing — unchanged behaviour,
-        // the 404 refinement is 5-M10, out of scope here.
+        // No such row in scope → 404; already INACTIVE (or a concurrent deactivation won the lock
+        // first) → 409. Either way there is nothing to update and no audit row to write (5-M10).
+        if (rootStatus is null)
+        {
+            return DeactivationResult.NotFound;
+        }
+
         if (rootStatus == "INACTIVE")
         {
-            return null;
+            return DeactivationResult.AlreadyInactive;
         }
 
         // NOTE(5-H2): an ACTIVE node can still end up under an INACTIVE ancestor two ways — a
@@ -415,7 +419,7 @@ public sealed class OrganizationRepository
 
         if (children.Count > 0 && strategy == ChildStrategy.Refuse)
         {
-            return new DeactivationConflict(children);
+            return DeactivationResult.Blocked(children);
         }
 
         if (strategy == ChildStrategy.Reparent && children.Count > 0)
@@ -464,7 +468,7 @@ public sealed class OrganizationRepository
               """;
 
         await c.ExecuteAsync(new CommandDefinition(sql, new { unitId }, work.Transaction, cancellationToken: ct));
-        return null;
+        return DeactivationResult.Ok;
     }
     /// <summary>
     /// Moves an INACTIVE unit back to ACTIVE (P3). Refused when the unit's parent is INACTIVE —

@@ -149,8 +149,9 @@ public static class VmsEndpoints
               + "Served from the stored matrix and **never by probing the device**: letting a "
               + "dashboard render trigger probes would turn one page load into thousands of "
               + "vendor round trips.\n\n"
-              + "404 with 'Not probed yet' means the target exists but no worker has reached it "
-              + "— check its state and its connection test before reading anything into it.");
+              + "A `404` means either the target is out of your scope or no worker has reached it "
+              + "yet — the two are deliberately indistinguishable. Check the target's state and "
+              + "connection test if you expected a matrix.");
 
         group.MapGet("/{id:guid}/cameras", CamerasAsync)
           .WithPaginatedResponse<FederatedCameraResponse>()
@@ -224,14 +225,16 @@ public static class VmsEndpoints
             return false;
         }
 
-        if (!Uri.TryCreate(
-                request.Endpoint.StartsWith("http", StringComparison.OrdinalIgnoreCase)
-                    ? request.Endpoint : $"http://{request.Endpoint}",
-                UriKind.Absolute, out _))
+        var endpointText = request.Endpoint.Contains("://", StringComparison.Ordinal)
+            ? request.Endpoint
+            : $"http://{request.Endpoint}";
+        if (!Uri.TryCreate(endpointText, UriKind.Absolute, out var endpointUri)
+            || (endpointUri.Scheme != Uri.UriSchemeHttp && endpointUri.Scheme != Uri.UriSchemeHttps))
         {
             problem = TypedResults.Problem(
                 title: "Invalid endpoint",
-                detail: $"'{request.Endpoint}' is not a usable address.",
+                detail: $"'{request.Endpoint}' is not a usable http(s) address. A VMS endpoint is "
+                      + "an HTTP(S) URL or a bare host[:port]; other schemes are rejected.",
                 statusCode: StatusCodes.Status400BadRequest);
             return false;
         }
@@ -468,16 +471,19 @@ public static class VmsEndpoints
         ]);
     }
 
-    private static async Task<Results<Ok<CapabilityResponse>, ProblemHttpResult>> CapabilitiesAsync(
+    private static async Task<Results<Ok<CapabilityResponse>, NotFound>> CapabilitiesAsync(
         Guid id, ConnectorTargetRepository repo, FederationQueryRepository queries,
         HttpContext http, CancellationToken ct)
     {
         var caller = CallerContextFactory.From(http);
 
+        // Both "no such target / not yours" and "target exists but never probed" return a bare
+        // 404 with no distinguishing body (9-M4): telling an out-of-scope caller that an id is
+        // real, or that it is real-but-unprobed, is itself a disclosure. Every sibling route
+        // does the same.
         if (await repo.GetAsync(id, caller, ct) is null)
         {
-            return TypedResults.Problem(
-                title: "Not found", statusCode: StatusCodes.Status404NotFound);
+            return TypedResults.NotFound();
         }
 
         // Served from the stored matrix, never by probing the device. At 80k cameras,
@@ -487,17 +493,22 @@ public static class VmsEndpoints
 
         if (row is null)
         {
-            return TypedResults.Problem(
-                title: "Not probed yet",
-                detail: "This target has not been contacted by a worker. Capabilities appear "
-                      + "once it connects for the first time.",
-                statusCode: StatusCodes.Status404NotFound);
+            return TypedResults.NotFound();
+        }
+
+        Dictionary<string, string> notes;
+        try
+        {
+            notes = JsonSerializer.Deserialize<Dictionary<string, string>>(row.NotesJson ?? "{}") ?? [];
+        }
+        catch (JsonException)
+        {
+            // The notes blob is written by a worker; a malformed value must not 500 a read.
+            notes = [];
         }
 
         return TypedResults.Ok(new CapabilityResponse(
-            row.Supported, row.AdapterVersion, row.ProbedAt,
-            JsonSerializer.Deserialize<Dictionary<string, string>>(row.NotesJson ?? "{}")
-                ?? []));
+            row.Supported, row.AdapterVersion, row.ProbedAt, notes));
     }
 
     private const int CameraListHardCap = 2000;

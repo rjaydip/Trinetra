@@ -94,6 +94,33 @@ public enum ChildStrategy
 /// <summary>What a deactivation would affect (the active child nodes), returned when it is refused.</summary>
 public sealed record DeactivationConflict(IReadOnlyList<string> AffectedChildren);
 
+/// <summary>Which terminal state a deactivation attempt reached.</summary>
+public enum DeactivationOutcome
+{
+    /// <summary>The node was ACTIVE and is now INACTIVE.</summary>
+    Deactivated,
+
+    /// <summary>No such node in the caller's scope — the endpoint returns 404.</summary>
+    NotFound,
+
+    /// <summary>The node was already INACTIVE — the endpoint returns 409, and no audit row is written.</summary>
+    AlreadyInactive,
+
+    /// <summary>Active children block a <see cref="ChildStrategy.Refuse"/> deactivation.</summary>
+    ChildrenBlocked,
+}
+
+/// <summary>Outcome of a deactivation, distinguishing "done" from "nothing to do" so the endpoint
+/// does not emit a phantom 204 and a false audit row (finding 5-M10).</summary>
+public sealed record DeactivationResult(DeactivationOutcome Outcome, DeactivationConflict? Conflict = null)
+{
+    public static readonly DeactivationResult Ok = new(DeactivationOutcome.Deactivated);
+    public static readonly DeactivationResult NotFound = new(DeactivationOutcome.NotFound);
+    public static readonly DeactivationResult AlreadyInactive = new(DeactivationOutcome.AlreadyInactive);
+    public static DeactivationResult Blocked(IReadOnlyList<string> children) =>
+        new(DeactivationOutcome.ChildrenBlocked, new DeactivationConflict(children));
+}
+
 /// <summary>Outcome of activating a hierarchy node (P3).</summary>
 public enum ActivateResult
 {

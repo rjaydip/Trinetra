@@ -472,6 +472,36 @@ public static class AccessGroupEndpoints
                 statusCode: StatusCodes.Status400BadRequest);
         }
 
+        // Each scope type populates exactly one dimension. The DB's ck_scope_single_dimension
+        // CHECK would otherwise reject a mismatch as an opaque "value not allowed" 400 (6-M2);
+        // name the actual problem here instead, before opening a transaction.
+        var fieldError = scopeType switch
+        {
+            "ORGANIZATION" when request.OrganizationUnitId is null =>
+                "An ORGANIZATION scope needs organizationUnitId.",
+            "ORGANIZATION" when request.GeographicAreaId is not null || request.ResourceType is not null
+                             || request.ResourceId is not null =>
+                "An ORGANIZATION scope takes only organizationUnitId.",
+            "GEOGRAPHY" when request.GeographicAreaId is null =>
+                "A GEOGRAPHY scope needs geographicAreaId.",
+            "GEOGRAPHY" when request.OrganizationUnitId is not null || request.ResourceType is not null
+                          || request.ResourceId is not null =>
+                "A GEOGRAPHY scope takes only geographicAreaId.",
+            "RESOURCE" when string.IsNullOrWhiteSpace(request.ResourceType) || request.ResourceId is null =>
+                "A RESOURCE scope needs both resourceType and resourceId.",
+            "RESOURCE" when request.OrganizationUnitId is not null || request.GeographicAreaId is not null =>
+                "A RESOURCE scope takes only resourceType and resourceId.",
+            _ => null,
+        };
+
+        if (fieldError is not null)
+        {
+            return TypedResults.Problem(
+                title: "Scope fields do not match its type",
+                detail: fieldError,
+                statusCode: StatusCodes.Status400BadRequest);
+        }
+
         // A scoped caller cannot widen a group beyond their own reach: granting access to an
         // organization unit they cannot themselves see would be escalation by another route.
         if (!caller.IsUnscopedFor("group.manage") && scopeType == "ORGANIZATION"
