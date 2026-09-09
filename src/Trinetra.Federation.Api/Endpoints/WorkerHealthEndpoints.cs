@@ -28,8 +28,11 @@ public static class WorkerHealthEndpoints
           .WithSummary("List known AI workers and their last heartbeat")
           .WithDescription(
               "Every worker that has ever reported in. A worker whose `lastHeartbeatAt` has gone "
-              + "stale is the operational signal that instance has died or lost connectivity.");
+              + "stale is the operational signal that instance has died or lost connectivity.\n\n"
+              + Paginate.Doc);
     }
+
+    private const int ListHardCap = 1000;
 
     private static async Task<NoContent> HeartbeatAsync(
         [FromBody] WorkerHeartbeatRequest request, AiWorkerHealthRepository repo,
@@ -39,15 +42,16 @@ public static class WorkerHealthEndpoints
         return TypedResults.NoContent();
     }
 
-    private static async Task<Ok<IReadOnlyList<AiWorkerHealthResponse>>> ListAsync(
-        AiWorkerHealthRepository repo, CancellationToken ct)
+    private static async Task<IResult> ListAsync(
+        int? page, int? pageSize, AiWorkerHealthRepository repo, HttpContext http, CancellationToken ct)
     {
-        var rows = await repo.ListAsync(ct);
+        var q = new PageQuery(page, pageSize);
+        var rows = await repo.ListAsync(
+            new PageWindow(q.Limit(ListHardCap, ListHardCap), q.Offset(ListHardCap)), ct);
 
-        return TypedResults.Ok<IReadOnlyList<AiWorkerHealthResponse>>(
-        [
-            .. rows.Select(r => new AiWorkerHealthResponse(
-                r.WorkerId, r.Hostname, r.FirstSeenAt, r.LastHeartbeatAt)),
-        ]);
+        return Paginate.Render(http, q, ListHardCap,
+            [.. rows.Items.Select(r => new AiWorkerHealthResponse(
+                r.WorkerId, r.Hostname, r.FirstSeenAt, r.LastHeartbeatAt))],
+            rows.Total);
     }
 }

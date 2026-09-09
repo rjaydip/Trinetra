@@ -33,7 +33,8 @@ public static class HierarchyEndpoints
           .WithDescription(
               "The top of the organizational dimension — one row per force, agency or operator "
               + "whose units own VMS targets. Start here when building a scope picker, then walk "
-              + "down with `GET /organizations/{id}/units`.");
+              + "down with `GET /organizations/{id}/units`.\n\n"
+              + Paginate.Doc);
 
         group.MapGet("/{id:guid}", GetOrganizationAsync)
           .RequirePermission("organization.read")
@@ -67,7 +68,8 @@ public static class HierarchyEndpoints
           .WithDescription(
               "The unit tree beneath one organization, each row carrying its `parentUnitId` so a "
               + "client can assemble the hierarchy. These ids are what `organizationUnitId` on a "
-              + "VMS target and on an access-group scope grant refer to.");
+              + "VMS target and on an access-group scope grant refer to.\n\n"
+              + Paginate.Doc);
 
         group.MapPost("/{id:guid}/units", CreateUnitAsync)
           .RequirePermission("organization.manage")
@@ -155,7 +157,8 @@ public static class HierarchyEndpoints
               "Areas within the caller's geographic scope. `rootsOnly=true` returns the top of "
               + "the tree; `parentId` returns one level beneath a node. Send neither and the "
               + "whole in-scope set comes back — fine for a small deployment, worth paging by "
-              + "level in a large one.");
+              + "level in a large one.\n\n"
+              + Paginate.Doc);
 
         areas.MapGet("/{id:guid}", GetAreaAsync)
           .RequirePermission("geography.read")
@@ -171,7 +174,8 @@ public static class HierarchyEndpoints
           .WithSummary("List an area's immediate children")
           .WithDescription(
               "One level down, for rendering a tree as the user expands it rather than fetching "
-              + "the whole hierarchy up front.");
+              + "the whole hierarchy up front.\n\n"
+              + Paginate.Doc);
 
         areas.MapGet("/{id:guid}/ancestors", ListAreaAncestorsAsync)
           .RequirePermission("geography.read")
@@ -323,12 +327,16 @@ public static class HierarchyEndpoints
         return TypedResults.NoContent();
     }
 
-    private static async Task<Ok<IReadOnlyList<OrganizationResponse>>> ListOrganizationsAsync(
-        OrganizationRepository repo, HttpContext http, CancellationToken ct)
+    private const int ListHardCap = 1000;
+
+    private static async Task<IResult> ListOrganizationsAsync(
+        int? page, int? pageSize, OrganizationRepository repo, HttpContext http, CancellationToken ct)
     {
         var caller = CallerContextFactory.From(http);
-        var orgs = await repo.ListAsync(caller, ct);
-        return TypedResults.Ok<IReadOnlyList<OrganizationResponse>>([.. orgs.Select(ToResponse)]);
+        var q = new PageQuery(page, pageSize);
+        var orgs = await repo.ListPageAsync(
+            caller, new PageWindow(q.Limit(ListHardCap, ListHardCap), q.Offset(ListHardCap)), ct);
+        return Paginate.Render(http, q, ListHardCap, [.. orgs.Items.Select(ToResponse)], orgs.Total);
     }
 
     private static async Task<Results<Ok<OrganizationResponse>, NotFound>> GetOrganizationAsync(
@@ -581,12 +589,14 @@ public static class HierarchyEndpoints
             [.. result.AffectedGroups.Select(g => new AffectedGroupResponse(g.Id, g.Code, g.MemberCount))]));
     }
 
-    private static async Task<Ok<IReadOnlyList<OrganizationUnitResponse>>> ListUnitsAsync(
-        Guid id, OrganizationRepository repo, HttpContext http, CancellationToken ct)
+    private static async Task<IResult> ListUnitsAsync(
+        Guid id, int? page, int? pageSize, OrganizationRepository repo, HttpContext http, CancellationToken ct)
     {
         var caller = CallerContextFactory.From(http);
-        var units = await repo.ListUnitsAsync(id, caller, ct);
-        return TypedResults.Ok<IReadOnlyList<OrganizationUnitResponse>>([.. units.Select(ToResponse)]);
+        var q = new PageQuery(page, pageSize);
+        var units = await repo.ListUnitsPageAsync(
+            id, caller, new PageWindow(q.Limit(ListHardCap, ListHardCap), q.Offset(ListHardCap)), ct);
+        return Paginate.Render(http, q, ListHardCap, [.. units.Items.Select(ToResponse)], units.Total);
     }
 
     private static async Task<Created<CreatedResponse>> CreateUnitAsync(
@@ -633,13 +643,16 @@ public static class HierarchyEndpoints
             request, caller, work, "organization_unit", id, ct);
     }
 
-    private static async Task<Ok<IReadOnlyList<GeographicAreaResponse>>> ListAreasAsync(
-        Guid? parentId, bool? rootsOnly, GeographyRepository repo, HttpContext http,
-        CancellationToken ct)
+    private static async Task<IResult> ListAreasAsync(
+        Guid? parentId, bool? rootsOnly, int? page, int? pageSize, GeographyRepository repo,
+        HttpContext http, CancellationToken ct)
     {
         var caller = CallerContextFactory.From(http);
-        var areas = await repo.ListAreasAsync(parentId, rootsOnly ?? false, caller, ct);
-        return TypedResults.Ok<IReadOnlyList<GeographicAreaResponse>>([.. areas.Select(ToResponse)]);
+        var q = new PageQuery(page, pageSize);
+        var areas = await repo.ListAreasPageAsync(
+            parentId, rootsOnly ?? false, caller,
+            new PageWindow(q.Limit(ListHardCap, ListHardCap), q.Offset(ListHardCap)), ct);
+        return Paginate.Render(http, q, ListHardCap, [.. areas.Items.Select(ToResponse)], areas.Total);
     }
 
     private static async Task<Results<Ok<GeographicAreaResponse>, NotFound>> GetAreaAsync(
@@ -650,12 +663,15 @@ public static class HierarchyEndpoints
         return area is null ? TypedResults.NotFound() : TypedResults.Ok(ToResponse(area));
     }
 
-    private static async Task<Ok<IReadOnlyList<GeographicAreaResponse>>> ListAreaChildrenAsync(
-        Guid id, GeographyRepository repo, HttpContext http, CancellationToken ct)
+    private static async Task<IResult> ListAreaChildrenAsync(
+        Guid id, int? page, int? pageSize, GeographyRepository repo, HttpContext http, CancellationToken ct)
     {
         var caller = CallerContextFactory.From(http);
-        var children = await repo.ListAreasAsync(id, false, caller, ct);
-        return TypedResults.Ok<IReadOnlyList<GeographicAreaResponse>>([.. children.Select(ToResponse)]);
+        var q = new PageQuery(page, pageSize);
+        var children = await repo.ListAreasPageAsync(
+            id, false, caller,
+            new PageWindow(q.Limit(ListHardCap, ListHardCap), q.Offset(ListHardCap)), ct);
+        return Paginate.Render(http, q, ListHardCap, [.. children.Items.Select(ToResponse)], children.Total);
     }
 
     private static async Task<Ok<IReadOnlyList<GeographicAreaResponse>>> ListAreaAncestorsAsync(

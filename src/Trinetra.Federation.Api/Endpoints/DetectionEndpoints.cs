@@ -77,7 +77,8 @@ public static class DetectionEndpoints
           .WithDescription(
               "Detections within a time window, optionally filtered by plate number or VMS "
               + "target — the \"search metadata\" step of the demo path. `from`/`to` default to "
-              + "the last 24 hours.");
+              + "the last 24 hours and may span at most 31 days (400 otherwise); `limit` is "
+              + "capped at 500.");
     }
 
     private static async Task<Results<Accepted, ProblemHttpResult>> IngestAsync(
@@ -209,7 +210,13 @@ public static class DetectionEndpoints
         return (Path.Combine(Path.GetFileName(root), fileName), null);
     }
 
-    private static async Task<Ok<IReadOnlyList<DetectionResponse>>> SearchAsync(
+    /// <summary>The widest window a single search may span — matches the events feed (14-M1).</summary>
+    private static readonly TimeSpan MaxSearchWindow = TimeSpan.FromDays(31);
+
+    /// <summary>Hard ceiling on <c>limit</c>, whatever the caller asks for.</summary>
+    private const int MaxSearchRows = 500;
+
+    private static async Task<Results<Ok<IReadOnlyList<DetectionResponse>>, ProblemHttpResult>> SearchAsync(
         string? plateNumber, Guid? targetId, DateTimeOffset? from, DateTimeOffset? to, int? limit,
         DetectionRepository detections, HttpContext http, CancellationToken ct)
     {
@@ -217,12 +224,32 @@ public static class DetectionEndpoints
         var end = to ?? DateTimeOffset.UtcNow;
         var start = from ?? end.AddHours(-24);
 
+        if (start >= end)
+        {
+            return TypedResults.Problem(
+                title: "Invalid time range", detail: "'to' must be after 'from'.",
+                statusCode: StatusCodes.Status400BadRequest);
+        }
+
+        // Without a cap a caller could ask for the entire retained history of a busy corridor in
+        // one query — an unbounded partition scan (finding 15-M2). The events feed has the same
+        // rule; narrow the range or make several requests.
+        if (end - start > MaxSearchWindow)
+        {
+            return TypedResults.Problem(
+                title: "Time range too wide",
+                detail: $"A detection search may span at most {MaxSearchWindow.TotalDays:F0} days. "
+                      + "Narrow `from`/`to`.",
+                statusCode: StatusCodes.Status400BadRequest);
+        }
+
         var plateNormalized = string.IsNullOrEmpty(plateNumber)
             ? null
             : PlateNormalizer.Normalize(plateNumber);
 
         var rows = await detections.SearchAsync(
-            plateNormalized, targetId, start, end, limit ?? 100, caller, ct);
+            plateNormalized, targetId, start, end,
+            Math.Clamp(limit ?? 100, 1, MaxSearchRows), caller, ct);
 
         return TypedResults.Ok<IReadOnlyList<DetectionResponse>>(
         [

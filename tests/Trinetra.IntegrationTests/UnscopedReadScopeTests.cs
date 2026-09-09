@@ -220,6 +220,40 @@ public sealed class UnscopedReadScopeTests : IClassFixture<PostgresFixture>, IAs
     private AccessGroupRepository Groups => new(_fixture.DataSource);
     private ApiKeyRepository Keys => new(_fixture.DataSource);
 
+    // ---- Pagination (PR9: 6-M6 / 8-M5) -----------------------------------
+
+    [Fact]
+    public async Task Users_ListPage_Paginates_AndReportsTheFullCountAtEachPage()
+    {
+        var unscoped = UnscopedCaller();
+        var all = (await Users.ListAsync(unscoped, CancellationToken.None)).Select(u => u.Id).ToList();
+        all.Count.ShouldBeGreaterThan(3, "the fixture seeds several users");
+
+        var page1 = await Users.ListPageAsync(unscoped, new PageWindow(2, 0), CancellationToken.None);
+        var page2 = await Users.ListPageAsync(unscoped, new PageWindow(2, 2), CancellationToken.None);
+
+        page1.Total.ShouldBe(all.Count);
+        page2.Total.ShouldBe(all.Count);
+        page1.Items.Count.ShouldBe(2);
+        page1.Items.Select(u => u.Id).ShouldBe(all.Take(2));            // ORDER BY username, id
+        page2.Items.Select(u => u.Id).ShouldBe(all.Skip(2).Take(2));
+    }
+
+    [Fact]
+    public async Task Users_ListPage_HardCap_ReportsTotalGreaterThanReturned()
+    {
+        var unscoped = UnscopedCaller();
+        var all = await Users.ListAsync(unscoped, CancellationToken.None);
+
+        // A cap of 1 stands in for the endpoint's real cap: Total still reflects everything, so
+        // the endpoint can set X-Result-Capped.
+        var capped = await Users.ListPageAsync(unscoped, new PageWindow(1, 0), CancellationToken.None);
+
+        capped.Items.Count.ShouldBe(1);
+        capped.Total.ShouldBe(all.Count);
+        capped.Total.ShouldBeGreaterThan(capped.Items.Count);
+    }
+
     // ---- Users (6-H1) -------------------------------------------------------
 
     [Fact]

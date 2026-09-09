@@ -46,7 +46,8 @@ public static class UserEndpoints
               + "material is not part of the response type at all.\n\n"
               + "A scoped administrator sees only accounts within their organizational reach — "
               + "not the seed account, not anyone held through an estate-wide group, not another "
-              + "department's users. An administrator unscoped for `user.read` sees everyone.");
+              + "department's users. An administrator unscoped for `user.read` sees everyone.\n\n"
+              + Paginate.Doc);
 
         group.MapGet("/{id:guid}", GetAsync)
           .RequirePermission("user.read")
@@ -158,13 +159,20 @@ public static class UserEndpoints
               + "the same lockout guard as deactivation and easier to trip by accident.");
     }
 
-    private static async Task<Ok<IReadOnlyList<UserResponse>>> ListAsync(
-        UserRepository users, HttpContext http, CancellationToken ct)
+    private const int ListHardCap = 1000;
+
+    private static async Task<IResult> ListAsync(
+        int? page, int? pageSize, UserRepository users, HttpContext http, CancellationToken ct)
     {
         var caller = CallerContextFactory.From(http);
         caller.Require("user.read");
-        var all = await users.ListAsync(caller, ct);
-        return TypedResults.Ok<IReadOnlyList<UserResponse>>([.. all.Select(ToResponse)]);
+
+        var q = new PageQuery(page, pageSize);
+        var rows = await users.ListPageAsync(
+            caller, new PageWindow(q.Limit(ListHardCap, ListHardCap), q.Offset(ListHardCap)), ct);
+
+        return Paginate.Render(
+            http, q, ListHardCap, [.. rows.Items.Select(ToResponse)], rows.Total);
     }
 
     private static async Task<Results<Ok<UserResponse>, NotFound, ProblemHttpResult>> GetAsync(

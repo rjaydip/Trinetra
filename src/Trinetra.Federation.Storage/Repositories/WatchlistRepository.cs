@@ -174,40 +174,52 @@ public sealed class WatchlistRepository
         return affected > 0;
     }
 
-    public async Task<IReadOnlyList<WatchlistAlertRow>> ListAlertsAsync(
-        int limit, CallerContext caller, CancellationToken ct)
+    /// <summary>
+    /// One page of raised alerts within the caller's reach, with the full match count.
+    /// <paramref name="acknowledged"/> filters to acknowledged (<c>true</c>) or outstanding
+    /// (<c>false</c>) alerts; null returns both. <paramref name="plate"/> is matched against the
+    /// entry's normalised plate.
+    /// </summary>
+    public async Task<PagedRows<WatchlistAlertRow>> ListAlertsAsync(
+        bool? acknowledged, string? plate, PageWindow window, CallerContext caller, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(caller);
         caller.Require("alert.read");
 
-        var sql = caller.IsUnscopedFor("alert.read")
-            ? """
-              SELECT a.id, a.watchlist_entry_id, w.plate_number_normalized, w.reason, w.severity,
-                     a.detection_event_id, a.detection_occurred_at, a.raised_at, a.acknowledged_at
-              FROM federation.watchlist_alert a
-              JOIN federation.watchlist_entry w ON w.id = a.watchlist_entry_id
-              ORDER BY a.raised_at DESC LIMIT @limit;
-              """
+        var reachClause = caller.IsUnscopedFor("alert.read")
+            ? ""
             : """
-              SELECT a.id, a.watchlist_entry_id, w.plate_number_normalized, w.reason, w.severity,
-                     a.detection_event_id, a.detection_occurred_at, a.raised_at, a.acknowledged_at
-              FROM federation.watchlist_alert a
-              JOIN federation.watchlist_entry w ON w.id = a.watchlist_entry_id
-              WHERE w.organization_unit_id IN (
+              AND w.organization_unit_id IN (
                   SELECT organization_unit_id
                   FROM federation.authorized_org_units(
                            p_user_id => @UserId, p_api_key_id => @ApiKeyId,
                            p_permission => 'alert.read'))
-              ORDER BY a.raised_at DESC LIMIT @limit;
               """;
 
         await using var c = await _dataSource.OpenConnectionAsync(ct);
-        var rows = await c.QueryAsync<WatchlistAlertRow>(new CommandDefinition(sql, new
-        {
-            limit = Math.Clamp(limit, 1, 500), caller.UserId, caller.ApiKeyId,
-        }, cancellationToken: ct));
+        var rows = (await c.QueryAsync<WatchlistAlertRow, long, (WatchlistAlertRow R, long T)>(
+            new CommandDefinition($"""
+                SELECT a.id, a.watchlist_entry_id, w.plate_number_normalized, w.reason, w.severity,
+                       a.detection_event_id, a.detection_occurred_at, a.raised_at, a.acknowledged_at,
+                       count(*) OVER() AS total_count
+                FROM federation.watchlist_alert a
+                JOIN federation.watchlist_entry w ON w.id = a.watchlist_entry_id
+                WHERE (@acknowledged::bool IS NULL
+                       OR (@acknowledged AND a.acknowledged_at IS NOT NULL)
+                       OR (NOT @acknowledged AND a.acknowledged_at IS NULL))
+                  AND (@plate::text IS NULL OR w.plate_number_normalized = @plate)
+                  {reachClause}
+                ORDER BY a.raised_at DESC, a.id
+                LIMIT @limit OFFSET @offset;
+                """, new
+            {
+                acknowledged, plate, caller.UserId, caller.ApiKeyId,
+                limit = window.Limit, offset = window.Offset,
+            }, cancellationToken: ct),
+            (r, t) => (r, t), splitOn: "total_count")).ToList();
 
-        return [.. rows];
+        return new PagedRows<WatchlistAlertRow>(
+            [.. rows.Select(x => x.R)], rows.Count > 0 ? (int)rows[0].T : 0);
     }
 
     /// <summary>

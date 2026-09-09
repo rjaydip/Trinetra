@@ -162,7 +162,8 @@ public static class VmsEndpoints
               + "Each row carries the vendor's native id, the platform camera id it maps to, "
               + "model and firmware, whether it is enabled and recording, its last-seen time, and "
               + "its stream **references**. Model 3 never touches video: a reference is an address "
-              + "to hand to a player or to Model 2, not a stream.");
+              + "to hand to a player or to Model 2, not a stream.\n\n"
+              + Paginate.Doc);
 
         group.MapGet("/{id:guid}/cameras/{nativeCameraId}/status-history", CameraStatusHistoryAsync)
           .RequirePermission("vms.read")
@@ -491,9 +492,11 @@ public static class VmsEndpoints
                 ?? []));
     }
 
-    private static async Task<Results<Ok<IReadOnlyList<FederatedCameraResponse>>, NotFound>> CamerasAsync(
-        Guid id, ConnectorTargetRepository repo, FederationQueryRepository queries,
-        HttpContext http, CancellationToken ct)
+    private const int CameraListHardCap = 2000;
+
+    private static async Task<IResult> CamerasAsync(
+        Guid id, int? page, int? pageSize, ConnectorTargetRepository repo,
+        FederationQueryRepository queries, HttpContext http, CancellationToken ct)
     {
         var caller = CallerContextFactory.From(http);
 
@@ -502,15 +505,16 @@ public static class VmsEndpoints
             return TypedResults.NotFound();
         }
 
-        var rows = await queries.CamerasAsync(id, ct);
+        var q = new PageQuery(page, pageSize);
+        var rows = await queries.CamerasAsync(id,
+            new PageWindow(q.Limit(CameraListHardCap, CameraListHardCap), q.Offset(CameraListHardCap)), ct);
 
-        return TypedResults.Ok<IReadOnlyList<FederatedCameraResponse>>(
-        [
-            .. rows.Select(r => new FederatedCameraResponse(
+        return Paginate.Render(http, q, CameraListHardCap,
+            [.. rows.Items.Select(r => new FederatedCameraResponse(
                 r.NativeCameraId, r.CameraId, r.Name, r.VendorModel, r.Firmware,
                 r.IsEnabled, r.IsRecording, r.Health, r.LastSeen,
-                r.StreamReferences ?? [], r.StatusChangedAt)),
-        ]);
+                r.StreamReferences ?? [], r.StatusChangedAt))],
+            rows.Total);
     }
 
     private static async Task<Results<Ok<CameraStatusHistoryResponse>, NotFound, ProblemHttpResult>> CameraStatusHistoryAsync(

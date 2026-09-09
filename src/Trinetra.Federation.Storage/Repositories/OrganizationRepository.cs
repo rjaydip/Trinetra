@@ -57,6 +57,37 @@ public sealed class OrganizationRepository
         return rows.ToList();
     }
 
+    /// <summary>One page of visible organizations, with the full match count — the HTTP list path.</summary>
+    public async Task<PagedRows<Organization>> ListPageAsync(
+        CallerContext caller, PageWindow window, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(caller);
+        caller.Require("organization.read");
+
+        var scope = caller.IsUnscopedFor("organization.read")
+            ? ""
+            : """
+              WHERE id IN (SELECT organization_id FROM federation.authorized_organizations(
+                                @UserId, @ApiKeyId, 'organization.read'))
+              """;
+
+        await using var c = await _dataSource.OpenConnectionAsync(ct);
+        var rows = (await c.QueryAsync<Organization, long, (Organization O, long T)>(
+            new CommandDefinition($"""
+                SELECT id, code, name, organization_type, description, status,
+                       count(*) OVER() AS total_count
+                FROM federation.organizations
+                {scope}
+                ORDER BY name, id
+                LIMIT @limit OFFSET @offset;
+                """, new { caller.UserId, caller.ApiKeyId, limit = window.Limit, offset = window.Offset },
+                cancellationToken: ct),
+            (o, t) => (o, t), splitOn: "total_count")).ToList();
+
+        return new PagedRows<Organization>(
+            [.. rows.Select(r => r.O)], rows.Count > 0 ? (int)rows[0].T : 0);
+    }
+
     public async Task<Organization?> GetAsync(Guid id, CallerContext caller, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(caller);
@@ -158,6 +189,38 @@ public sealed class OrganizationRepository
             Unscoped = caller.IsUnscopedFor("organization.read"),
         }, cancellationToken: ct));
         return rows.ToList();
+    }
+
+    /// <summary>One page of units under an organization, with the full match count.</summary>
+    public async Task<PagedRows<OrganizationUnit>> ListUnitsPageAsync(
+        Guid? organizationId, CallerContext caller, PageWindow window, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(caller);
+        caller.Require("organization.read");
+
+        await using var c = await _dataSource.OpenConnectionAsync(ct);
+        var rows = (await c.QueryAsync<OrganizationUnit, long, (OrganizationUnit U, long T)>(
+            new CommandDefinition("""
+                SELECT id, organization_id, parent_unit_id, code, name, unit_type,
+                       description, geographic_area_id, status,
+                       count(*) OVER() AS total_count
+                FROM federation.organization_units
+                WHERE (@organizationId::uuid IS NULL OR organization_id = @organizationId)
+                  AND (@Unscoped OR id IN (SELECT organization_unit_id
+                                           FROM federation.authorized_org_units(
+                                               @UserId, @ApiKeyId, 'organization.read')))
+                ORDER BY name, id
+                LIMIT @limit OFFSET @offset;
+                """, new
+            {
+                organizationId, caller.UserId, caller.ApiKeyId,
+                Unscoped = caller.IsUnscopedFor("organization.read"),
+                limit = window.Limit, offset = window.Offset,
+            }, cancellationToken: ct),
+            (u, t) => (u, t), splitOn: "total_count")).ToList();
+
+        return new PagedRows<OrganizationUnit>(
+            [.. rows.Select(r => r.U)], rows.Count > 0 ? (int)rows[0].T : 0);
     }
 
     /// <summary>Creates or updates a unit, within the caller's reach.</summary>

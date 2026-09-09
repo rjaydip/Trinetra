@@ -366,6 +366,7 @@ public sealed class UserRepository
     /// tracked separately as the F6 geography-asymmetry item.
     /// </para>
     /// </remarks>
+    /// <summary>Every user the caller may see. Unbounded — the CLI path; the HTTP list uses <c>ListPageAsync</c>.</summary>
     public async Task<IReadOnlyList<PlatformUser>> ListAsync(CallerContext caller, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(caller);
@@ -379,6 +380,33 @@ public sealed class UserRepository
             ORDER BY pu.username;
             """, UserVisibilityParams(caller), cancellationToken: ct));
         return rows.ToList();
+    }
+
+    /// <summary>One page of visible users, with the full match count — the HTTP list path.</summary>
+    public async Task<PagedRows<PlatformUser>> ListPageAsync(
+        CallerContext caller, PageWindow window, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(caller);
+
+        var p = UserVisibilityParams(caller);
+        p.Add("limit", window.Limit);
+        p.Add("offset", window.Offset);
+
+        await using var c = await _dataSource.OpenConnectionAsync(ct);
+        var rows = (await c.QueryAsync<PlatformUser, long, (PlatformUser U, long T)>(
+            new CommandDefinition($"""
+                SELECT pu.id, pu.username, pu.display_name, pu.email, pu.must_change_password,
+                       pu.status, pu.last_login_at, pu.is_system,
+                       count(*) OVER() AS total_count
+                FROM federation.platform_users pu
+                WHERE {VisibleForUserReadPredicate}
+                ORDER BY pu.username
+                LIMIT @limit OFFSET @offset;
+                """, p, cancellationToken: ct),
+            (u, t) => (u, t), splitOn: "total_count")).ToList();
+
+        return new PagedRows<PlatformUser>(
+            [.. rows.Select(r => r.U)], rows.Count > 0 ? (int)rows[0].T : 0);
     }
 
     /// <summary>

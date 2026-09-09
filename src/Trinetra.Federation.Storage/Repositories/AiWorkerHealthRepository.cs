@@ -40,15 +40,22 @@ public sealed class AiWorkerHealthRepository
             """, new { workerId, hostname, reportedAt }, cancellationToken: ct));
     }
 
-    public async Task<IReadOnlyList<AiWorkerHealthRow>> ListAsync(CancellationToken ct)
+    /// <summary>One page of worker-health rows, with the full count.</summary>
+    public async Task<PagedRows<AiWorkerHealthRow>> ListAsync(PageWindow window, CancellationToken ct)
     {
         await using var c = await _dataSource.OpenConnectionAsync(ct);
 
-        var rows = await c.QueryAsync<AiWorkerHealthRow>(new CommandDefinition("""
-            SELECT worker_id, hostname, first_seen_at, last_heartbeat_at
-            FROM federation.ai_worker_health ORDER BY worker_id;
-            """, cancellationToken: ct));
+        var rows = (await c.QueryAsync<AiWorkerHealthRow, long, (AiWorkerHealthRow R, long T)>(
+            new CommandDefinition("""
+                SELECT worker_id, hostname, first_seen_at, last_heartbeat_at,
+                       count(*) OVER() AS total_count
+                FROM federation.ai_worker_health
+                ORDER BY worker_id
+                LIMIT @limit OFFSET @offset;
+                """, new { limit = window.Limit, offset = window.Offset }, cancellationToken: ct),
+            (r, t) => (r, t), splitOn: "total_count")).ToList();
 
-        return [.. rows];
+        return new PagedRows<AiWorkerHealthRow>(
+            [.. rows.Select(x => x.R)], rows.Count > 0 ? (int)rows[0].T : 0);
     }
 }

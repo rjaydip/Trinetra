@@ -45,6 +45,38 @@ public sealed class GeographyRepository
         return rows.ToList();
     }
 
+    /// <summary>One page of visible areas, with the full match count — the HTTP list path.</summary>
+    public async Task<PagedRows<GeographicArea>> ListAreasPageAsync(
+        Guid? parentId, bool rootsOnly, CallerContext caller, PageWindow window, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(caller);
+        caller.Require("geography.read");
+
+        await using var c = await _dataSource.OpenConnectionAsync(ct);
+        var rows = (await c.QueryAsync<GeographicArea, long, (GeographicArea A, long T)>(
+            new CommandDefinition("""
+                SELECT id, parent_area_id, code, name, area_type, description, status,
+                       count(*) OVER() AS total_count
+                FROM federation.geographic_areas
+                WHERE (@rootsOnly = FALSE OR parent_area_id IS NULL)
+                  AND (@parentId::uuid IS NULL OR parent_area_id = @parentId)
+                  AND (@Unscoped OR id IN (SELECT geographic_area_id
+                                           FROM federation.authorized_geographic_areas(
+                                               @UserId, @ApiKeyId, 'geography.read')))
+                ORDER BY name, id
+                LIMIT @limit OFFSET @offset;
+                """, new
+            {
+                parentId, rootsOnly, caller.UserId, caller.ApiKeyId,
+                Unscoped = Geo(caller, "geography.read"),
+                limit = window.Limit, offset = window.Offset,
+            }, cancellationToken: ct),
+            (a, t) => (a, t), splitOn: "total_count")).ToList();
+
+        return new PagedRows<GeographicArea>(
+            [.. rows.Select(r => r.A)], rows.Count > 0 ? (int)rows[0].T : 0);
+    }
+
     public async Task<GeographicArea?> GetAreaAsync(
         Guid id, CallerContext caller, CancellationToken ct)
     {

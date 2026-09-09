@@ -45,7 +45,10 @@ public static class WatchlistEndpoints
           .WithSummary("List raised watchlist alerts")
           .WithDescription(
               "Newest first. Raised automatically when a freshly-ingested detection's plate "
-              + "matches an active watchlist entry — never by a client calling this API.");
+              + "matches an active watchlist entry — never by a client calling this API.\n\n"
+              + "Filter with `acknowledged` (`true` / `false` — omit for both) and `plate` (an "
+              + "exact normalised plate). "
+              + Paginate.Doc);
 
         group.MapPost("/alerts/{id:guid}/acknowledge", AcknowledgeAsync)
           .RequirePermission("alert.acknowledge")
@@ -117,17 +120,25 @@ public static class WatchlistEndpoints
         return TypedResults.NoContent();
     }
 
-    private static async Task<Ok<IReadOnlyList<WatchlistAlertResponse>>> ListAlertsAsync(
-        int? limit, WatchlistRepository repo, HttpContext http, CancellationToken ct)
-    {
-        var rows = await repo.ListAlertsAsync(limit ?? 100, CallerContextFactory.From(http), ct);
+    private const int AlertsHardCap = 1000;
 
-        return TypedResults.Ok<IReadOnlyList<WatchlistAlertResponse>>(
-        [
-            .. rows.Select(r => new WatchlistAlertResponse(
+    private static async Task<IResult> ListAlertsAsync(
+        bool? acknowledged, string? plate, int? page, int? pageSize,
+        WatchlistRepository repo, HttpContext http, CancellationToken ct)
+    {
+        var q = new PageQuery(page, pageSize);
+        var normalized = string.IsNullOrWhiteSpace(plate) ? null : PlateNormalizer.Normalize(plate);
+
+        var rows = await repo.ListAlertsAsync(
+            acknowledged, normalized,
+            new PageWindow(q.Limit(AlertsHardCap, AlertsHardCap), q.Offset(AlertsHardCap)),
+            CallerContextFactory.From(http), ct);
+
+        return Paginate.Render(http, q, AlertsHardCap,
+            [.. rows.Items.Select(r => new WatchlistAlertResponse(
                 r.Id, r.WatchlistEntryId, r.PlateNumberNormalized, r.Reason, r.Severity,
-                r.DetectionEventId, r.DetectionOccurredAt, r.RaisedAt, r.AcknowledgedAt)),
-        ]);
+                r.DetectionEventId, r.DetectionOccurredAt, r.RaisedAt, r.AcknowledgedAt))],
+            rows.Total);
     }
 
     private static async Task<Results<NoContent, NotFound>> AcknowledgeAsync(

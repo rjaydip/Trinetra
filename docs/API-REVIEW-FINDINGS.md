@@ -103,10 +103,29 @@ all.
   endpoint uses `result.Detail` for both the response and the audit `after` (create audit also
   moved off `after: request`). +1 assertion in `RoleCrudTests`, sabotage-checked.
 
-**PAGINATION WAVE** (no cursor / unbounded):
-`5-M7` (areas/sites/units), `6-M6` (users/groups/members), `8-M5` (api-keys), `9-M3` (VMS camera
-list — the real one), `10-M2` (GIS feed silently truncates at 5000), `15-M2` (detection search —
-no max window AND no cursor), `16-M4` (alerts — no filter/cursor), `17` (worker list).
+**PAGINATION WAVE** ✅ done 2026-09-09 (uncommitted), PR9. `5-M7`, `6-M6`, `8-M5`, `9-M3`,
+`10-M2`, `15-M2`, `16-M4`, `17-L*(list)`.
+- **Design (owner):** pagination is **opt-in**. `?page` (1-based) + optional `?pageSize`
+  (default 50, clamped) → `{ items, page, pageSize, total, totalPages }` envelope. Omit `page`
+  → the bare array as before, **hard-capped** (1000, or 2000 for VMS cameras / 5000 for the GIS
+  feed); when the cap trims, `X-Result-Capped: true`. `X-Total-Count` always set. Offset
+  pagination, `count(*) OVER()` for the total in one round trip.
+- Shared: `Contracts/Pagination.cs` (`PageQuery`, `PageResult<T>`, `Paginate.Render`),
+  `Repositories/Pagination.cs` (`PagedRows<T>`, `PageWindow`).
+- Endpoints: `GET /users`, `/access-groups`, `/access-groups/{id}/members`, `/organizations`,
+  `/organizations/{id}/units`, `/geographic-areas`, `/geographic-areas/{id}/children`,
+  `/api-keys`, `/vms/{id}/cameras`, `/worker-health`, `/watchlist/alerts`. New paged repo
+  methods (`ListPageAsync` / paged overloads) alongside the unbounded CLI/test ones.
+- **`16-M4`** also adds `acknowledged` (bool) + `plate` filters to `/watchlist/alerts`.
+- **`15-M2`** detection search: no offset paging (partitioned time-series — same reason
+  `EventEndpoints` uses keyset). Fixed the actual DoS: **max 31-day window (400 otherwise)** +
+  `limit` hard-capped at 500.
+- **`10-M2`** GIS feed: body stays a `FeatureCollection` (can't wrap GeoJSON); pagination via
+  `page`/`pageSize` + `X-Total-Count` / `X-Result-Capped` / `X-Page` / `X-Page-Size` headers.
+- Tests: `PaginationTests` (9 unit), `UnscopedReadScopeTests.Users_ListPage_*` (2, offset
+  sabotage-checked). Suite: 116 unit / 236 integration + 18 pre-existing.
+- NOT covered (own findings, not this wave): `17-M1/M2/M3` heartbeat spoofing, `17-L3` worker
+  list is still unscoped (hostname disclosure).
 
 **VALIDATION / ERROR-SHAPE WAVE:**
 `5-M2` area_type free text, `5-M9` over-long code → 500, `5-M10` phantom 204, `6-M2/M3` scope-field
@@ -576,7 +595,8 @@ Desktop).
 - **5-M6** (was F5e) CONFIRMED + worse: `DeactivateAsync` writes ONE audit row on the parent
   (:254-257) — no `newParentId`, no list of moved children/sites, no cascade descendant list. A
   cascade taking 500 sites offline = 1 thin audit row. Record newParentId + affected id list.
-- **5-M7** (was F5g) CONFIRMED: `ListOrganizations/Units/Areas/Sites/AreaChildren` — `ORDER BY
+- **5-M7** ✅ PR9 (opt-in `?page`, hard cap, `count(*) OVER()`).
+- **5-M7 (orig)** (was F5g) CONFIRMED: `ListOrganizations/Units/Areas/Sites/AreaChildren` — `ORDER BY
   name` no LIMIT/cursor. Unscoped `ListAsync` sorts whole table. Codebase elsewhere mandates
   keyset pagination (`Contracts.cs:91-96`). Add level-slicing + keyset cursor, at least sites &
   areas.
@@ -726,7 +746,8 @@ Review 2026-09-04. Write paths are meticulously guarded (escalation chokepoint +
 - **6-M5** Email unvalidated + not unique on `CreateAsync`/`UpdateAsync` — needed for F2 (forgot
   password) and F3 (SSO account linking). Add format check + unique constraint + (later)
   verification state.
-- **6-M6** No pagination on `ListAsync` (users), `ListAsync` (groups), `MembersAsync`. Same class
+- **6-M6** ✅ PR9 — `?page`/`?pageSize` on users / groups / members; `count(*) OVER()`.
+- **6-M6 (orig)** No pagination on `ListAsync` (users), `ListAsync` (groups), `MembersAsync`. Same class
   as 5-M7. Thousands of users/members at scale.
 - **6-M7** `CreateAsync` (group) and `AddScopeAsync` audit `after: request` — raw DTO incl.
   client-sent `Status`, not the persisted row (same fidelity note as 5-M5b).
@@ -930,7 +951,7 @@ revoke-what-you-cannot-see bypasses the fix).
 - **8-M2** CONFIRMED. No rotation endpoint / overlap window → pushes people to non-expiring keys.
 - **8-M3** CONFIRMED. `Created(Location=/api/v1/access-groups/{groupId})` — wrong resource; no
   `GET /api-keys/{id}`.
-- **8-M5** CONFIRMED. No LIMIT/keyset on `ListAsync`.
+- **8-M5** ✅ PR9 — `?page`/`?pageSize` on `/api-keys`.
 
 ### LOW / REFUTED
 
@@ -1029,7 +1050,8 @@ dimension is broken across read AND write.
   is honestly named — it proves the precondition (`GetAsync` reports true state) the guard reads,
   not the guard's 409 itself. Revisit if/when an HTTP-level test harness is added for another
   reason.
-- **9-M3** CONFIRMED. `CamerasAsync` → `SELECT ... FROM federated_camera WHERE target_id=@t
+- **9-M3** ✅ PR9 — `?page`/`?pageSize` on `/vms/{id}/cameras`, hard cap 2000.
+- **9-M3 (orig)** CONFIRMED. `CamerasAsync` → `SELECT ... FROM federated_camera WHERE target_id=@t
   ORDER BY native_camera_id` no LIMIT; one aggregating VMS = thousands of cameras, unbounded
   response, double array-materialised. (Target `ListAsync` also unpaginated but bounded by design
   — camera list is the real one.)
@@ -1079,7 +1101,8 @@ Findings are mostly M/L.
   `GET /cameras/{id}/coverage` and `/gis/coverage` gate behind `gis.coverage.read`. `gis.read` +
   `includeSectors=true` == `gis.coverage.read`. Fix: require `gis.coverage.read` when
   `includeSectors` is set, or fold the two permissions.
-- **10-M2** GIS feed silently truncates. `FeedAsync` `FeedLimit = 5000`, no cursor — a dense
+- **10-M2** ✅ PR9 — feed stays a `FeatureCollection`; `?page`/`?pageSize` + `X-Total-Count` / `X-Result-Capped` / `X-Page` headers; no more silent drop.
+- **10-M2 (orig)** GIS feed silently truncates. `FeedAsync` `FeedLimit = 5000`, no cursor — a dense
   2°×2° bbox with >5000 in-scope cameras drops rows with no `nextCursor`, no `truncated` flag, no
   error. The camera list endpoint paginates properly; the map source just loses data. Add a
   truncation signal or paginate.
@@ -1273,7 +1296,8 @@ Review 2026-09-04.
   (line 149) uses `authorized_org_units` + `IsUnscopedFor("observation.read")` — org only. No
   `IsUnscopedForGeography`, no geo predicate. 9-H1 family. A worker key scoped to org unit X but
   geo-confined can ingest/search detections for any camera under X regardless of district.
-- **15-M2** `SearchAsync` has NO maximum time window (endpoint defaults 24h but accepts
+- **15-M2** ✅ PR9 — max 31-day window (400) + `limit` capped at 500. Keyset cursor deliberately NOT added (partitioned time-series; `/events` uses keyset for the same reason — future item if paging becomes needed).
+- **15-M2 (orig)** `SearchAsync` has NO maximum time window (endpoint defaults 24h but accepts
   `from=2020&to=now`) and NO keyset pagination — plain `LIMIT`. `detection_event` at ANPR volume
   → the same unbounded-scan risk `/events` is carefully guarded against (7-day hard cap +
   cursor). Add a max window + opaque cursor.
@@ -1311,7 +1335,8 @@ Review 2026-09-04.
 - **16-M3** `AcknowledgeAsync` audit `organizationUnitId: null` + `before: null` — loses the org
   dimension; doesn't record prior ack state. Behaviour of acknowledging an already-acked alert
   (re-ack vs 404) unclear from `AcknowledgeAlertAsync` bool.
-- **16-M4** `ListAlertsAsync` — only `limit`. No filter by entry / plate / acknowledged-state /
+- **16-M4** ✅ PR9 — `?page`/`?pageSize` + `acknowledged` (bool) and `plate` filters on `/watchlist/alerts`.
+- **16-M4 (orig)** `ListAlertsAsync` — only `limit`. No filter by entry / plate / acknowledged-state /
   time window, no cursor. An operator working the alert queue can't filter to unacknowledged or
   to a plate. Usability + unbounded-ish scan.
 
@@ -1360,7 +1385,7 @@ Review 2026-09-04. Smallest surface. Deliberately unaudited (high-freq observabi
 - **17-L1** No unregister / delete / pruning — a decommissioned worker stays forever with an
   ever-staler heartbeat, indistinguishable from a crash. Add a retire endpoint + retention.
 - **17-L2** No length/charset validation on `WorkerId` / `Hostname` — over-long → `22001` → 500.
-- **17-L3** `ListAsync` unscoped (hostname disclosure to a scoped admin = infra recon). AI
+- **17-L3** `ListAsync` unscoped (hostname disclosure) — STILL OPEN (PR9 paginated `/worker-health` but did not scope it). AI
   workers aren't org/geo entities so arguably acceptable — same call as 8-H2.
 - **17-L4** No rate limiting on `/heartbeat` — a wedged worker or attacker hammers the upsert.
 - Not a finding: not tied to `worker_node` lease registry — deliberate (AI worker owns a static

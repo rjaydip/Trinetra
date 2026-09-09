@@ -47,7 +47,7 @@ public sealed class GisQueryRepository
     public GisQueryRepository(NpgsqlDataSource dataSource) => _dataSource = dataSource;
 
     /// <summary>Every in-scope, live camera inside the bounding box, with the optional filters applied.</summary>
-    public async Task<IReadOnlyList<GisCameraRow>> FeedAsync(
+    public async Task<PagedRows<GisCameraRow>> FeedAsync(
         BoundingBox bbox, GisFeedFilter filter, CallerContext caller, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(caller);
@@ -55,26 +55,30 @@ public sealed class GisQueryRepository
 
         await using var c = await _dataSource.OpenConnectionAsync(ct);
 
-        var rows = await c.QueryAsync<GisCameraRow>(new CommandDefinition($"""
-            SELECT c.id, c.camera_code AS code, c.name, c.organization_unit_id,
-                   c.manufacturer, c.camera_type, c.latitude, c.longitude,
-                   c.azimuth, c.horizontal_fov, c.effective_range,
-                   c.operational_status, c.connectivity_status, c.maintenance_status
-            FROM federation.cameras c
-            WHERE c.longitude BETWEEN @MinLon AND @MaxLon
-              AND c.latitude BETWEEN @MinLat AND @MaxLat
-              AND (@IncludeRetired OR c.deleted_at IS NULL)
-              AND (@OrganizationUnitId::uuid IS NULL
-                   OR c.organization_unit_id IN (
-                       SELECT id FROM federation.org_unit_descendants(@OrganizationUnitId)))
-              AND (@OperationalStatus::text IS NULL OR c.operational_status = @OperationalStatus)
-              AND (@MaintenanceStatus::text IS NULL OR c.maintenance_status = @MaintenanceStatus)
-              AND ({Scope("gis.read")})
-            ORDER BY c.camera_code
-            LIMIT @Limit;
-            """, FeedArgs(bbox, filter, caller, "gis.read"), cancellationToken: ct));
+        var rows = (await c.QueryAsync<GisCameraRow, long, (GisCameraRow R, long T)>(
+            new CommandDefinition($"""
+                SELECT c.id, c.camera_code AS code, c.name, c.organization_unit_id,
+                       c.manufacturer, c.camera_type, c.latitude, c.longitude,
+                       c.azimuth, c.horizontal_fov, c.effective_range,
+                       c.operational_status, c.connectivity_status, c.maintenance_status,
+                       count(*) OVER() AS total_count
+                FROM federation.cameras c
+                WHERE c.longitude BETWEEN @MinLon AND @MaxLon
+                  AND c.latitude BETWEEN @MinLat AND @MaxLat
+                  AND (@IncludeRetired OR c.deleted_at IS NULL)
+                  AND (@OrganizationUnitId::uuid IS NULL
+                       OR c.organization_unit_id IN (
+                           SELECT id FROM federation.org_unit_descendants(@OrganizationUnitId)))
+                  AND (@OperationalStatus::text IS NULL OR c.operational_status = @OperationalStatus)
+                  AND (@MaintenanceStatus::text IS NULL OR c.maintenance_status = @MaintenanceStatus)
+                  AND ({Scope("gis.read")})
+                ORDER BY c.camera_code, c.id
+                LIMIT @Limit OFFSET @Offset;
+                """, FeedArgs(bbox, filter, caller, "gis.read"), cancellationToken: ct),
+            (r, t) => (r, t), splitOn: "total_count")).ToList();
 
-        return [.. rows];
+        return new PagedRows<GisCameraRow>(
+            [.. rows.Select(x => x.R)], rows.Count > 0 ? (int)rows[0].T : 0);
     }
 
     /// <summary>One camera's point and coverage inputs, or null if the caller cannot reach it.</summary>
@@ -184,14 +188,16 @@ public sealed class GisQueryRepository
         p.Add("OperationalStatus", filter.OperationalStatus);
         p.Add("MaintenanceStatus", filter.MaintenanceStatus);
         p.Add("Limit", filter.Limit);
+        p.Add("Offset", filter.Offset);
         return p;
     }
 }
 
-/// <summary>Optional narrowing for the GIS camera feed.</summary>
+/// <summary>Optional narrowing for the GIS camera feed, plus its <c>LIMIT</c>/<c>OFFSET</c> window.</summary>
 public readonly record struct GisFeedFilter(
     int Limit,
     bool IncludeRetired,
     Guid? OrganizationUnitId,
     string? OperationalStatus,
-    string? MaintenanceStatus);
+    string? MaintenanceStatus,
+    int Offset = 0);

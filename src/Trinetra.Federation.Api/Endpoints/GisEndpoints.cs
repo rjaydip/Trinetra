@@ -29,6 +29,11 @@ public static class GisEndpoints
     /// <summary>Widest bbox span accepted by the feed, so one call cannot pull the whole estate.</summary>
     private const double MaxBboxDegrees = 2.0;
 
+    /// <summary>
+    /// Hard cap on a single non-paginated feed request. Above this the response is trimmed and
+    /// carries <c>X-Result-Capped: true</c>; page through with <c>page</c> / <c>pageSize</c> for
+    /// the rest (finding 10-M2 — the old behaviour silently dropped everything past this).
+    /// </summary>
     private const int FeedLimit = 5000;
 
     private const string GeoJsonMediaType = "application/geo+json";
@@ -44,7 +49,12 @@ public static class GisEndpoints
                + $"{MaxBboxDegrees}° each way). Feature properties carry the camera id, code, "
                + "owner, type, the three status axes and the sector inputs. Pass "
                + "`includeSectors=true` to attach each camera's computed coverage `Polygon`. "
-               + "Narrow with `organizationUnitId`, `operationalStatus`, `maintenanceStatus`.");
+               + "Narrow with `organizationUnitId`, `operationalStatus`, `maintenanceStatus`.\n\n"
+               + $"**The body is always a `FeatureCollection`.** Without `page` it is capped at "
+               + $"{FeedLimit} features — when the cap trims the result the response carries "
+               + "`X-Result-Capped: true`, and `X-Total-Count` always gives the full match "
+               + "count. Send `page` (1-based) and optionally `pageSize` to walk the whole set; "
+               + "`X-Page` / `X-Page-Size` echo the window.");
 
         app.MapGet("/api/v1/cameras/{id:guid}/coverage", CoverageAsync)
            .RequireAuthorization().WithTags(ApiTags.Gis).RequirePermission("gis.coverage.read")
@@ -78,6 +88,7 @@ public static class GisEndpoints
     private static async Task<Results<JsonHttpResult<GeoJsonFeatureCollection>, ProblemHttpResult>> FeedAsync(
         string? bbox, bool? includeSectors, bool? includeRetired,
         Guid? organizationUnitId, string? operationalStatus, string? maintenanceStatus,
+        int? page, int? pageSize,
         GisQueryRepository gis, HttpContext http, CancellationToken ct)
     {
         var caller = CallerContextFactory.From(http);
@@ -98,17 +109,32 @@ public static class GisEndpoints
                 $"Each side may span at most {MaxBboxDegrees}°. Zoom in and request again.");
         }
 
+        var q = new PageQuery(page, pageSize);
+        var window = new PageWindow(q.Limit(FeedLimit, FeedLimit), q.Offset(FeedLimit));
+
         var rows = await gis.FeedAsync(
             box,
             new GisFeedFilter(
-                FeedLimit, includeRetired ?? false, organizationUnitId,
-                Upper(operationalStatus), Upper(maintenanceStatus)),
+                window.Limit, includeRetired ?? false, organizationUnitId,
+                Upper(operationalStatus), Upper(maintenanceStatus), window.Offset),
             caller, ct);
 
-        var withSectors = includeSectors ?? false;
-        var features = new List<GeoJsonFeature>(rows.Count);
+        http.Response.Headers["X-Total-Count"] = rows.Total.ToString(CultureInfo.InvariantCulture);
+        if (q.Enabled)
+        {
+            http.Response.Headers["X-Page"] = q.Page!.Value.ToString(CultureInfo.InvariantCulture);
+            http.Response.Headers["X-Page-Size"] =
+                q.ResolvedPageSize(FeedLimit).ToString(CultureInfo.InvariantCulture);
+        }
+        else if (rows.Total > rows.Items.Count)
+        {
+            http.Response.Headers["X-Result-Capped"] = "true";
+        }
 
-        foreach (var r in rows)
+        var withSectors = includeSectors ?? false;
+        var features = new List<GeoJsonFeature>(rows.Items.Count);
+
+        foreach (var r in rows.Items)
         {
             var props = new Dictionary<string, JsonElement>
             {

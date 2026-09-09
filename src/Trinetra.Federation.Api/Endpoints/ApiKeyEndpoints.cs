@@ -34,7 +34,8 @@ public static class ApiKeyEndpoints
               + "within your reach for `apikey.read` (the same rule that governs granting the "
               + "group). A scoped administrator therefore never sees a key bound to the "
               + "platform-admin group or to another department's group. An unscoped administrator "
-              + "sees every key.");
+              + "sees every key.\n\n"
+              + Paginate.Doc);
 
         group.MapPost("/", CreateAsync)
           .RequirePermission("apikey.manage")
@@ -61,19 +62,23 @@ public static class ApiKeyEndpoints
               + "The row is kept for audit and is never deleted.");
     }
 
-    private static async Task<Ok<IReadOnlyList<ApiKeyResponse>>> ListAsync(
-        ApiKeyRepository repo, HttpContext http, CancellationToken ct)
+    private const int ListHardCap = 1000;
+
+    private static async Task<IResult> ListAsync(
+        int? page, int? pageSize, ApiKeyRepository repo, HttpContext http, CancellationToken ct)
     {
         var caller = CallerContextFactory.From(http);
         caller.Require("apikey.read");
-        var keys = await repo.ListAsync(caller, ct);
 
-        return TypedResults.Ok<IReadOnlyList<ApiKeyResponse>>(
-        [
-            .. keys.Select(k => new ApiKeyResponse(
+        var q = new PageQuery(page, pageSize);
+        var keys = await repo.ListAsync(
+            caller, new PageWindow(q.Limit(ListHardCap, ListHardCap), q.Offset(ListHardCap)), ct);
+
+        return Paginate.Render(http, q, ListHardCap,
+            [.. keys.Items.Select(k => new ApiKeyResponse(
                 k.Id, k.KeyId, k.DisplayName, k.GroupId, k.GroupCode,
-                k.CreatedAt, k.ExpiresAt, k.LastUsedAt, k.RevokedAt)),
-        ]);
+                k.CreatedAt, k.ExpiresAt, k.LastUsedAt, k.RevokedAt))],
+            keys.Total);
     }
 
     private static async Task<Results<Created<ApiKeyCreatedResponse>, ProblemHttpResult>> CreateAsync(

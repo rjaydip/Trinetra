@@ -144,20 +144,27 @@ public sealed class FederationQueryRepository
             """, new { targetId }, cancellationToken: ct));
     }
 
-    public async Task<IReadOnlyList<FederatedCameraRow>> CamerasAsync(
-        Guid targetId, CancellationToken ct)
+    public async Task<PagedRows<FederatedCameraRow>> CamerasAsync(
+        Guid targetId, PageWindow window, CancellationToken ct)
     {
         await using var c = await _dataSource.OpenConnectionAsync(ct);
 
-        var rows = await c.QueryAsync<FederatedCameraRow>(new CommandDefinition("""
-            SELECT native_camera_id, camera_id, name, vendor_model, firmware,
-                   is_enabled, is_recording, health::text AS health, last_seen,
-                   stream_references, status_changed_at
-            FROM federation.federated_camera
-            WHERE target_id = @targetId ORDER BY native_camera_id;
-            """, new { targetId }, cancellationToken: ct));
+        var rows = (await c.QueryAsync<FederatedCameraRow, long, (FederatedCameraRow R, long T)>(
+            new CommandDefinition("""
+                SELECT native_camera_id, camera_id, name, vendor_model, firmware,
+                       is_enabled, is_recording, health::text AS health, last_seen,
+                       stream_references, status_changed_at,
+                       count(*) OVER() AS total_count
+                FROM federation.federated_camera
+                WHERE target_id = @targetId
+                ORDER BY native_camera_id
+                LIMIT @limit OFFSET @offset;
+                """, new { targetId, limit = window.Limit, offset = window.Offset },
+                cancellationToken: ct),
+            (r, t) => (r, t), splitOn: "total_count")).ToList();
 
-        return [.. rows];
+        return new PagedRows<FederatedCameraRow>(
+            [.. rows.Select(x => x.R)], rows.Count > 0 ? (int)rows[0].T : 0);
     }
 
     /// <summary>

@@ -46,7 +46,8 @@ public static class AccessGroupEndpoints
               + "(the same rule as adding a user to it). A group with no organization or no "
               + "geography scope reaches every department or area, so it is visible only to an "
               + "administrator already unscoped on that dimension. The platform-admin group is "
-              + "therefore invisible to every scoped administrator.");
+              + "therefore invisible to every scoped administrator.\n\n"
+              + Paginate.Doc);
 
         group.MapGet("/{id:guid}", GetAsync)
           .RequirePermission("group.read")
@@ -68,7 +69,8 @@ public static class AccessGroupEndpoints
               + "a review. Membership is changed from the user side, not here.\n\n"
               + "A group you cannot see returns `404`. For a group you can see, the member list "
               + "is still limited to accounts within your own reach — a cross-department group "
-              + "does not hand a single-department administrator its full roster.");
+              + "does not hand a single-department administrator its full roster.\n\n"
+              + Paginate.Doc);
 
         group.MapPost("/", CreateAsync)
           .RequirePermission("group.manage")
@@ -153,13 +155,18 @@ public static class AccessGroupEndpoints
               + "role a user needs, or to interpret `GET /users/{id}/permissions`.");
     }
 
-    private static async Task<Ok<IReadOnlyList<AccessGroupResponse>>> ListAsync(
-        AccessGroupRepository repo, HttpContext http, CancellationToken ct)
+    private const int ListHardCap = 1000;
+
+    private static async Task<IResult> ListAsync(
+        int? page, int? pageSize, AccessGroupRepository repo, HttpContext http, CancellationToken ct)
     {
         var caller = CallerContextFactory.From(http);
         caller.Require("group.read");
-        var groups = await repo.ListAsync(caller, ct);
-        return TypedResults.Ok<IReadOnlyList<AccessGroupResponse>>([.. groups.Select(ToResponse)]);
+
+        var q = new PageQuery(page, pageSize);
+        var groups = await repo.ListPageAsync(
+            caller, new PageWindow(q.Limit(ListHardCap, ListHardCap), q.Offset(ListHardCap)), ct);
+        return Paginate.Render(http, q, ListHardCap, [.. groups.Items.Select(ToResponse)], groups.Total);
     }
 
     private static async Task<Results<Ok<AccessGroupResponse>, NotFound>> GetAsync(
@@ -179,8 +186,8 @@ public static class AccessGroupEndpoints
         return found is null ? TypedResults.NotFound() : TypedResults.Ok(ToResponse(found));
     }
 
-    private static async Task<Results<Ok<IReadOnlyList<GroupMemberResponse>>, NotFound>> MembersAsync(
-        Guid id, AccessGroupRepository repo, HttpContext http, CancellationToken ct)
+    private static async Task<IResult> MembersAsync(
+        Guid id, int? page, int? pageSize, AccessGroupRepository repo, HttpContext http, CancellationToken ct)
     {
         var caller = CallerContextFactory.From(http);
         caller.Require("group.read");
@@ -192,9 +199,13 @@ public static class AccessGroupEndpoints
 
         // The group is visible; the member list is still filtered to accounts the caller could
         // see in the user directory, so a cross-department group does not leak its full roster.
-        var members = await repo.ListMembersAsync(id, caller, ct);
-        return TypedResults.Ok<IReadOnlyList<GroupMemberResponse>>(
-            [.. members.Select(m => new GroupMemberResponse(m.UserId, m.Username, m.ExpiresAt))]);
+        var q = new PageQuery(page, pageSize);
+        var members = await repo.ListMembersPageAsync(
+            id, caller, new PageWindow(q.Limit(ListHardCap, ListHardCap), q.Offset(ListHardCap)), ct);
+
+        return Paginate.Render(http, q, ListHardCap,
+            [.. members.Items.Select(m => new GroupMemberResponse(m.UserId, m.Username, m.ExpiresAt))],
+            members.Total);
     }
 
     private static async Task<Results<Created<CreatedResponse>, ProblemHttpResult>> CreateAsync(

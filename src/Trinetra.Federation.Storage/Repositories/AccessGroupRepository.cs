@@ -171,6 +171,74 @@ public sealed class AccessGroupRepository
     }
 
     /// <summary>
+    /// One page of visible groups, with the full match count. The page's groups are resolved
+    /// first (with <c>LIMIT</c>/<c>OFFSET</c>); permissions and scopes are then loaded only for
+    /// those group ids, so a large estate does not pull every role_permission row.
+    /// </summary>
+    public async Task<PagedRows<AccessGroupDetail>> ListPageAsync(
+        CallerContext caller, PageWindow window, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(caller);
+
+        var p = GroupVisibilityParams(caller, "group.read");
+        p.Add("limit", window.Limit);
+        p.Add("offset", window.Offset);
+
+        await using var c = await _dataSource.OpenConnectionAsync(ct);
+        var groupRows = (await c.QueryAsync<GroupRow, long, (GroupRow G, long T)>(
+            new CommandDefinition($"""
+                SELECT ag.id, ag.code, ag.name, ag.description, ag.status, r.code AS role_code,
+                       r.status AS role_status, ag.created_at, ag.updated_at,
+                       (SELECT count(*) FROM federation.user_groups ug
+                         WHERE ug.group_id = ag.id AND ug.status = 'ACTIVE') AS member_count,
+                       count(*) OVER() AS total_count
+                FROM federation.access_groups ag
+                JOIN federation.roles r ON r.id = ag.role_id
+                WHERE ({GroupVisiblePredicate})
+                ORDER BY ag.code, ag.id
+                LIMIT @limit OFFSET @offset;
+                """, p, cancellationToken: ct),
+            (g, t) => (g, t), splitOn: "total_count")).ToList();
+
+        var groups = groupRows.Select(x => x.G).ToList();
+        var total = groupRows.Count > 0 ? (int)groupRows[0].T : 0;
+
+        if (groups.Count == 0)
+        {
+            return new PagedRows<AccessGroupDetail>([], total);
+        }
+
+        var ids = groups.Select(g => g.Id).ToArray();
+        await using var reader = await c.QueryMultipleAsync(new CommandDefinition("""
+            SELECT ag.id AS group_id, rp.permission_code
+            FROM federation.access_groups ag
+            JOIN federation.role_permissions rp ON rp.role_id = ag.role_id
+            WHERE ag.id = ANY(@ids);
+
+            SELECT gs.group_id, s.id, s.scope_type, s.organization_unit_id,
+                   s.geographic_area_id, s.resource_type, s.resource_id, s.description
+            FROM federation.group_scopes gs
+            JOIN federation.scopes s ON s.id = gs.scope_id
+            WHERE gs.group_id = ANY(@ids);
+            """, new { ids }, cancellationToken: ct));
+
+        var permissions = (await reader.ReadAsync<(Guid GroupId, string PermissionCode)>())
+            .ToLookup(x => x.GroupId, x => x.PermissionCode);
+        var scopes = (await reader.ReadAsync<ScopeRow>()).ToLookup(x => x.GroupId);
+
+        return new PagedRows<AccessGroupDetail>(
+        [
+            .. groups.Select(g => new AccessGroupDetail(
+                g.Id, g.Code, g.Name, g.Description, g.Status, g.RoleCode,
+                [.. permissions[g.Id]],
+                [.. scopes[g.Id].Select(x => new ScopeSummary(
+                    x.Id, x.ScopeType, x.OrganizationUnitId, x.GeographicAreaId,
+                    x.ResourceType, x.ResourceId, x.Description))],
+                g.MemberCount, g.RoleStatus, g.CreatedAt, g.UpdatedAt)),
+        ], total);
+    }
+
+    /// <summary>
     /// One group by id, unfiltered. The caller-visibility gate for a single group is
     /// <see cref="IsVisibleToAsync"/>, run by the endpoint before this — <see cref="GetAsync"/>
     /// itself is also called from the write-side guards, which must load a group precisely so
@@ -400,6 +468,35 @@ public sealed class AccessGroupRepository
             ORDER BY pu.username;
             """, p, cancellationToken: ct));
         return rows.ToList();
+    }
+
+    /// <summary>One page of a group's visible members, with the full match count.</summary>
+    public async Task<PagedRows<(Guid UserId, string Username, DateTimeOffset? ExpiresAt)>>
+        ListMembersPageAsync(Guid groupId, CallerContext caller, PageWindow window, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(caller);
+
+        var p = UserRepository.UserVisibilityParams(caller);
+        p.Add("groupId", groupId);
+        p.Add("limit", window.Limit);
+        p.Add("offset", window.Offset);
+
+        await using var c = await _dataSource.OpenConnectionAsync(ct);
+        var rows = (await c.QueryAsync<Guid, string, DateTimeOffset?, long,
+            (Guid U, string N, DateTimeOffset? E, long T)>(
+            new CommandDefinition($"""
+                SELECT pu.id, pu.username, ug.expires_at, count(*) OVER() AS total_count
+                FROM federation.user_groups ug
+                JOIN federation.platform_users pu ON pu.id = ug.user_id
+                WHERE ug.group_id = @groupId AND ug.status = 'ACTIVE'
+                  AND {UserRepository.VisibleForUserReadPredicate}
+                ORDER BY pu.username, pu.id
+                LIMIT @limit OFFSET @offset;
+                """, p, cancellationToken: ct),
+            (u, n, e, t) => (u, n, e, t), splitOn: "expires_at,total_count")).ToList();
+
+        return new PagedRows<(Guid, string, DateTimeOffset?)>(
+            [.. rows.Select(r => (r.U, r.N, r.E))], rows.Count > 0 ? (int)rows[0].T : 0);
     }
 
     public async Task<bool> RevokeMembershipAsync(

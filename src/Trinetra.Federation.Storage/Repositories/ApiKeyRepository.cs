@@ -152,23 +152,36 @@ public sealed class ApiKeyRepository
     /// a target map for cross-department key revocation. An unscoped caller sees every key. The
     /// column list is explicit and never includes <c>key_hash</c>.
     /// </remarks>
-    public async Task<IReadOnlyList<ApiKeySummary>> ListAsync(CallerContext caller, CancellationToken ct)
+    /// <summary>Every API key the caller may see. Unbounded — test / diagnostic path.</summary>
+    public async Task<IReadOnlyList<ApiKeySummary>> ListAsync(CallerContext caller, CancellationToken ct) =>
+        (await ListAsync(caller, PageWindow.UpTo(int.MaxValue), ct)).Items;
+
+    /// <summary>One page of API keys the caller may see, with the full match count.</summary>
+    public async Task<PagedRows<ApiKeySummary>> ListAsync(
+        CallerContext caller, PageWindow window, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(caller);
 
+        var p = AccessGroupRepository.GroupVisibilityParams(caller, "apikey.read");
+        p.Add("limit", window.Limit);
+        p.Add("offset", window.Offset);
+
         await using var c = await _dataSource.OpenConnectionAsync(ct);
+        var rows = (await c.QueryAsync<ApiKeySummary, long, (ApiKeySummary K, long T)>(
+            new CommandDefinition($"""
+                SELECT k.id, k.key_id, k.display_name, k.group_id, ag.code AS group_code,
+                       k.created_at, k.expires_at, k.last_used_at, k.revoked_at,
+                       count(*) OVER() AS total_count
+                FROM federation.api_key k
+                JOIN federation.access_groups ag ON ag.id = k.group_id
+                WHERE {AccessGroupRepository.GroupVisiblePredicate}
+                ORDER BY k.created_at DESC, k.id
+                LIMIT @limit OFFSET @offset;
+                """, p, cancellationToken: ct),
+            (k, t) => (k, t), splitOn: "total_count")).ToList();
 
-        var rows = await c.QueryAsync<ApiKeySummary>(new CommandDefinition($"""
-            SELECT k.id, k.key_id, k.display_name, k.group_id, ag.code AS group_code,
-                   k.created_at, k.expires_at, k.last_used_at, k.revoked_at
-            FROM federation.api_key k
-            JOIN federation.access_groups ag ON ag.id = k.group_id
-            WHERE {AccessGroupRepository.GroupVisiblePredicate}
-            ORDER BY k.created_at DESC;
-            """, AccessGroupRepository.GroupVisibilityParams(caller, "apikey.read"),
-            cancellationToken: ct));
-
-        return rows.ToList();
+        return new PagedRows<ApiKeySummary>(
+            [.. rows.Select(r => r.K)], rows.Count > 0 ? (int)rows[0].T : 0);
     }
 
     /// <summary>
@@ -183,7 +196,7 @@ public sealed class ApiKeyRepository
     /// </para>
     /// <para>
     /// Authority-scoped: the <c>target</c> CTE carries the same visibility predicate as
-    /// <see cref="ListAsync"/> (keyed on <c>apikey.manage</c>, the permission being exercised),
+    /// <c>ListAsync</c> (keyed on <c>apikey.manage</c>, the permission being exercised),
     /// and the <c>upd</c> CTE only fires when <c>target</c> is non-empty. A key whose group is
     /// outside the caller's reach comes back as <see cref="RevokeOutcome.NotFound"/> — identical
     /// to an unknown id, and left untouched — so <c>apikey.manage</c> can no longer revoke a key
