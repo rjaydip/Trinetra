@@ -83,16 +83,43 @@ public static class WatchlistEndpoints
             entries.Total);
     }
 
-    private static async Task<Created<CreatedResponse>> CreateAsync(
+    private static readonly HashSet<string> Severities =
+        new(["Low", "Medium", "High", "Critical"], StringComparer.Ordinal);
+
+    private const int MaxReasonLength = 500;
+
+    private static async Task<Results<Created<CreatedResponse>, ProblemHttpResult>> CreateAsync(
         [FromBody] CreateWatchlistEntryRequest request, WatchlistRepository repo,
         NpgsqlDataSource db, HttpContext http, CancellationToken ct)
     {
         var caller = CallerContextFactory.From(http);
 
+        // Named 400s ahead of the DB (finding 16-L3): severity has a CHECK constraint, and a
+        // plate that normalizes to nothing would otherwise be stored as an empty watchlist entry.
+        var plate = PlateNormalizer.Normalize(request.PlateNumber);
+        var error =
+            string.IsNullOrEmpty(plate)
+                ? "plateNumber must contain at least one letter or digit."
+            // Guard empty/null before the membership test — Severities.Contains(null) throws
+            // with an explicit comparer. (RespectNullableAnnotations already rejects an explicit
+            // "severity": null at deserialization; this covers "" and defence in depth.)
+            : string.IsNullOrEmpty(request.Severity) || !Severities.Contains(request.Severity)
+                ? $"severity must be one of: {string.Join(", ", Severities)}."
+            : request.Reason is { Length: > MaxReasonLength }
+                ? $"reason is at most {MaxReasonLength} characters."
+                : null;
+
+        if (error is not null)
+        {
+            return TypedResults.Problem(
+                title: "Invalid watchlist entry", detail: error,
+                statusCode: StatusCodes.Status400BadRequest);
+        }
+
         var entry = new WatchlistEntry
         {
             OrganizationUnitId = request.OrganizationUnitId,
-            PlateNumberNormalized = PlateNormalizer.Normalize(request.PlateNumber),
+            PlateNumberNormalized = plate,
             Reason = request.Reason,
             Severity = request.Severity,
         };

@@ -106,6 +106,38 @@ on these routes as "already gone", not a hard error.
   `ORGANIZATION` scope with no `organizationUnitId`, a `GEOGRAPHY` scope carrying a
   `resourceId`, etc.) → **`400` "Scope fields do not match its type"** with a specific message
   (was: a generic `400`, or in some shapes a `500`).
+- **`POST /api/v1/api-keys`** — `displayName` missing/empty or over 255 chars → **`400`** (was `500`).
+- **`POST /api/v1/detections`** (machine ingest) — `eventType` not `ANPR_DETECTED` /
+  `VEHICLE_DETECTED` → **`400`**; `confidence` not a number in `0..1` (incl. `NaN`) → **`400`**.
+- **`POST /api/v1/watchlist`** — `severity` not `Low`/`Medium`/`High`/`Critical` → **`400`**;
+  `reason` over 500 chars → **`400`**; `plateNumber` with no letters or digits → **`400`**.
+- **`GET /api/v1/events?cameraId=…`** — a value over 200 chars → **`400`**. `cameraId` is
+  matched **verbatim** against an event's own `cameraId` — copy it from a prior result, do not
+  construct it.
+
+### 1.4d P3 cleanup wave (`PR11a`) — response-code consistency
+
+- **`GET /api/v1/vms/{id}/cameras/{nativeCameraId}/status-history`** — an unknown
+  `nativeCameraId` now returns **`404`** (was `200` with `[]`). Distinguish "no transitions yet"
+  (`200` empty) from "no such camera" (`404`).
+- **`GET /api/v1/cameras/{id}/coverage`** — a camera the caller can see but with no coverage
+  optics now returns **`200`** with a GeoJSON `Feature` whose `geometry` is **`null`** and
+  `properties.hasCoverage` is `false` (was **`204 No Content`**). Switch any `status === 204`
+  check to `properties.hasCoverage`. `404` now means only "camera absent or out of scope".
+  - `GeoJsonFeature.geometry` is now **nullable** in the contract.
+  - `properties`: `hasCoverage` is **always** present; `estimated` and `disclaimer` are present
+    **only when** `hasCoverage` is `true`.
+- **`GET /api/v1/geographic-areas?rootsOnly=true&parentId=…`** — contradictory filters now
+  **`400` "Conflicting filters"** (was a silently empty page).
+- **`POST /api/v1/api-keys`** — the `201` `Location` header now points at the collection
+  `/api/v1/api-keys` (was `/api/v1/access-groups/{groupId}` — the wrong resource). There is no
+  single-key GET; find the new key by its `id` in the response body or in `GET /api-keys`.
+
+### 1.4e OpenAPI text — "Model N" wording removed (`PR11a`)
+
+Cosmetic. The reference page and every tag/endpoint description that said "Model 1 / 2 / 3" now
+uses functional wording ("the federation platform", "the AI worker", "the camera registry").
+No field or route changes.
 
 ### 1.4c `GET /api/v1/vms/{id}/capabilities` — 404 body no longer distinguishes the reason
 

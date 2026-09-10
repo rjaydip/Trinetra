@@ -88,6 +88,19 @@ public static class ApiKeyEndpoints
     {
         var caller = CallerContextFactory.From(http);
 
+        // display_name is VARCHAR(255); an over-long value would otherwise reach the DB as a
+        // raw 22001 (finding 8-NEW-L).
+        var displayName = request.DisplayName?.Trim() ?? "";
+        if (displayName.Length is 0 or > 255)
+        {
+            return TypedResults.Problem(
+                title: "Invalid display name",
+                detail: displayName.Length == 0
+                    ? "displayName is required."
+                    : "displayName is at most 255 characters.",
+                statusCode: StatusCodes.Status400BadRequest);
+        }
+
         // A key acts through its group exactly as a user does, so minting one runs the same
         // privilege-escalation chokepoint as adding a user to that group. Without it,
         // apikey.manage alone let a scoped administrator mint a key in the platform-admin group.
@@ -105,20 +118,20 @@ public static class ApiKeyEndpoints
         await using var work = await UnitOfWork.BeginAsync(db, ct);
 
         var id = await ApiKeyRepository.CreateAsync(
-            keyId, keyHash, request.DisplayName, request.GroupId, request.ExpiresAt, caller,
+            keyId, keyHash, displayName, request.GroupId, request.ExpiresAt, caller,
             work, ct);
 
         await work.AuditAsync(caller, "create", "api_key", id.ToString(),
             before: null,
-            after: new { request.DisplayName, request.GroupId, request.ExpiresAt, keyId },
+            after: new { displayName, request.GroupId, request.ExpiresAt, keyId },
             organizationUnitId: null, ct);
         await work.CommitAsync(ct);
 
-        // The created resource is the key, not its group (finding 8-M3). There is deliberately
-        // no GET /api-keys/{id} — the raw value is shown here once and never again — so the
-        // Location identifies the key without being dereferenceable; list it via GET /api-keys.
+        // The created resource is the key, not its group (finding 8-M3). There is deliberately no
+        // GET /api-keys/{id} — the raw value is shown here once and never again — so Location
+        // points at the collection, which is fetchable and lists the new key by its `id`.
         return TypedResults.Created(
-            $"/api/v1/api-keys/{id}", new ApiKeyCreatedResponse(id, keyId, rawKey));
+            "/api/v1/api-keys", new ApiKeyCreatedResponse(id, keyId, rawKey));
     }
 
     private static async Task<Results<NoContent, NotFound>> RevokeAsync(

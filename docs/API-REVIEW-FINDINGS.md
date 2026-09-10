@@ -247,8 +247,9 @@ ResolveCamera pre-scope, `17-M1` heartbeat spoofable, `17-M2` client-supplied la
 - **5-L4** ✅ — `GET /geographic-areas?rootsOnly=true&parentId=x`: contradictory filters
   (unsatisfiable) → `400` "Conflicting filters" instead of a silent empty page.
 - **8-M3** ✅ — `POST /api-keys` `201` `Location` pointed at `/access-groups/{groupId}` (wrong
-  resource); now `/api/v1/api-keys/{id}` — the key's own identity (deliberately not
-  dereferenceable; list via `GET /api-keys`).
+  resource). **Fix-forward in PR11b** (both reviewers): `Location` is now the collection
+  `/api/v1/api-keys` — dereferenceable, and the new key is listed there by its `id` (there is
+  no single-key GET).
 - **16-L1** — **NOT in this PR.** Adding a `watchlist.read` permission is a schema version + a
   breaking gate change; deferred to a watchlist-focused PR. (`16-L1` also surfaced, in passing,
   that `WatchlistRepository.DeactivateAsync` has no scope check at all — `WHERE id = @id` — a
@@ -256,6 +257,45 @@ ResolveCamera pre-scope, `17-M1` heartbeat spoofable, `17-M2` client-supplied la
 - Endpoint-level items (10-L5 handler, 5-L4 guard, 8-M3 header) are not integration-tested — no
   `WebApplicationFactory`, same accepted gap as PR10's 6-M2 / 5-M10. Build clean; 123 unit /
   254 integration + 18 pre-existing.
+
+**PR11b — validation / invariant fixes (branch `pr11b-validation`, uncommitted 2026-09-10):**
+- **8-NEW-L** ✅ — `POST /api-keys`: `displayName` validated (required, ≤255) with a named 400
+  before the DB (`api_key.display_name` is `VARCHAR(255)`); the trimmed value is what's stored
+  and audited.
+- **10-L3** ✅ — camera `PATCH` `installationDate` bound a `DateTime` at a `DATE` column
+  (`Camera.InstallationDate` is `DateOnly`); now `DateOnly.TryParseExact(s, "yyyy-MM-dd", …)`
+  directly — no `DateTime` hop, so the result never depends on the server timezone for a zoned
+  value (CLAUDE.md #6). Matches how STJ binds the create-path DTO.
+- **15-L2** ✅ — detection ingest: `eventType` must be `ANPR_DETECTED` / `VEHICLE_DETECTED` (the
+  values `ai-worker/pipeline.py` emits — a **closed set** enforced at the API + a DB CHECK;
+  widening it is an API-first three-place change, noted in `ai-worker/README.md` +
+  `MODEL-2-VIDEO-METADATA-ANALYTICS.md`); `confidence` must be a real `0..1` number, written as
+  `!(c >= 0 && c <= 1)` so `NaN` is rejected too. Extracted to
+  `DetectionEndpoints.ValidateSubmission(string?, double)` — a **null `eventType`** (field
+  omitted) is guarded before the `HashSet.Contains` (which throws on null with an explicit
+  comparer → would have been a 500). +10 unit tests; the `NaN` and null cases each caught a bug
+  in an earlier form.
+- **16-L3** ✅ — `POST /watchlist`: `severity` checked against `{Low,Medium,High,Critical}`
+  (also a DB CHECK; null/empty guarded before the `HashSet.Contains`), `reason` capped at 500
+  chars, and a `plateNumber` that normalizes to nothing (`""`, punctuation-only) is now a 400
+  rather than a blank entry. Return type gained a `ProblemHttpResult` branch.
+- **14-L3** ✅ — `GET /events` `cameraId`: format documented (matched verbatim against an
+  event's own `cameraId` — copy it from a prior result, don't construct it) + a 200-char cap so
+  a pathological value can't scan a covering index.
+- **10-L7** — **deferred.** `cameras.vms_id` has no FK *by design* (v1.6.sql: "a registry camera
+  may name a VMS that is later removed"); a write-time existence/scope check would contradict
+  that and cost a query per write for a soft descriptive pointer.
+- Endpoint-only items (8-NEW-L, 10-L3, 16-L3, 14-L3) aren't integration-tested — no
+  `WebApplicationFactory`, same accepted gap. 15-L2 is covered via the extracted helper.
+  Build clean; 133 unit / 254 integration + 18 pre-existing.
+- **BA + dotnet-expert reviewed PR11a (retrospective) + PR11b (pre-commit), 2026-09-10.** PR11a:
+  no follow-up PR needed; the `GeoJsonFeature.Geometry` nullable change is safe (nothing in the
+  codebase dereferences `.Geometry`, the list path always emits a Point); no stale
+  `.Produces(204)`. PR11b applied: the two null-guard blockers (eventType / severity before
+  `HashSet.Contains`), the `DateOnly.TryParseExact` TZ fix, the 8-M3 Location fix-forward, and
+  the closed-set doc notes. Consumer-facing changes are now in
+  `docs/API-CHANGES-FOR-REGISTRY-UI.md` §1.4b/§1.4d/§1.4e; coverage/eventType detail in
+  `MODEL-1-API-PLAN.md` / `MODEL-2-VIDEO-METADATA-ANALYTICS.md` / `ai-worker/README.md`.
 
 ### Scope additions (agreed)
 

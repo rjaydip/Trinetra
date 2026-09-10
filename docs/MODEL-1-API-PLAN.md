@@ -72,8 +72,11 @@ action and revisit. Flagged for the reviewer.
 6. GIS camera feed: `GET /api/v1/gis/cameras` — bbox-filtered GeoJSON `FeatureCollection`,
    point geometry + direction bearing + derived coverage-sector polygon **computed in the
    application** from `azimuth` + `horizontal_fov` + `effective_range`. No stored geometry.
-7. Per-camera coverage: `GET /api/v1/cameras/{id}/coverage` — the single sector polygon as
-   GeoJSON.
+7. Per-camera coverage: `GET /api/v1/cameras/{id}/coverage` — a GeoJSON `Feature`. When the
+   camera has all three optics its `geometry` is the sector `Polygon` and `properties` carries
+   `estimated: true` + the disclaimer; when it does not, `geometry` is `null` and
+   `properties.hasCoverage` is `false` (always present). `404` only for an absent / out-of-scope
+   camera — not for "no optics" (that would let a caller probe which ids exist).
 8. Coverage aggregate: `GET /api/v1/gis/coverage` — **counts and layer summaries only**
    (cameras per status / department / vendor within a bbox or area), not a merged coverage
    polygon.

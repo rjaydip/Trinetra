@@ -129,6 +129,26 @@ extra option for the plate stage. See `backends/registry.py` and `.env.example`.
   one worker is the signal to give it a GPU or shrink its camera list.
 - `GET /health` for liveness.
 
+## Detection contract — the closed sets
+
+`POST /api/v1/detections` validates two fields against fixed sets:
+
+- **`eventType`** must be `ANPR_DETECTED` or `VEHICLE_DETECTED` — the only values
+  `pipeline.py` emits today. The API returns `400` for anything else, and the `detection` table
+  has a matching `CHECK` constraint. This is deliberate: search and dashboards aggregate on
+  `event_type`, so a free-text value nothing can reason about is worse than a rejection.
+- **`confidence`** must be a number in `0..1` (`NaN` rejected).
+
+**Adding a detection type is an API-first, three-place change, deployed in this order:**
+1. `db/versions/vN.sql` — widen the `detection.event_type` `CHECK`.
+2. `src/Trinetra.Federation.Api/Endpoints/DetectionEndpoints.cs` — add it to `DetectionEventTypes`.
+3. this worker — start emitting it.
+
+Deploy the API + migration before the new worker version, or the new type's detections are
+rejected (a clean `400` the worker logs and drops — not a poison message, but still lost).
+`vendorEventType` (free text, already on the contract) stays the escape hatch for
+device-specific labels.
+
 ## What's deliberately not here yet
 
 - End-to-end integration testing of `backend_client.py`/`heartbeat.py` against the now-built

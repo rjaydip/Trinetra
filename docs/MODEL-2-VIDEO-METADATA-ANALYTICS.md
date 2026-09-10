@@ -160,6 +160,12 @@ Rule / Analytics
    +--> Configured Alert
 ```
 
+The `POST /api/v1/detections` ingest contract accepts a **closed** `event_type` set —
+`ANPR_DETECTED` and `VEHICLE_DETECTED` today — enforced both by the API (`400`) and a DB `CHECK`.
+Widening it is an API-first, three-place change (schema `CHECK` → `DetectionEndpoints.DetectionEventTypes`
+→ the worker), deployed API-first; see `ai-worker/README.md`. Person Event above is a
+rule/analytics output, not (yet) an ingest type.
+
 ## Search
 
 Example queries:

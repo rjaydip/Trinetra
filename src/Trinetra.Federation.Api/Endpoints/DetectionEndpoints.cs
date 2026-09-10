@@ -31,6 +31,12 @@ public static class DetectionEndpoints
     /// </summary>
     private const long MaxIngestBodyBytes = 8L * 1024 * 1024;
 
+    // The values ai-worker/pipeline.py produces. Kept as a closed set for the same reason camera
+    // type is (finding 15-L2): a free-text event_type that search and dashboards then can't
+    // reason about is worse than a 400 when a new worker version needs a new entry here.
+    private static readonly HashSet<string> DetectionEventTypes =
+        new(["ANPR_DETECTED", "VEHICLE_DETECTED"], StringComparer.Ordinal);
+
     private static readonly System.Buffers.SearchValues<char> SafeIdChars =
         System.Buffers.SearchValues.Create(
             "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_");
@@ -41,6 +47,37 @@ public static class DetectionEndpoints
     /// <c>../../etc/cron.d/x</c> cannot escape the evidence root. The worker sends
     /// <c>evt-{uuid:n}</c>, which this admits.
     /// </summary>
+    /// <summary>
+    /// Finding 15-L2: <c>eventType</c> must be a known value (a free-text type that search and
+    /// dashboards can't reason about is worse than a 400), and <c>confidence</c> must be a real
+    /// probability — confidence is never presented as more certain than it is. The DB CHECK is
+    /// the backstop; this gives a named 400 instead of an opaque constraint violation.
+    /// </summary>
+    internal static ProblemHttpResult? ValidateSubmission(string? eventType, double confidence)
+    {
+        // Contains(null) throws with an explicit comparer — a missing/null eventType is just the
+        // invalid-value 400.
+        if (eventType is null || !DetectionEventTypes.Contains(eventType))
+        {
+            return TypedResults.Problem(
+                title: "Unknown event type",
+                detail: $"eventType must be one of: {string.Join(", ", DetectionEventTypes.Order())}.",
+                statusCode: StatusCodes.Status400BadRequest);
+        }
+
+        // Written as the negation of the valid range so NaN (which is neither < 0 nor > 1) is
+        // also rejected.
+        if (!(confidence >= 0 && confidence <= 1))
+        {
+            return TypedResults.Problem(
+                title: "Confidence out of range",
+                detail: "confidence must be a number between 0 and 1 inclusive.",
+                statusCode: StatusCodes.Status400BadRequest);
+        }
+
+        return null;
+    }
+
     private static bool IsSafeDetectionId(string? id) =>
         !string.IsNullOrEmpty(id)
         && id.Length <= 128
@@ -63,6 +100,8 @@ public static class DetectionEndpoints
               + "camera discovery builds it from `GET /vms/{id}/cameras`. An id that does not "
               + "resolve against the camera inventory is rejected — a detection cannot be scoped "
               + "to an organization without a known camera.\n\n"
+              + "`eventType` must be `ANPR_DETECTED` or `VEHICLE_DETECTED`; `confidence` must be "
+              + "between 0 and 1 — both are 400 otherwise.\n\n"
               + "`evidence.snapshotBase64`, if present, is decoded and written under the "
               + "configured evidence root; otherwise `evidence.snapshotPath` (today's "
               + "worker-local path) is stored verbatim as an opaque reference. The snapshot is "
@@ -95,6 +134,11 @@ public static class DetectionEndpoints
                 title: "Invalid detection id",
                 detail: "id must be 1-128 characters of ASCII letters, digits, '-' or '_'.",
                 statusCode: StatusCodes.Status400BadRequest);
+        }
+
+        if (ValidateSubmission(request.EventType, request.Confidence) is { } bad)
+        {
+            return bad;
         }
 
         var resolved = await detections.ResolveCameraAsync(request.CameraId, ct);
