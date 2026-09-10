@@ -188,7 +188,7 @@ public sealed record AddScopeRequest(
 // ---- Detections, watchlist, AI-worker health --------------------------------
 
 /// <summary>
-/// A detection submitted by Model 2's AI worker — mirrors <c>ai-worker/pipeline.py</c>'s
+/// A detection submitted by the AI worker — mirrors <c>ai-worker/pipeline.py</c>'s
 /// <c>DetectionEvent.to_json()</c> exactly. <c>CameraId</c> is <c>"{targetId}:{nativeCameraId}"</c>.
 /// </summary>
 public sealed record DetectionEventRequest(

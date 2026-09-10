@@ -114,8 +114,11 @@ public static class ApiKeyEndpoints
             organizationUnitId: null, ct);
         await work.CommitAsync(ct);
 
+        // The created resource is the key, not its group (finding 8-M3). There is deliberately
+        // no GET /api-keys/{id} — the raw value is shown here once and never again — so the
+        // Location identifies the key without being dereferenceable; list it via GET /api-keys.
         return TypedResults.Created(
-            $"/api/v1/access-groups/{request.GroupId}", new ApiKeyCreatedResponse(id, keyId, rawKey));
+            $"/api/v1/api-keys/{id}", new ApiKeyCreatedResponse(id, keyId, rawKey));
     }
 
     private static async Task<Results<NoContent, NotFound>> RevokeAsync(

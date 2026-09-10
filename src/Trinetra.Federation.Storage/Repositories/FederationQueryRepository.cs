@@ -144,6 +144,23 @@ public sealed class FederationQueryRepository
             """, new { targetId }, cancellationToken: ct));
     }
 
+    /// <summary>
+    /// Whether a camera with this vendor-native id is on that target. Used to turn an unknown
+    /// <c>nativeCameraId</c> into a 404 rather than a misleading empty history (finding 9-L2).
+    /// Target scoping is the caller endpoint's job.
+    /// </summary>
+    public async Task<bool> FederatedCameraExistsAsync(
+        Guid targetId, string nativeCameraId, CancellationToken ct)
+    {
+        await using var c = await _dataSource.OpenConnectionAsync(ct);
+
+        return await c.ExecuteScalarAsync<bool>(new CommandDefinition("""
+            SELECT EXISTS (
+                SELECT 1 FROM federation.federated_camera
+                WHERE target_id = @targetId AND native_camera_id = @nativeCameraId);
+            """, new { targetId, nativeCameraId }, cancellationToken: ct));
+    }
+
     public async Task<PagedRows<FederatedCameraRow>> CamerasAsync(
         Guid targetId, PageWindow window, CancellationToken ct)
     {

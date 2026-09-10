@@ -143,7 +143,7 @@ public sealed record CapabilityResponse(
 
 /// <summary>A camera as reported by a VMS.</summary>
 /// <remarks>
-/// <c>CameraId</c> is Model 1's registry identifier and stays null until reconciliation matches
+/// <c>CameraId</c> is the camera registry identifier and stays null until reconciliation matches
 /// this camera to a registered one. Until then, events carry the VMS's own channel id.
 /// </remarks>
 public sealed record FederatedCameraResponse(

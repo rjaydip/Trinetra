@@ -230,6 +230,33 @@ ResolveCamera pre-scope, `17-M1` heartbeat spoofable, `17-M2` client-supplied la
 `10-L1/L2/L3/L5/L6/L7`, `13-L1/L2`, `14-L1/L2/L3`, `15-L1..L4`, `16-L1/L3`, `17-L1..L4`,
 `4-L1..L6`, `4-M2` (refresh tokens — or fold into 4-C1).
 
+**PR11a — F1 + response-code consistency (branch `pr11a-f1-response-codes`, uncommitted 2026-09-10):**
+- **F1** ✅ — every "Model 1/2/3" phrase removed from the public OpenAPI surface (8 spots:
+  `TagDescriptionTransformer` `Info.Description`, `ApiTags` Detections, `VmsEndpoints`,
+  `CredentialEndpoints`, `DetectionEndpoints` ×3, `WorkerHealthEndpoints`, `Responses.cs`,
+  `Contracts.cs`). Wording is now functional ("the federation platform", "the AI worker", "the
+  camera registry"). `Federation.Core` / `Federation.Adapters` internal docs left as-is.
+- **9-L2** ✅ — `GET /vms/{id}/cameras/{nativeCameraId}/status-history`: an unknown
+  `nativeCameraId` was a `200` empty list; new `FederationQueryRepository.FederatedCameraExistsAsync`
+  → `404`. +3 integ tests (`FederationQueryTests`), sabotage-checked.
+- **10-L5** ✅ — `GET /cameras/{id}/coverage`: an in-scope camera without optics returned `204`
+  while absent/out-of-scope returned `404` — an existence oracle. Now a camera the caller can
+  see **always** returns a GeoJSON `Feature`; when optics are missing, `geometry: null` +
+  `properties.hasCoverage: false` (consistent with the `/gis/cameras` list). `GeoJsonFeature.Geometry`
+  is now nullable (RFC 7946 §3.2). `404` only for absent / out of scope.
+- **5-L4** ✅ — `GET /geographic-areas?rootsOnly=true&parentId=x`: contradictory filters
+  (unsatisfiable) → `400` "Conflicting filters" instead of a silent empty page.
+- **8-M3** ✅ — `POST /api-keys` `201` `Location` pointed at `/access-groups/{groupId}` (wrong
+  resource); now `/api/v1/api-keys/{id}` — the key's own identity (deliberately not
+  dereferenceable; list via `GET /api-keys`).
+- **16-L1** — **NOT in this PR.** Adding a `watchlist.read` permission is a schema version + a
+  breaking gate change; deferred to a watchlist-focused PR. (`16-L1` also surfaced, in passing,
+  that `WatchlistRepository.DeactivateAsync` has no scope check at all — `WHERE id = @id` — a
+  real gap, tracked separately.)
+- Endpoint-level items (10-L5 handler, 5-L4 guard, 8-M3 header) are not integration-tested — no
+  `WebApplicationFactory`, same accepted gap as PR10's 6-M2 / 5-M10. Build clean; 123 unit /
+  254 integration + 18 pre-existing.
+
 ### Scope additions (agreed)
 
 - Guarded DELETE for sites/units/areas/orgs (`5-L3`) — reference-checked, 409 + blocker list.
