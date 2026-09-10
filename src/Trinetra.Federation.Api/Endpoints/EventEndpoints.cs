@@ -46,7 +46,9 @@ public static class EventEndpoints
                + "defaulted: the table is partitioned by time and takes 100-400M rows a day at "
                + "the design point, so a missing range silently becoming 'everything' is the one "
                + "query that takes the database down — and with it every worker writing events. "
-               + "Narrow further with `cameraId`, `eventType` or `objectReference`.\n\n"
+               + "Narrow further with `cameraId` (matched verbatim against the `cameraId` on an "
+               + "event — copy it from a previous result rather than constructing it), "
+               + "`eventType` or `objectReference`.\n\n"
                + "Paging is by the opaque `cursor` from the previous page, never by offset — a "
                + "deep offset on a partitioned table scans every row it skips. A response without "
                + "a cursor is the end of the results.\n\n"
@@ -94,6 +96,18 @@ public static class EventEndpoints
                 title: "Time range too wide",
                 detail: $"The window may span at most {MaxWindow.TotalDays:F0} days. "
                       + "Page through with the returned cursor, or narrow the range.",
+                statusCode: StatusCodes.Status400BadRequest);
+        }
+
+        // cameraId is matched verbatim against an event's own camera_id (finding 14-L3): pass
+        // back the exact value from a `cameraId` field in a prior response. Bounded so a
+        // pathological value cannot become an expensive scan of a covering index.
+        if (cameraId is { Length: > 200 })
+        {
+            return TypedResults.Problem(
+                title: "Invalid cameraId",
+                detail: "cameraId is matched exactly against an event's camera id and cannot "
+                      + "exceed 200 characters.",
                 statusCode: StatusCodes.Status400BadRequest);
         }
 

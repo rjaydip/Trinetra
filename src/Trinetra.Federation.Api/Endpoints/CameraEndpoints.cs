@@ -628,9 +628,18 @@ public static class CameraEndpoints
                     built.Set("credential_reference", "p_cred", NullableString(prop.Value, "credentialReference", errors, 255));
                     break;
                 case "installationDate":
+                    // installation_date is a calendar DATE (Camera.InstallationDate is DateOnly).
+                    // Parse "yyyy-MM-dd" directly — same as the create path (STJ binds its DTO
+                    // DateOnly the same way) — rather than going via DateTime, whose result would
+                    // depend on the server timezone for a zoned value (finding 10-L3, CLAUDE.md #6).
                     built.Set("installation_date", "p_install",
                         prop.Value.ValueKind == JsonValueKind.Null ? null
-                            : prop.Value.TryGetDateTime(out var dt) ? dt : Fail(errors, "installationDate"));
+                            : prop.Value.ValueKind == JsonValueKind.String
+                              && DateOnly.TryParseExact(
+                                     prop.Value.GetString(), "yyyy-MM-dd",
+                                     CultureInfo.InvariantCulture, DateTimeStyles.None, out var instDate)
+                                ? instDate
+                                : Fail(errors, "installationDate"));
                     break;
                 case "operationalStatus":
                     built.Set("operational_status", "p_op",
