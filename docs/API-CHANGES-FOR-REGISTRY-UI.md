@@ -244,6 +244,22 @@ Not required for the registry UI unless an audit view is wanted.
 
 - **Docs:** OpenAPI; `docs/AUTHORIZATION.md` §6.
 
+### 2.5 Deployment facts on the Scalar page (no endpoint)
+
+No API change. The Scalar reference page (`/scalar`) now shows a **"This deployment"** table at
+the top — the database name / host / port it connected to, the PostgreSQL version, the allowed
+CORS origins, and the retention windows. It is rendered from `info.description` in
+`/openapi/v1.json` (both anonymous). No secret, key, credential or account information.
+
+### 2.6 `/` and `/scalar` are now served in every environment
+
+`GET /` returns a `302` to `/scalar` (was `404`). `/scalar` (interactive API reference) and
+`/openapi/v1.json` used to be Development-only — they are now served everywhere, and the Scalar
+Authorize dialog offers an **OAuth2 password flow** (`POST /api/v1/auth/token`, blank
+username/password, no client id) alongside the bearer and API-key schemes. Every route is still
+authenticated; nothing the registry UI calls changes. If the UI expected `/` to be its own
+landing page, it now redirects.
+
 ---
 
 ## 3. ADDITIVE (no client change required, but new data available)

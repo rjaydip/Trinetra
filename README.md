@@ -113,7 +113,7 @@ docs/
   ARCHITECTURE-MODEL-3.md              production design and its trade-offs
   AUTHORIZATION.md                     how RBAC is enforced, and what is deliberately denied
   OPERATIONS.md                        setup, configuration, upgrades, troubleshooting
-  DEPLOYMENT.md                        bare-metal topology, systemd, rolling upgrades
+  DEPLOYMENT.md                        bare-metal topology, systemd, container image, rolling upgrades
 
   MODEL-1-REGISTRY-GIS.md              specification — first slice implemented
   MODEL-1-API-PLAN.md                  camera registry + GIS API contract and build status
@@ -130,7 +130,9 @@ db/
   versions/v1.sql                      the complete database — apply to an empty PostgreSQL
   objects/                             one file per table / function / view, for review
 
+Dockerfile                             container image for the API (alternative to systemd)
 deploy/systemd/                        unit files and environment templates
+config/trinetra.settings.example.json  config template — copy to trinetra.settings.json
 
 src/                                   Core, Adapters, Runtime, Bus, Storage, Api, Worker
 tools/                                 admin CLI, VMS simulator

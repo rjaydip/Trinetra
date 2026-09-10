@@ -12,6 +12,8 @@ internal static class ApiOpenApiExtensions
             options.AddDocumentTransformer<SecuritySchemeTransformer>();
             options.AddOperationTransformer<SecurityRequirementTransformer>();
             options.AddDocumentTransformer<TagDescriptionTransformer>();
+            // After TagDescriptionTransformer — appends "This deployment" to Info.Description.
+            options.AddDocumentTransformer<DeploymentInfoTransformer>();
             options.AddOperationTransformer<PermissionDocumentationTransformer>();
             options.AddOperationTransformer<ProblemDetailsDocumentationTransformer>();
         });

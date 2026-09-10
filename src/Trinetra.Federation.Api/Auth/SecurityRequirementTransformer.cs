@@ -13,8 +13,7 @@ namespace Trinetra.Federation.Api.Auth;
 /// actually reference a scheme. Without this, a user pastes a valid token, sees it accepted, and
 /// then gets 401 on every call with nothing to explain it — the token was never sent.
 /// </remarks>
-internal sealed class SecurityRequirementTransformer(IWebHostEnvironment environment)
-    : IOpenApiOperationTransformer
+internal sealed class SecurityRequirementTransformer : IOpenApiOperationTransformer
 {
     public Task TransformAsync(
         OpenApiOperation operation,
@@ -52,15 +51,12 @@ internal sealed class SecurityRequirementTransformer(IWebHostEnvironment environ
             },
         ];
 
-        // In Development the OAuth2 password flow is also on offer; list it as a third
-        // alternative so Scalar attaches the token it fetched to this operation.
-        if (environment.IsDevelopment())
+        // The OAuth2 password flow is a third alternative — list it so Scalar attaches the token
+        // it fetched from the Authorize dialog to this operation.
+        operation.Security.Add(new OpenApiSecurityRequirement
         {
-            operation.Security.Add(new OpenApiSecurityRequirement
-            {
-                [new OpenApiSecuritySchemeReference("OAuth2", context.Document)] = [],
-            });
-        }
+            [new OpenApiSecuritySchemeReference("OAuth2", context.Document)] = [],
+        });
 
         // A 401 response is documented on every protected operation. Otherwise the docs imply
         // authentication cannot fail, which is the one outcome a caller most needs to handle.

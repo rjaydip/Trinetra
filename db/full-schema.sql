@@ -8,7 +8,7 @@
 --
 --     psql -U trinetra -d trinetra -f db/full-schema.sql
 --
--- This is db/versions/v1.sql .. v1.12.sql inlined in apply order. db/versions/*.sql
+-- This is db/versions/v1.sql .. v1.13.sql inlined in apply order. db/versions/*.sql
 -- remains the source of truth (each file forward-only, never edited once applied —
 -- see docs/OPERATIONS.md). Regenerate after adding a version file.
 --
@@ -16,9 +16,13 @@
 -- individual version files it has not yet had.
 --
 -- It does NOT include db/seed/dev-sample-data.sql (development fixtures only).
+--
+-- Plain SQL — no psql meta-commands. Run it with psql, a GUI client, or straight from an
+-- application (one multi-statement command). The whole file is one transaction: any error rolls
+-- everything back, so a partial schema is never left behind.
 -- ============================================================================
 
-\set ON_ERROR_STOP on
+BEGIN;
 
 
 -- ####################################################################
@@ -4159,3 +4163,6 @@ USING roles r
 WHERE rp.role_id = r.id
   AND r.code = 'STATE_ADMIN'
   AND rp.permission_code = 'worker.heartbeat';
+
+
+COMMIT;

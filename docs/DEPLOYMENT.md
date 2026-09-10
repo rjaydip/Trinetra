@@ -1,4 +1,8 @@
-# Deployment — on-prem bare metal
+# Deployment
+
+The primary target is on-prem bare metal with systemd (§1–§7). §8 covers the equivalent
+container image for environments that prefer it — same binary and configuration, pick one per
+environment.
 
 There is no Kubernetes, no service mesh and no orchestrator. Scaling out is starting more worker
 processes; the fleet rebalances itself through the PostgreSQL lease. This document covers laying
@@ -312,3 +316,49 @@ Stated rather than implied, because each is real work that a production install 
 - **Log shipping.** Everything goes to journald. Forwarding to a central collector is deployment
   policy, not application configuration.
 - **Kafka.** Not involved. Events are read from PostgreSQL.
+
+---
+
+## 8. Container image (alternative to systemd)
+
+The root `Dockerfile` builds the API into a container that is an equivalent target to the
+bare-metal unit above — same binary, same configuration model. Pick one per environment; the
+database, schema discipline (§5) and everything in §7 are unchanged.
+
+```bash
+docker build -t trinetra-api .
+cp deploy/docker/api.env.example api.env      # then edit
+docker run -d --name trinetra-api -p 5261:8080 --env-file api.env --restart on-failure trinetra-api
+```
+
+- **Config — every setting is a parameter.** `deploy/docker/api.env.example` is the full
+  reference: the connection string, the whole `Auth` / `Auth:Jwt` block, the seed-admin account,
+  `Auth:AllowedOrigins` (CORS), the `Network` proxy settings, every `Retention` period, and the
+  listen port. Any key in `config/trinetra.settings.json` maps to an env var by replacing `:`
+  with `__`; an array element takes a trailing `__0`, `__1`. The image bakes only
+  `config/trinetra.settings.example.json` (every secret `CHANGE_ME`); real values come from
+  `--env-file` / `-e`. Four are hard-required — `ConnectionStrings__Federation`, `Secrets__Key`,
+  `Auth__Jwt__SigningKey`, `Auth__SeedAdmin__Password` — the rest have working defaults. Never
+  bake a secret into an image or put it on the `docker build` command line.
+- **Port.** Kestrel listens on `ASPNETCORE_HTTP_PORTS` (default `8080`) inside the container;
+  `-p <host>:8080` publishes it. TLS still terminates at a proxy in front (§7).
+- **The container never migrates the database.** Point `ConnectionStrings__Federation` at a
+  database that already carries the schema — `db/full-schema.sql` for a fresh one (plain SQL,
+  runs via psql, a GUI client, or one `NpgsqlCommand`), or `db/versions/*.sql` in order for an
+  upgrade (§5). On start the API only verifies it can reach that schema (fails fast if a table
+  is missing) and inserts the one bootstrap admin row if the account is absent. Nothing in the
+  running container touches DDL.
+- **Docs / first login.** `GET /` redirects to `/scalar` — the interactive API reference, served
+  in every environment (every route is still authenticated; use a bearer token from
+  `POST /api/v1/auth/login`, or the OAuth2 password flow in Scalar's Authorize dialog).
+- **Health.** `HEALTHCHECK` hits the anonymous `/health`; `docker inspect -f '{{.State.Health.Status}}'`
+  reports it. `start-period` covers the schema check + admin seed on a cold database.
+- **Confirming the config.** Open `/scalar` — the "This deployment" table at the top of the page
+  shows the database name / host / port it connected to, the PostgreSQL version, the CORS
+  origins, and the retention windows. Enough to tell two environments apart; no key, credential
+  or account information.
+- **Runs unprivileged** as the image's `app` user — keep it that way, this process holds the
+  credential encryption key.
+- **Data Protection keys.** ASP.NET writes them under `/home/app/.aspnet/DataProtection-Keys`,
+  which is ephemeral. Auth is JWT (stateless) so a restart is harmless today, but for more than
+  one instance mount a shared volume there or configure a persistent key ring.

@@ -8,18 +8,30 @@ internal static class ApiEndpointExtensions
 {
     public static WebApplication MapTrinetraEndpoints(this WebApplication app)
     {
-        if (app.Environment.IsDevelopment())
+        // The OpenAPI document and the Scalar reference are served in every environment, and the
+        // root path redirects to it — the API's front door is its own documentation. Every route
+        // is still authenticated. Scalar's Authorize dialog offers an OAuth2 password flow:
+        // plain username + password fields (both blank, no client id/secret) that POST to
+        // /api/v1/auth/token — the same credential check as /login.
+        app.MapOpenApi().AllowAnonymous();
+        app.MapScalarApiReference("/scalar", options =>
         {
-            app.MapOpenApi().AllowAnonymous();
-            app.MapScalarApiReference("/scalar", options => options
+            options
                 .WithTitle("Trinetra Federation API")
                 .AddPreferredSecuritySchemes("OAuth2", "Bearer", "ApiKey")
                 .EnablePersistentAuthentication()
-                .WithCustomCss(ScalarCustomCss));
-        }
+                .WithCustomCss(ScalarCustomCss);
+
+            // No prefilled username, password or client id — the dialog starts empty.
+            options.AddPasswordFlow("OAuth2", flow => flow.ClientId = string.Empty);
+        });
+
+        app.MapGet("/", () => Results.Redirect("/scalar", permanent: false))
+            .AllowAnonymous()
+            .ExcludeFromDescription();
 
         app.MapHealthChecks("/health").AllowAnonymous();
-        app.MapAuthEndpoints(app.Environment.IsDevelopment());
+        app.MapAuthEndpoints(enableOAuthPasswordFlow: true);
         app.MapHierarchyEndpoints();
         app.MapUserEndpoints();
         app.MapAccessGroupEndpoints();
@@ -46,8 +58,8 @@ internal static class ApiEndpointExtensions
 
     // Scalar renders responses in a CodeMirror editor with line-wrapping on, so wide JSON rows
     // wrap and can't be scrolled. Turn wrapping off and let the CodeMirror scroller scroll.
-    // Selectors are unscoped on purpose — this is the dev-only docs page, and CodeMirror's own
-    // stylesheet is what we're overriding. Development-only, like the page itself.
+    // Selectors are unscoped on purpose — the Scalar page is the only thing at this origin, and
+    // CodeMirror's own stylesheet is what we're overriding.
     private const string ScalarCustomCss = """
         .cm-content,
         .cm-line,

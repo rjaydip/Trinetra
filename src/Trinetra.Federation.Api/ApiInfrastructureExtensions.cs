@@ -60,6 +60,7 @@ internal static class ApiInfrastructureExtensions
         services.AddScoped<DetectionRepository>();
         services.AddScoped<WatchlistRepository>();
         services.AddScoped<AiWorkerHealthRepository>();
+        services.AddScoped<SystemInfoRepository>();
 
         services.AddFederationAdapters();
         services.AddSingleton<ICredentialResolver>(sp => new PostgresCredentialResolver(

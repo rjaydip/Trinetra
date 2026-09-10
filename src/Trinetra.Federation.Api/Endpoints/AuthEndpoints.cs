@@ -18,17 +18,18 @@ namespace Trinetra.Federation.Api.Endpoints;
 /// </summary>
 public static class AuthEndpoints
 {
-    public static void MapAuthEndpoints(this IEndpointRouteBuilder app, bool enableDevPasswordFlow)
+    public static void MapAuthEndpoints(this IEndpointRouteBuilder app, bool enableOAuthPasswordFlow)
     {
         var group = app.MapGroup("/api/v1/auth").WithTags(ApiTags.Authentication);
 
-        if (enableDevPasswordFlow)
+        if (enableOAuthPasswordFlow)
         {
-            // OAuth2 "password" grant, development only. Its sole purpose is to let Scalar's
-            // Authorize dialog take a username and password, fetch a token itself, and apply it
-            // to every request — no copy-paste. Access-token-only (Scalar has no refresh
-            // machinery — it re-POSTs credentials when the token expires). Not mapped outside
-            // Development; kept out of the OpenAPI document because it is UI plumbing.
+            // OAuth2 "password" grant. Its sole purpose is to let Scalar's Authorize dialog take
+            // a username and password, fetch a token itself, and apply it to every request — no
+            // copy-paste. Same credential check as /login and the same "login" rate limit;
+            // access-token only (Scalar has no refresh machinery — it re-POSTs credentials when
+            // the token expires). Kept out of the OpenAPI document body because it is UI
+            // plumbing; the security scheme references it.
             group.MapPost("/token", TokenAsync)
                  .AllowAnonymous()
                  .RequireRateLimiting("login")
@@ -146,8 +147,10 @@ public static class AuthEndpoints
     }
 
     /// <summary>
-    /// OAuth2 "password" grant — development only, and deliberately absent from the OpenAPI
-    /// document. Access token only; Scalar has no refresh machinery.
+    /// OAuth2 "password" grant, for Scalar's Authorize dialog. The same credential check as
+    /// <see cref="LoginAsync"/> under the same rate limit; access token only (Scalar has no
+    /// refresh machinery). Kept out of the OpenAPI document body — the security scheme is what
+    /// references it.
     /// </summary>
     private static async Task<Results<Ok<OAuthTokenResponse>, ProblemHttpResult>> TokenAsync(
         [FromForm] string username,

@@ -16,8 +16,7 @@ namespace Trinetra.Federation.Api.Auth;
 /// after this one. Setting <c>Info</c> in both meant whichever transformer ran last silently won,
 /// and the losing text simply vanished from the page.
 /// </remarks>
-internal sealed class SecuritySchemeTransformer(IWebHostEnvironment environment)
-    : IOpenApiDocumentTransformer
+internal sealed class SecuritySchemeTransformer : IOpenApiDocumentTransformer
 {
     public Task TransformAsync(
         OpenApiDocument document, OpenApiDocumentTransformerContext context, CancellationToken cancellationToken)
@@ -50,27 +49,26 @@ internal sealed class SecuritySchemeTransformer(IWebHostEnvironment environment)
             },
         };
 
-        // Development only: gives Scalar's Authorize dialog username/password fields. It POSTs
-        // them to /api/v1/auth/token (which exists only in Development) and applies the returned
-        // token automatically. Never offered in production — /login stays the only auth route.
-        if (environment.IsDevelopment())
+        // Gives Scalar's Authorize dialog plain username / password fields. It POSTs them to
+        // /api/v1/auth/token — the same credential check as /login, rate limited the same way,
+        // access-token only — and applies the returned token to every request. No client id or
+        // secret; both fields start blank.
+        schemes["OAuth2"] = new OpenApiSecurityScheme
         {
-            schemes["OAuth2"] = new OpenApiSecurityScheme
+            Type = SecuritySchemeType.OAuth2,
+            Description =
+                "Enter your Trinetra username and password; Scalar fetches a token and applies "
+                + "it to every request. No client id or secret. For a real integration use an "
+                + "API key header instead.",
+            Flows = new OpenApiOAuthFlows
             {
-                Type = SecuritySchemeType.OAuth2,
-                Description =
-                    "**Development only.** Enter your Trinetra username and password; Scalar "
-                    + "fetches a token and applies it to every request. No client id or secret.",
-                Flows = new OpenApiOAuthFlows
+                Password = new OpenApiOAuthFlow
                 {
-                    Password = new OpenApiOAuthFlow
-                    {
-                        TokenUrl = new Uri("/api/v1/auth/token", UriKind.Relative),
-                        Scopes = new Dictionary<string, string>(StringComparer.Ordinal),
-                    },
+                    TokenUrl = new Uri("/api/v1/auth/token", UriKind.Relative),
+                    Scopes = new Dictionary<string, string>(StringComparer.Ordinal),
                 },
-            };
-        }
+            },
+        };
 
         document.Components.SecuritySchemes = schemes;
 

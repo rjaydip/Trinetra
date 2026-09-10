@@ -51,16 +51,24 @@ routes that need the new permissions, and 500 (`relation "cameras" does not exis
 registry and GIS endpoints.
 
 For a **fresh** database, `db/full-schema.sql` is a single self-contained script — every version
-file inlined in apply order, including the reference data (permissions, roles) — so one command
-builds the whole database:
+file inlined in apply order, including the reference data (permissions, roles). It is **plain
+SQL with no psql meta-commands** and wraps itself in one transaction, so any of these builds the
+whole database in one step:
 
 ```text
-psql -U trinetra -d trinetra -f db/full-schema.sql
+psql -U trinetra -d trinetra -f db/full-schema.sql        # psql
+# or a GUI client's "run script"
+# or an application: one NpgsqlCommand with the file's contents
 ```
 
+Because it is one transaction, a failure rolls the whole thing back — a half-built schema is
+never left behind. `db/seed/dev-sample-data.sql` is the same shape (plain SQL, `BEGIN;` /
+`COMMIT;`, re-runnable).
+
 `db/versions/*.sql` stays the source of truth; regenerate `full-schema.sql` after adding a
-version file. Do not run it against a database that already has an earlier version — apply only
-the individual files it has not had. It does not include `db/seed/dev-sample-data.sql`.
+version file (concatenate the version files in order between `BEGIN;` / `COMMIT;`). Do not run
+it against a database that already has an earlier version — apply only the individual files it
+has not had.
 
 A fresh install applies them in order. An existing database applies only what it has not had.
 **A version file is never edited once applied anywhere** — installs that ran the old text would
@@ -233,6 +241,11 @@ that combination.
 
 ## 4. First login
 
+The API's root path redirects to `/scalar` — the interactive reference, served in every
+environment. Every route there is still authenticated; paste a bearer token from
+`POST /api/v1/auth/login` into Scalar's Authorize dialog, or use the OAuth2 password flow it
+offers, or `curl`.
+
 The administrator is seeded on first start from `Auth:SeedAdmin`, and **never updated
 afterwards** — so a password an operator rotated survives every later deployment.
 
@@ -398,6 +411,14 @@ reports before/after, then grants the permission, re-roles and activates the gro
 idempotent. Organization/geography scope is not touched — set that with
 `create-detection-api-key.sh` or `POST /api/v1/access-groups/{id}/scopes`.
 
+### "Which database / config is this instance on?"
+
+Open `/scalar`. The **"This deployment"** table at the top of the page shows the database name,
+host and port it connected to, the PostgreSQL version, the allowed CORS origins, and the
+retention windows. It is generated from `/openapi/v1.json` (both anonymous) on each request, so
+it always reflects the running config — no secret, key, credential or account information is in
+it. If the database is unreachable when the page loads, the Database row reads **unreachable**.
+
 ### AI-worker health (`ai_worker_health`, `v1.13`)
 
 A worker is identified by the API key it authenticates with **plus** its own `workerId`
@@ -435,7 +456,8 @@ Permission coverage: 49 of 52 route(s) declare a required permission.
 
 A warning naming specific routes means an authorized endpoint declares no permission and is
 reachable by any authenticated user unless its own handler checks one. The three routes that
-legitimately declare none are anonymous: login, health, and the OpenAPI document.
+legitimately declare none are anonymous: login, health, the OpenAPI document, the Scalar
+reference, and the `/` → `/scalar` redirect.
 
 ---
 

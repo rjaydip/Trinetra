@@ -1,0 +1,32 @@
+# Keep the build context small and, above all, keep secrets out of the image.
+
+# The real settings file holds the credential encryption key and the JWT signing key.
+# The Dockerfile bakes config/trinetra.settings.example.json instead.
+config/trinetra.settings.json
+**/*.env
+!**/*.env.example
+
+# Build output
+**/bin/
+**/obj/
+**/out/
+
+# Not needed to build or run the API
+.git/
+.github/
+.vs/
+.vscode/
+.idea/
+.claude/
+tests/
+tools/
+frontend/
+ai-worker/
+docs/
+deploy/
+scripts/
+db/
+*.md
+docker-compose.yml
+Dockerfile
+.dockerignore

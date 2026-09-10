@@ -84,8 +84,22 @@ can only ever touch a row under the caller's own key (Finding 17-M1); a non-API-
 `worker.heartbeat` is submit-only and **removed from `STATE_ADMIN`** (v1.4 copy-paste).
 `DETECTION_WORKER` keeps `worker.heartbeat` only.
 
+**Container image + Scalar (2026-09-09, uncommitted).** Root `Dockerfile` builds the API as an
+equivalent target to the systemd unit (`docs/DEPLOYMENT.md` §8; `deploy/docker/api.env.example`
+is the full env-var reference; `config/trinetra.settings.example.json` is the committed template
+the image bakes). `db/full-schema.sql` + `db/seed/dev-sample-data.sql` are now plain SQL (no psql
+meta-commands, wrapped in `BEGIN;`/`COMMIT;`) so an app can run either with one `NpgsqlCommand`.
+`/openapi/v1.json` + `/scalar` are mapped in **every** environment; `GET /` 302s to `/scalar`;
+the OAuth2 password flow (`/api/v1/auth/token`) is offered everywhere with blank
+username/password fields. `DeploymentInfoTransformer` appends a "This deployment" table to
+`Info.Description` — DB name/host/port, PostgreSQL version, CORS origins, retention windows —
+shown at the top of the Scalar page (no secret/credential/account; `SystemInfoRepository`
+parses the connection string in Storage). **No new endpoint, permission or schema version** —
+an earlier draft's `GET /api/v1/system/info` + `system.read` in a v1.14 were both dropped.
+
 Stack: **.NET 10 / ASP.NET Core minimal API**, PostgreSQL (no extensions — see below), Kafka,
-OpenSearch, deployed on **on-prem bare metal** with systemd — no Kubernetes. Scale target is **80,000
+OpenSearch, deployed on **on-prem bare metal** with systemd — no Kubernetes (a root `Dockerfile`
+builds the API as an equivalent container target). Scale target is **80,000
 cameras in production**, validated against a simulator; first-phase rollout is 100+ cameras.
 
 `docs/ARCHITECTURE-MODEL-3.md` is the authoritative design for this work. Read it before

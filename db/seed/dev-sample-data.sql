@@ -6,8 +6,12 @@
 -- maintenance and twelve reconciled to VMS rows, a week of health history, ~6,500 normalised
 -- events, audit trails.
 --
---     psql -U trinetra -d trinetra -f db/full-schema.sql          # schema first (v1..v1.12)
+--     psql -U trinetra -d trinetra -f db/full-schema.sql          # schema first (v1 .. v1.14)
 --     psql -U trinetra -d trinetra -f db/seed/dev-sample-data.sql # then this
+--
+-- Plain SQL, no psql meta-commands — run it with psql, a GUI client, or straight from an
+-- application (one command). It wraps itself in BEGIN / COMMIT, so a failure rolls the whole
+-- load back.
 --
 -- NOT a schema version. It lives outside db/versions/ deliberately: version files are never
 -- edited once applied, and this one is expected to change constantly as the UI grows. Nothing

@@ -1,0 +1,77 @@
+{
+  // Committed template for config/trinetra.settings.json.
+  //
+  //     cp config/trinetra.settings.example.json config/trinetra.settings.json
+  //
+  // The real file is gitignored — it holds the credential encryption key and the JWT signing
+  // key. Every value here can be overridden by an environment variable (a double underscore is
+  // a nested key: Secrets__Key sets Secrets:Key), which is how the Docker image and the systemd
+  // hosts inject secrets. See docs/DEPLOYMENT.md.
+
+  "ConnectionStrings": {
+    // 127.0.0.1, not localhost: localhost can resolve to ::1 while the port is published on
+    // IPv4 only. Port 55432 is what docker-compose.yml publishes.
+    "Federation": "Host=127.0.0.1;Port=55432;Database=trinetra;Username=trinetra;Password=trinetra;Maximum Pool Size=40;Minimum Pool Size=2;Timeout=10;Command Timeout=30;Keepalive=30;Application Name=trinetra-api"
+  },
+
+  "Secrets": {
+    // AES key that seals every camera password before it reaches PostgreSQL.
+    // openssl rand -base64 32
+    // NEVER change once credentials are stored — the existing ones become permanently
+    // unreadable. KeyId records which key sealed each secret so rotation can be staged.
+    "KeyId": "dev-key-1",
+    "Key": "CHANGE_ME"
+  },
+
+  "Network": {
+    // Turn on ONLY behind a reverse proxy, and list the proxy in KnownProxies — otherwise any
+    // client can spoof X-Forwarded-For and defeat rate limiting. Startup refuses the unsafe combo.
+    "TrustForwardedHeaders": false,
+    "KnownProxies": [],
+    "KnownNetworks": []
+  },
+
+  "Retention": {
+    // Days each high-volume table is kept; older partitions are DROPPED daily, irreversibly.
+    // A POLICY decision — confirm against the retention rules this deployment is bound by.
+    // Startup refuses anything below 7 days.
+    "Enabled": true,
+    "RunAtUtcHour": 3,
+    "EventDays": 90,
+    "HealthDays": 30,
+    "CameraStatusDays": 90,
+    "AuditMonths": 84,
+    "AuthAuditMonths": 24,
+    "ConnectionTestDays": 30,
+    "DeadLetterDays": 90
+  },
+
+  "Auth": {
+    "Jwt": {
+      // Signs every session token. A leak lets someone forge a session as any user.
+      // openssl rand -base64 48
+      //
+      // SigningKey is the single-key form. For rotation use SigningKeys instead — first entry
+      // signs, all entries validate:
+      //   "SigningKeys": [ { "Kid": "2026-q1", "Value": "<base64>" },
+      //                    { "Kid": "2025-q4", "Value": "<old, still valid>" } ]
+      "Issuer": "trinetra",
+      "Audience": "trinetra-api",
+      "SigningKey": "CHANGE_ME",
+      "AccessLifetime": "00:15:00",
+      "RefreshLifetime": "08:00:00",
+      "RefreshReuseGrace": "00:00:10"
+    },
+
+    "SeedAdmin": {
+      // Created on first start only, never overwritten. Supply a real 12+ char password via
+      // Auth__SeedAdmin__Password; the account must change it at first login, then drop the line.
+      "Username": "admin",
+      "Password": "CHANGE_ME",
+      "DisplayName": "Platform Administrator"
+    },
+
+    // Origins allowed to call the API. Never a wildcard — requests carry credentials.
+    "AllowedOrigins": [ "http://localhost:5173" ]
+  }
+}
