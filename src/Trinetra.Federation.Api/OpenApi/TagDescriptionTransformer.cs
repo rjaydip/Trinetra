@@ -25,7 +25,7 @@ internal sealed class TagDescriptionTransformer : IOpenApiDocumentTransformer
         document.Info ??= new OpenApiInfo();
         document.Info.Title = "Trinetra Federation API";
         document.Info.Description =
-            "The read and configuration surface of Model 3 (VMS Federation).\n\n"
+            "The read and configuration surface of the Trinetra VMS federation platform.\n\n"
             + "Every route is authenticated, scoped by organization and geography, and audited. "
             + "Each operation states the permission it requires; a caller without it gets 403, "
             + "and a resource outside their scope reads as 404 rather than 403 so that ids "

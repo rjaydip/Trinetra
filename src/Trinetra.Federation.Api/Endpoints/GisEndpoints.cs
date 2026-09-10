@@ -62,8 +62,10 @@ public static class GisEndpoints
            .WithDescription(
                "A GeoJSON `Feature` whose `Polygon` is the estimated ground area the camera can "
                + "see: apex at the camera, bisector along its azimuth, width `horizontalFov`, "
-               + "radius `effectiveRange`. `204` when any of those three is missing. The "
-               + "response carries `estimated: true` and the modelling disclaimer.");
+               + "radius `effectiveRange`, with `estimated: true` and the modelling disclaimer. "
+               + "When any of those three optics is missing the Feature still returns with "
+               + "`geometry: null` and `properties.hasCoverage: false`. `404` only if the camera "
+               + "is absent or out of the caller's scope.");
 
         app.MapGet("/api/v1/gis/coverage", SummaryAsync)
            .RequireAuthorization().WithTags(ApiTags.Gis).RequirePermission("gis.coverage.read")
@@ -173,7 +175,7 @@ public static class GisEndpoints
             contentType: GeoJsonMediaType);
     }
 
-    private static async Task<Results<JsonHttpResult<GeoJsonFeature>, NoContent, NotFound>> CoverageAsync(
+    private static async Task<Results<JsonHttpResult<GeoJsonFeature>, NotFound>> CoverageAsync(
         Guid id, GisQueryRepository gis, HttpContext http, CancellationToken ct)
     {
         var caller = CallerContextFactory.From(http);
@@ -184,14 +186,8 @@ public static class GisEndpoints
             return TypedResults.NotFound();
         }
 
-        if (!CoverageSector.CanCompute(camera.Azimuth, camera.HorizontalFov, camera.EffectiveRange))
-        {
-            return TypedResults.NoContent();
-        }
-
-        var ring = CoverageSector.Ring(
-            camera.Latitude, camera.Longitude,
-            camera.Azimuth!.Value, camera.HorizontalFov!.Value, camera.EffectiveRange!.Value);
+        var hasCoverage = CoverageSector.CanCompute(
+            camera.Azimuth, camera.HorizontalFov, camera.EffectiveRange);
 
         var props = new Dictionary<string, JsonElement>
         {
@@ -200,15 +196,25 @@ public static class GisEndpoints
             ["azimuth"] = Json(camera.Azimuth),
             ["horizontalFov"] = Json(camera.HorizontalFov),
             ["effectiveRange"] = Json(camera.EffectiveRange),
-            ["estimated"] = Json(true),
-            ["disclaimer"] = Json(CoverageSector.EstimateDisclaimer),
+            ["hasCoverage"] = Json(hasCoverage),
         };
 
+        // A camera the caller can see always returns a Feature (finding 10-L5): a 204 for
+        // "in scope but no optics" against a 404 for "absent / out of scope" let a caller probe
+        // which ids are real. When the optics are missing, geometry is null.
+        GeoJsonGeometry? geometry = null;
+        if (hasCoverage)
+        {
+            var ring = CoverageSector.Ring(
+                camera.Latitude, camera.Longitude,
+                camera.Azimuth!.Value, camera.HorizontalFov!.Value, camera.EffectiveRange!.Value);
+            geometry = new GeoJsonGeometry("Polygon", new[] { ring });
+            props["estimated"] = Json(true);
+            props["disclaimer"] = Json(CoverageSector.EstimateDisclaimer);
+        }
+
         return TypedResults.Json(
-            new GeoJsonFeature(
-                "Feature",
-                new GeoJsonGeometry("Polygon", new[] { ring }),
-                props),
+            new GeoJsonFeature("Feature", geometry, props),
             contentType: GeoJsonMediaType);
     }
 

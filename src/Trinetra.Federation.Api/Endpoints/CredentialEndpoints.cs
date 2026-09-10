@@ -77,7 +77,7 @@ public static class CredentialEndpoints
               "**The one route on this API that returns a secret.** Hands back the username, "
               + "password and/or token stored for this target so a caller can connect to it "
               + "directly.\n\n"
-              + "Exists for the standalone AI worker (`ai-worker/`, Model 2), which reads camera "
+              + "Exists for the standalone AI worker (`ai-worker/`), which reads camera "
               + "RTSP streams itself and needs their login. `credential.resolve` is carried by "
               + "exactly one role — `DETECTION_WORKER`, a machine role with no interactive login — "
               + "and the worker authenticates with `X-Api-Key`, not a bearer token.\n\n"

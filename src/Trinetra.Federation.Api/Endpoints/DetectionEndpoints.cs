@@ -11,11 +11,11 @@ using Trinetra.Federation.Storage.Repositories;
 
 namespace Trinetra.Federation.Api.Endpoints;
 
-/// <summary>Detection ingest — the sink Model 2's standalone AI worker POSTs to.</summary>
+/// <summary>Detection ingest — the sink the standalone AI worker POSTs to.</summary>
 /// <remarks>
 /// The worker (<c>ai-worker/</c>, Python) discovers cameras from <c>GET /vms/{id}/cameras</c>,
 /// runs vehicle/plate/OCR inference itself, and submits results here. This API never runs
-/// inference and never touches video — Model 3's own boundary applies to Model 2 as well.
+/// inference and never touches video — the same boundary the rest of this platform keeps.
 /// </remarks>
 public static class DetectionEndpoints
 {
@@ -56,7 +56,7 @@ public static class DetectionEndpoints
           .WithMetadata(new RequestSizeLimitAttribute(MaxIngestBodyBytes))
           .WithSummary("Submit a vehicle/plate/OCR detection")
           .WithDescription(
-              "The ingest sink for Model 2's standalone AI worker. Idempotent on `id` — a "
+              "The ingest sink for the standalone AI worker. Idempotent on `id` — a "
               + "retried POST for an already-seen detection is accepted again but changes "
               + "nothing and never raises a second watchlist alert.\n\n"
               + "`cameraId` is `\"{targetId}:{nativeCameraId}\"`, exactly as the worker's own "

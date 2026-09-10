@@ -676,6 +676,18 @@ public static class HierarchyEndpoints
         Guid? parentId, bool? rootsOnly, int? page, int? pageSize, GeographyRepository repo,
         HttpContext http, CancellationToken ct)
     {
+        // rootsOnly filters to parent IS NULL; parentId filters to parent = @parentId. Together
+        // they are unsatisfiable and the repo would just return an empty page with no hint why
+        // (finding 5-L4).
+        if (rootsOnly == true && parentId is not null)
+        {
+            return TypedResults.Problem(
+                title: "Conflicting filters",
+                detail: "rootsOnly=true and parentId cannot be combined — the first asks for "
+                      + "top-level areas, the second for children of a specific node.",
+                statusCode: StatusCodes.Status400BadRequest);
+        }
+
         var caller = CallerContextFactory.From(http);
         var q = new PageQuery(page, pageSize);
         var areas = await repo.ListAreasPageAsync(

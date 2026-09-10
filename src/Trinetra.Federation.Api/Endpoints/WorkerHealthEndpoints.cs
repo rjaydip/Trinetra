@@ -10,7 +10,7 @@ using Trinetra.Federation.Storage.Repositories;
 
 namespace Trinetra.Federation.Api.Endpoints;
 
-/// <summary>Liveness for Model 2's AI-worker processes.</summary>
+/// <summary>Liveness for the AI-worker processes.</summary>
 public static partial class WorkerHealthEndpoints
 {
     private const int ListHardCap = 1000;

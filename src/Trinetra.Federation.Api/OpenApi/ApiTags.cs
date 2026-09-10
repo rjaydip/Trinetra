@@ -115,7 +115,7 @@ internal static class ApiTags
             + "OpenSearch and is not served here."),
 
         (Detections,
-            "Model 2's vehicle/plate/OCR detections, submitted by the standalone AI worker "
+            "Vehicle/plate/OCR detections, submitted by the standalone AI worker "
             + "(`ai-worker/`, Python) rather than produced inside this API. `POST /detections` is "
             + "the ingest sink it POSTs to; a freshly-inserted detection is matched against the "
             + "active watchlist in the same transaction. Machine-to-machine only — the worker "

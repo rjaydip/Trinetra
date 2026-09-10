@@ -165,8 +165,8 @@ public static class VmsEndpoints
               + "the first inventory poll has not run yet.\n\n"
               + "Each row carries the vendor's native id, the platform camera id it maps to, "
               + "model and firmware, whether it is enabled and recording, its last-seen time, and "
-              + "its stream **references**. Model 3 never touches video: a reference is an address "
-              + "to hand to a player or to Model 2, not a stream.\n\n"
+              + "its stream **references**. This platform never touches video: a reference is an "
+              + "address to hand to a player or a video-analytics consumer, not a stream.\n\n"
               + Paginate.Doc);
 
         group.MapGet("/{id:guid}/cameras/{nativeCameraId}/status-history", CameraStatusHistoryAsync)
@@ -186,7 +186,9 @@ public static class VmsEndpoints
               + "first observation, not that the earlier value is unknown.\n\n"
               + "Defaults to the last 30 days; `from`, `to` and `limit` narrow it. This does not "
               + "answer *whether the camera was being polled* at a given moment — that is "
-              + "`/vms/{id}/health` for the target, and `lastSeen` on the camera.");
+              + "`/vms/{id}/health` for the target, and `lastSeen` on the camera.\n\n"
+              + "`404` if the target is out of scope or `nativeCameraId` is not a camera on it; "
+              + "an in-scope camera with no recorded transitions returns an empty list.");
 
         // ---- Fleet overview -------------------------------------------------
 
@@ -544,6 +546,12 @@ public static class VmsEndpoints
         var caller = CallerContextFactory.From(http);
 
         if (await repo.GetAsync(id, caller, ct) is null)
+        {
+            return TypedResults.NotFound();
+        }
+
+        // An unknown nativeCameraId used to fall through to an empty history (finding 9-L2).
+        if (!await queries.FederatedCameraExistsAsync(id, nativeCameraId, ct))
         {
             return TypedResults.NotFound();
         }

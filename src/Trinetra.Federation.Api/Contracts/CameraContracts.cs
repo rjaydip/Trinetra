@@ -87,9 +87,14 @@ public sealed record GeoJsonGeometry(
     [property: JsonPropertyName("coordinates")] object Coordinates);
 
 /// <summary>A GeoJSON feature: one geometry plus a free-form properties bag.</summary>
+/// <remarks>
+/// <c>Geometry</c> is nullable per RFC 7946 §3.2 — a feature that has no location yet (e.g. a
+/// camera with no coverage optics) carries <c>"geometry": null</c> and describes itself in
+/// <c>Properties</c>.
+/// </remarks>
 public sealed record GeoJsonFeature(
     [property: JsonPropertyName("type")] string Type,
-    [property: JsonPropertyName("geometry")] GeoJsonGeometry Geometry,
+    [property: JsonPropertyName("geometry")] GeoJsonGeometry? Geometry,
     [property: JsonPropertyName("properties")] IReadOnlyDictionary<string, JsonElement> Properties);
 
 /// <summary>A GeoJSON <c>FeatureCollection</c> — the shape the map source returns.</summary>
