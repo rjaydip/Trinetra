@@ -214,15 +214,15 @@ validation, `9-M1` VerifyTls non-nullable (TLS downgrade), `9-M2` org/site ACTIV
 `6-M1` geography asymmetry in group scope add/remove, `5-M1` org read perm mismatch
 (`geography.read` vs `organization.read`) ✅ PR6.
 
-**OTHER MEDIUM (`4-M1` ✅ PR12, was re-flagged HIGH 2026-09-11):**
+**OTHER MEDIUM (`4-M1` ✅ PR12, `6-M4` ✅ PR13a, `17-M1..M3` ✅ v1.13 — all corrected here
+2026-09-11, was stale):**
 `4-M3` login rate-limit per-IP only, `4-M5` email
 unvalidated/non-unique (blocks F2/F3), `4-M6` no breached-password screen, `4-M7` CORS, `4-M8`
-bootstrap password lingers, `6-M4` lockout-guard TOCTOU, `6-M5` email, `8-M1` no key max
+bootstrap password lingers, `6-M5` email, `8-M1` no key max
 lifetime, `8-M2` no key rotation endpoint, `10-M4` bulk import 500 sync txns, `10-M5` bulk audit,
 `10-M6` cursor code-reuse anomaly, `10-M7` reconcile location consistency, `10-M8` GIS feed
 per-prop JsonElement alloc, `14-M2` `event.acknowledge` seeded w/ no endpoint, `15-M3`
-ResolveCamera pre-scope, `17-M1` heartbeat spoofable, `17-M2` client-supplied lastHeartbeatAt,
-`17-M3` read/write share one perm + STATE_ADMIN holds worker.heartbeat.
+ResolveCamera pre-scope.
 
 ### P3 · LOW — polish / hygiene
 
@@ -392,6 +392,46 @@ ResolveCamera pre-scope, `17-M1` heartbeat spoofable, `17-M2` client-supplied la
   `d/registry-ui` confirmation — not blocking, since today the flow is only reachable through the
   login response's own `mustChangePassword` field either way.
 
+**PR13a — lockout-guard TOCTOU fix (branch `pr13a-lockout-toctou`, uncommitted 2026-09-11):**
+- **6-M4** ✅ — see the finding entry above for the fix itself. Repository-level change plus two
+  call-site reorderings in `UserEndpoints.cs` (`UpdateAsync`, `RemoveFromGroupAsync`); no schema
+  change, no new permission.
+- New `LockoutGuardConcurrencyTests` (3, integration): `ConcurrentDeactivation_...` races two
+  `Task.WhenAll`'d deactivations of the last two `user.manage` holders and asserts exactly one
+  wins; `SequentialDeactivation_...` covers the ordinary (non-racing) refusal;
+  `ConcurrentMembershipRevocation_...` races the PR's *second* call site
+  (`RemoveFromGroupAsync`/`RevokeMembershipAsync`) the same way — added after the BA review below
+  flagged the original two tests only covered the deactivation path. Exercises the repository
+  layer directly (`UnitOfWork` + `UserRepository.UpdateAsync` /
+  `AccessGroupRepository.RevokeMembershipAsync` + `CountOtherHoldersInTransactionAsync`) rather
+  than the full endpoint handlers — going through them would additionally require a caller
+  satisfying `CanAdministerAsync`'s own DB-backed checks, a different concern from the race
+  itself. Sabotage-checked: reverting the advisory lock reproduced the bug reliably (3/3 runs,
+  both deactivations succeeded, zero admins left); the fix passes 3/3, all three tests.
+- This is the first sub-PR of the "Other Medium" P2 pile (6-M4, 6-M5, 8-M1, 8-M2, 4-M3, 4-M6,
+  4-M7, 4-M8, 10-M4..M8, 14-M2, 15-M3 — 17-M1..M3 already resolved by v1.13, corrected in the
+  index above). Picked first as a self-contained correctness bug with an established fix pattern
+  (the same advisory-lock technique 5-H2 already used), no schema change and no policy decision
+  needed — unlike 6-M5 (needs a unique-constraint migration), 8-M1/8-M2 (need a policy default
+  for max key lifetime), or 4-M6/4-M7/4-M8 (not yet individually triaged in this doc).
+- The PR8/PR9 table-row and `17-M1..M3` index corrections earlier in this doc are a **doc-hygiene
+  fix bundled into the same edit, not part of PR13a's code change** — those items were done in
+  earlier sessions (2026-09-08/09) and simply never had their checkmarks updated here.
+- Build clean; 139 unit / 259 integration + 18 pre-existing (unchanged baseline).
+- **BA + dotnet-expert reviewed PR13a, 2026-09-11. No blockers from either — dotnet-expert says
+  ready to commit as-is.** dotnet-expert independently verified the Postgres interleaving
+  (advisory lock blocks the second transaction until the first commits; READ COMMITTED then
+  correctly sees the committed change), the lock-key namespace (no collision with the existing
+  `federation.*.deactivate` locks), no deadlock risk, `UnitOfWork.DisposeAsync` rollback-on-early-
+  return, and that the test genuinely races two independent connections (not an artifact of
+  connection pooling) — trusts the test's determinism. BA: confirmed 6-L1's scope boundary is
+  still correct (this PR shouldn't have touched it) but flagged two real gaps, applied — (1) the
+  original two tests didn't cover the second call site (`RemoveFromGroupAsync`); added
+  `ConcurrentMembershipRevocation_...` to close that; (2) role/API-key soft-delete has **no**
+  lockout guard at all (not even the pre-fix racy version) — same failure family as 6-M4/6-L1 but
+  broader; recorded as new finding **6-L7** rather than fixed unilaterally, since it needs the
+  same "does this deserve the guard" decision 6-L1 does.
+
 ### Scope additions (agreed)
 
 - Guarded DELETE for sites/units/areas/orgs (`5-L3`) — reference-checked, 409 + blocker list.
@@ -433,11 +473,12 @@ rule does not bite — still prefer new `v1.7+` files over editing `v1.sql`. Bra
 | PR7e | password history + minimum age (4-M5); breached-password screening (4-M6) DEFERRED to its own PR — ✅ done, +11 tests | `password_history` table (v1.10) |
 | —    | 4-H2 **MFA** → own design track, ~10 policy decisions; not a fix-PR | schema TBD |
 | —    | 4-H6 API-key entropy — **refuted**, keys already server-generated 256-bit CSPRNG | — |
-| PR8  | **Audit-fidelity wave** (P2) | — |
-| PR9  | **Pagination wave** (P2) | — |
+| PR8  | **Audit-fidelity wave** (P2) — ✅ done 2026-09-08, +6 tests | — |
+| PR9  | **Pagination wave** (P2) — ✅ done 2026-09-09, opt-in `?page`/`?pageSize` across list endpoints | — |
 | PR10 | **Validation / error-shape wave** (P2) — ✅ done (5-M9, 5-M10, 6-M2, 10-M3, 9-M4, 9-NEW-L ×2; 5-M2 / 16-M1 already covered by the global constraint handler; 6-M3 deferred) | `DeactivationResult` in Storage |
 | PR11 | **P3 sweep** incl. F1 | — |
-| PR12 | **Must-change-password enforcement**: 4-M1 / 5-L5 — ✅ implemented, BA/dotnet-expert review pending, 3 unit tests | — (code-only) |
+| PR12 | **Must-change-password enforcement**: 4-M1 / 5-L5 — ✅ implemented, BA/dotnet-expert reviewed, no blockers, 3 unit tests | — (code-only) |
+| PR13a | **Lockout-guard TOCTOU fix**: 6-M4 — ✅ implemented, BA/dotnet-expert review pending, 2 integration tests | — (code-only) |
 | F7   | separate feature branch, **after** the design decision | approval tables |
 
 Status: **not started.**
@@ -979,10 +1020,16 @@ Review 2026-09-04. Write paths are meticulously guarded (escalation chokepoint +
   could store a nonsense/over-broad scope row. Validate required field per type.
 - **6-M3** `AddScopeAsync` RESOURCE scope: `ResourceType`/`ResourceId` unvalidated — no check the
   resource exists or is in caller's scope. RESOURCE scope naming a camera the caller can't see.
-- **6-M4** TOCTOU on the lockout guards. `UpdateAsync` / `RemoveFromGroupAsync` run
+- **6-M4** ✅ PR13a — TOCTOU on the lockout guards. `UpdateAsync` / `RemoveFromGroupAsync` ran
   `CountOtherHoldersAsync("user.manage")` BEFORE `UnitOfWork.BeginAsync` — two concurrent
-  deactivations of the last two admins both pass, both commit → platform locked out. Move the
-  count inside the txn with row locking, or a partial unique / trigger backstop.
+  deactivations of the last two admins both passed, both committed → platform locked out. New
+  `AccessGroupRepository.CountOtherHoldersInTransactionAsync` takes a permission-keyed
+  `pg_advisory_xact_lock` on `work.Connection`/`work.Transaction` before re-counting, matching
+  the pattern already used for hierarchy deactivate/reparent (5-H2). Both call sites moved the
+  check to after `UnitOfWork.BeginAsync`, inside the transaction, before the mutation; an early
+  refusal is a clean rollback (transaction never committed). Confirmed reproducible without the
+  fix — reverted it locally, the concurrent-race test failed 3/3 runs (both deactivations
+  succeeded, leaving zero admins) — then re-verified the fix passes 3/3.
 - **6-M5** Email unvalidated + not unique on `CreateAsync`/`UpdateAsync` — needed for F2 (forgot
   password) and F3 (SSO account linking). Add format check + unique constraint + (later)
   verification state.
@@ -1007,6 +1054,15 @@ Review 2026-09-04. Write paths are meticulously guarded (escalation chokepoint +
   `ConstraintViolationExceptionHandler`.
 - **6-L6** Self-assignment to a group (passes the 3 checks legitimately) has no audit distinction
   / no alert. Minor.
+- **6-L7** (new, flagged by BA review of PR13a, 2026-09-11) **No lockout guard at all** — not
+  even the pre-6-M4 non-atomic version — on `DELETE /api/v1/roles/{id}` (soft-delete to
+  `INACTIVE`) or on API-key revoke (`apikey.manage`, Finding 8). A role carrying `user.manage`
+  that gets soft-deleted grants nothing to every group using it, the same unrecoverable-lockout
+  shape 6-M4 fixed for users/groups, just reached through the role instead. Same family as 6-L1
+  (which is about `group.manage` specifically); this is broader — no case has a guard at all
+  outside the two call sites 6-M4 covers. Needs the same design decision 6-L1 does (does a
+  role/key holding an administrative permission deserve a last-holder check), so grouped with it
+  rather than fixed unilaterally.
 
 Not a finding: the `AddToGroupAsync` 3-check escalation chokepoint is well-built; permissions are
 role-fixed at group creation so the assignment-time subset check stays valid; scope widening is
