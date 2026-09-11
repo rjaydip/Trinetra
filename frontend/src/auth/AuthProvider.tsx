@@ -34,7 +34,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const value = useMemo<AuthContextValue>(() => ({
     session,
     async login(credentials) {
-      const nextSession = await api.auth.login(credentials);
+      const payload: LoginRequest = {
+        username: credentials.username || (import.meta.env.VITE_USERNAME ?? ''),
+        password: credentials.password || (import.meta.env.VITE_PASSWORD ?? ''),
+      };
+      const nextSession = await api.auth.login(payload);
       saveSession(nextSession);
       return nextSession;
     },
