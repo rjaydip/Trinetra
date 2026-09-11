@@ -221,6 +221,7 @@ CORS, `4-M8` bootstrap password lingers, `6-M5` email, `10-M4` bulk import 500 s
 bulk audit, `10-M6` cursor code-reuse anomaly, `10-M7` reconcile location consistency, `10-M8`
 GIS feed per-prop JsonElement alloc, `14-M2` `event.acknowledge` seeded w/ no endpoint.
 **Parked (2026-09-11, see the PR13b block below for why):** `4-M3` login rate-limit per-IP only,
+`8-M1` no key max lifetime, `8-M2` no key rotation endpoint.
 
 ### P3 · LOW — polish / hygiene
 
