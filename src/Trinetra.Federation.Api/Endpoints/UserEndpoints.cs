@@ -284,10 +284,15 @@ public static class UserEndpoints
 
         var status = request.Status ?? before.Status;
 
-        // Deactivating the last user who can administer the platform is unrecoverable
-        // without direct database access, so it is refused outright.
+        await using var work = await UnitOfWork.BeginAsync(db, ct);
+
+        // Deactivating the last user who can administer the platform is unrecoverable without
+        // direct database access, so it is refused outright. Checked inside the transaction,
+        // under an advisory lock (finding 6-M4) — outside one, two concurrent deactivations of
+        // the last two admins each see "1 other holder" (each other) and both proceed.
         if (status != "ACTIVE" && before.Status == "ACTIVE"
-            && await groups.CountOtherHoldersAsync("user.manage", id, ct) == 0)
+            && await AccessGroupRepository.CountOtherHoldersInTransactionAsync(
+                "user.manage", id, work, ct) == 0)
         {
             return TypedResults.Problem(
                 title: "Would lock everyone out",
@@ -295,8 +300,6 @@ public static class UserEndpoints
                       + "Grant another user administrative access before deactivating it.",
                 statusCode: StatusCodes.Status409Conflict);
         }
-
-        await using var work = await UnitOfWork.BeginAsync(db, ct);
 
         await users.UpdateAsync(id, request.DisplayName, request.Email, status, work, ct);
 
@@ -454,10 +457,14 @@ public static class UserEndpoints
 
         var target = await groups.GetAsync(groupId, ct);
 
-        // Same lockout guard as deactivation: revoking the last administrative membership is
-        // equally unrecoverable, and easier to do by accident.
+        await using var work = await UnitOfWork.BeginAsync(db, ct);
+
+        // Same lockout guard as deactivation (finding 6-M4): revoking the last administrative
+        // membership is equally unrecoverable, and easier to do by accident. Checked inside the
+        // transaction under an advisory lock — see CountOtherHoldersInTransactionAsync.
         if (target is not null && target.Permissions.Contains("user.manage")
-            && await groups.CountOtherHoldersAsync("user.manage", id, ct) == 0)
+            && await AccessGroupRepository.CountOtherHoldersInTransactionAsync(
+                "user.manage", id, work, ct) == 0)
         {
             return TypedResults.Problem(
                 title: "Would lock everyone out",
@@ -465,8 +472,6 @@ public static class UserEndpoints
                       + "Grant it to another user first.",
                 statusCode: StatusCodes.Status409Conflict);
         }
-
-        await using var work = await UnitOfWork.BeginAsync(db, ct);
 
         if (!await groups.RevokeMembershipAsync(id, groupId, work, ct))
         {

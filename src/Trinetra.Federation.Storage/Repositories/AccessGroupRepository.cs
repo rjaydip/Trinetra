@@ -687,6 +687,38 @@ public sealed class AccessGroupRepository
             """, new { permission, excludingUserId }, cancellationToken: ct));
     }
 
+    /// <summary>
+    /// The lockout-safe form of <see cref="CountOtherHoldersAsync"/> (finding 6-M4): takes a
+    /// transaction-scoped advisory lock keyed on the permission, then counts on
+    /// <paramref name="work"/>'s own connection, inside its transaction.
+    /// </summary>
+    /// <remarks>
+    /// The bare version reads on its own pooled connection, outside any transaction — two
+    /// concurrent revocations of the last two `user.manage` holders both read "1 other holder"
+    /// (each other) before either commits, and both proceed, leaving zero. The advisory lock
+    /// serializes callers checking the *same* permission on the *same* connection the caller is
+    /// about to commit through: the second caller's count only runs after the first either
+    /// commits (and it correctly sees the now-updated `user_effective_access`) or rolls back
+    /// (releasing the lock without having changed anything). Scoped per-permission, not
+    /// system-wide, so unrelated lockout checks (`group.manage` if ever added, per 6-L1) never
+    /// contend with this one.
+    /// </remarks>
+    public static async Task<int> CountOtherHoldersInTransactionAsync(
+        string permission, Guid excludingUserId, UnitOfWork work, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(work);
+
+        await work.Connection.ExecuteAsync(new CommandDefinition(
+            "SELECT pg_advisory_xact_lock(hashtext('federation.lockout_guard.' || @permission));",
+            new { permission }, work.Transaction, cancellationToken: ct));
+
+        return await work.Connection.ExecuteScalarAsync<int>(new CommandDefinition("""
+            SELECT count(DISTINCT ea.user_id)
+            FROM federation.user_effective_access ea
+            WHERE ea.permission_code = @permission AND ea.user_id <> @excludingUserId;
+            """, new { permission, excludingUserId }, work.Transaction, cancellationToken: ct));
+    }
+
     private sealed class ScopeRow
     {
         public Guid GroupId { get; init; }
