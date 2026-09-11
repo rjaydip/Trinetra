@@ -8,8 +8,10 @@ import { useAuth } from './AuthProvider';
 export function LoginPage() {
   const { login } = useAuth();
   const navigate = useNavigate();
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
+  const configuredUsername = import.meta.env.VITE_USERNAME ?? '';
+  const configuredPassword = import.meta.env.VITE_PASSWORD ?? '';
+  const [username, setUsername] = useState(() => configuredUsername);
+  const [password, setPassword] = useState(() => configuredPassword);
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -19,7 +21,10 @@ export function LoginPage() {
     setIsSubmitting(true);
 
     try {
-      const session = await login({ username, password });
+      const session = await login({
+        username: username.trim() || configuredUsername,
+        password: password || configuredPassword,
+      });
       navigate(session.mustChangePassword ? '/password' : '/dashboard', { replace: true });
     } catch (reason) {
       setError(isApiProblem(reason) ? reason.detail : 'Unable to sign in. Please try again.');

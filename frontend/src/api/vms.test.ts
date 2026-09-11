@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { api } from './endpoints';
+import { apiBaseUrl } from './client';
 import { saveSession } from '../auth/session';
 import { sessionFixture } from '../test/fixtures';
 
@@ -102,7 +103,7 @@ describe('VMS API client', () => {
     await api.connectionTests.get(statusUrl);
 
     const [input, init] = vi.mocked(fetch).mock.calls[0];
-    expect(String(input)).toBe(`http://localhost:5261${statusUrl}`);
+    expect(String(input)).toBe(`${apiBaseUrl()}${statusUrl}`);
     expect(init?.method).toBeUndefined();
   });
 

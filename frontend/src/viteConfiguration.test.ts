@@ -7,15 +7,23 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 let originalWorkingDirectory: string;
 let testDirectory: string;
+let originalApiBaseUrl: string | undefined;
 
 beforeEach(async () => {
   originalWorkingDirectory = process.cwd();
+  originalApiBaseUrl = process.env.VITE_API_BASE_URL;
+  delete process.env.VITE_API_BASE_URL;
   testDirectory = await mkdtemp(join(tmpdir(), 'trinetra-vite-config-'));
   process.chdir(testDirectory);
 });
 
 afterEach(async () => {
   process.chdir(originalWorkingDirectory);
+  if (originalApiBaseUrl === undefined) {
+    delete process.env.VITE_API_BASE_URL;
+  } else {
+    process.env.VITE_API_BASE_URL = originalApiBaseUrl;
+  }
   await rm(testDirectory, { force: true, recursive: true });
   vi.resetModules();
 });

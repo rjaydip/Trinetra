@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { api } from './endpoints';
+import { apiBaseUrl } from './client';
 import type { ApiKeyResponse } from './models';
 
 const organizationId = '10000000-0000-4000-8000-000000000001';
@@ -15,7 +16,7 @@ const alertId = '10000000-0000-4000-8000-000000000009';
 const apiKeyId = '10000000-0000-4000-8000-000000000010';
 
 function fetchCall(path: string, init: RequestInit = {}): [string, RequestInit] {
-  return [`http://localhost:5261${path}`, expect.objectContaining(init) as RequestInit];
+  return [`${apiBaseUrl()}${path}`, expect.objectContaining(init) as RequestInit];
 }
 
 beforeEach(() => {
