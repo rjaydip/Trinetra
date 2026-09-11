@@ -59,10 +59,24 @@ public sealed class DetectionRepository
     /// inventory a worker discovered, for the organization/geography scope to denormalize onto the
     /// detection row.
     /// </summary>
+    /// <remarks>
+    /// Finding 15-M3: an out-of-scope camera id used to resolve successfully here and only fail
+    /// later, in <see cref="IngestAsync"/>'s own scope check — a distinguishable <c>403</c>
+    /// (camera exists, wrong scope) versus this method's <c>null</c> (no such camera anywhere),
+    /// turned into a <c>400</c> by the caller. That let any <c>observation.write</c> holder probe
+    /// arbitrary <c>targetId:nativeId</c> pairs and learn whether a camera exists anywhere in the
+    /// estate, regardless of their own scope — an existence oracle (CLAUDE.md invariant 11: a
+    /// scoped query that omits its <see cref="CallerContext"/> should not compile, let alone leak
+    /// this). The scope check now runs inline: an out-of-scope camera is indistinguishable from
+    /// an unknown one — both return <see langword="null"/>. <see cref="IngestAsync"/> keeps its
+    /// own check as a defense-in-depth backstop for any other caller of this repository.
+    /// </remarks>
     public async Task<(Guid TargetId, string NativeCameraId, Guid? CameraId,
         Guid OrganizationUnitId, Guid? GeographicAreaId)?> ResolveCameraAsync(
-        string workerCameraId, CancellationToken ct)
+        string workerCameraId, CallerContext caller, CancellationToken ct)
     {
+        ArgumentNullException.ThrowIfNull(caller);
+
         var separator = workerCameraId.IndexOf(':', StringComparison.Ordinal);
         if (separator <= 0 || !Guid.TryParse(workerCameraId[..separator], out var targetId))
         {
@@ -71,12 +85,28 @@ public sealed class DetectionRepository
 
         var nativeCameraId = workerCameraId[(separator + 1)..];
 
+        var orgOk = caller.IsUnscopedFor("observation.write");
+        var geoOk = caller.IsUnscopedForGeography("observation.write");
+
         await using var c = await _dataSource.OpenConnectionAsync(ct);
         var row = await c.QuerySingleOrDefaultAsync<CameraLookupRow>(new CommandDefinition("""
             SELECT camera_id, organization_unit_id, geographic_area_id
             FROM federation.federated_camera
-            WHERE target_id = @targetId AND native_camera_id = @nativeCameraId;
-            """, new { targetId, nativeCameraId }, cancellationToken: ct));
+            WHERE target_id = @targetId AND native_camera_id = @nativeCameraId
+              AND (@OrgOk OR organization_unit_id IN (
+                  SELECT organization_unit_id FROM federation.authorized_org_units(
+                      p_user_id => @UserId, p_api_key_id => @ApiKeyId,
+                      p_permission => 'observation.write')))
+              AND (@GeoOk OR geographic_area_id IS NULL OR geographic_area_id IN (
+                  SELECT geographic_area_id FROM federation.authorized_geographic_areas(
+                      p_user_id => @UserId, p_api_key_id => @ApiKeyId,
+                      p_permission => 'observation.write')));
+            """, new
+            {
+                targetId, nativeCameraId,
+                caller.UserId, caller.ApiKeyId,
+                OrgOk = orgOk, GeoOk = geoOk,
+            }, cancellationToken: ct));
 
         return row is null
             ? null

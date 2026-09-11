@@ -214,15 +214,13 @@ validation, `9-M1` VerifyTls non-nullable (TLS downgrade), `9-M2` org/site ACTIV
 `6-M1` geography asymmetry in group scope add/remove, `5-M1` org read perm mismatch
 (`geography.read` vs `organization.read`) ✅ PR6.
 
-**OTHER MEDIUM (`4-M1` ✅ PR12, `6-M4` ✅ PR13a, `17-M1..M3` ✅ v1.13 — all corrected here
-2026-09-11, was stale):**
-`4-M3` login rate-limit per-IP only, `4-M5` email
-unvalidated/non-unique (blocks F2/F3), `4-M6` no breached-password screen, `4-M7` CORS, `4-M8`
-bootstrap password lingers, `6-M5` email, `8-M1` no key max
-lifetime, `8-M2` no key rotation endpoint, `10-M4` bulk import 500 sync txns, `10-M5` bulk audit,
-`10-M6` cursor code-reuse anomaly, `10-M7` reconcile location consistency, `10-M8` GIS feed
-per-prop JsonElement alloc, `14-M2` `event.acknowledge` seeded w/ no endpoint, `15-M3`
-ResolveCamera pre-scope.
+**OTHER MEDIUM (`4-M1` ✅ PR12, `6-M4` ✅ PR13a, `15-M3` ✅ PR13b, `17-M1..M3` ✅ v1.13 — all
+corrected here 2026-09-11, was stale):**
+`4-M5` email unvalidated/non-unique (blocks F2/F3), `4-M6` no breached-password screen, `4-M7`
+CORS, `4-M8` bootstrap password lingers, `6-M5` email, `10-M4` bulk import 500 sync txns, `10-M5`
+bulk audit, `10-M6` cursor code-reuse anomaly, `10-M7` reconcile location consistency, `10-M8`
+GIS feed per-prop JsonElement alloc, `14-M2` `event.acknowledge` seeded w/ no endpoint.
+**Parked (2026-09-11, see the PR13b block below for why):** `4-M3` login rate-limit per-IP only,
 
 ### P3 · LOW — polish / hygiene
 
@@ -432,6 +430,59 @@ ResolveCamera pre-scope.
   broader; recorded as new finding **6-L7** rather than fixed unilaterally, since it needs the
   same "does this deserve the guard" decision 6-L1 does.
 
+**PARKED (2026-09-11, Jaydip's call) — deliberately not being worked on now, revisit later:**
+`F2` forgot-password flow, `F3` SSO login, `4-H2` MFA, `4-M3` rate-limit-behind-reverse-proxy,
+`8-M2` API key rotation (and `8-M1` max key lifetime parked alongside it — capping lifetime
+without a rotation path just forces people onto non-expiring keys, so it isn't useful to do
+`8-M1` first). All five are correctness-adjacent but design-heavy or infra-dependent, not
+same-pattern bug fixes like the PR13 series — surface them again as a deliberate batch when
+picked back up, don't dribble them in one at a time alongside the small fixes.
+
+**PR13b — detection camera-resolution existence-oracle fix (branch `pr13b-camera-scope-order`,
+uncommitted 2026-09-11):**
+- **15-M3** ✅ — see the finding entry above for the fix itself.
+  `DetectionRepository.ResolveCameraAsync` now requires a `CallerContext` and scopes its own
+  query; `DetectionEndpoints.IngestAsync` passes `caller` through. Route doc updated to say an
+  out-of-scope camera and an unknown one are deliberately indistinguishable.
+- Tests: `Detections_ResolveOutOfDistrictCamera_ReturnsNull_NotAnExistenceOracle` asserts BOTH
+  halves side by side — an out-of-scope (but real) camera and a genuinely nonexistent one both
+  resolve to `null` — not just the out-of-scope half alone, so a future regression that
+  reintroduces a distinguishable path is caught. `Detections_IngestForOutOfDistrictCamera_ThrowsForbidden`
+  updated to resolve via `CallerContext.System(...)` (the codebase's existing unscoped-caller
+  factory, used by connector workers/admin CLI — not a test-only shortcut) so it keeps
+  independently exercising `IngestAsync`'s own defense-in-depth check. Three other call sites
+  (`TargetIn`, already in scope) updated to pass `ScopedCaller()`. Sabotage-checked twice: (1)
+  reverting the inline scope check made the paired test fail (returned the out-of-district
+  camera's details instead of `null`); (2) separately neutralizing `IngestAsync`'s own backstop
+  check (at runtime, not a compile-time constant — the unreachable branch trips warnings-as-errors)
+  made `Detections_IngestForOutOfDistrictCamera_ThrowsForbidden` fail, confirming that backstop is
+  genuinely load-bearing and not dead code now that `ResolveCameraAsync` scopes on its own. Both
+  reverified passing after restoring.
+- Confirmed directly (not just by design): `DetectionEndpoints.IngestAsync`'s `resolved is null`
+  branch is the only path either case reaches — same `title`/`detail`/`400` for both, no
+  divergent response anywhere else in the handler.
+- Docs: `docs/API-CHANGES-FOR-REGISTRY-UI.md` new §1.4g — this is a **behavior change for an
+  existing integration** (the AI worker): an out-of-scope `cameraId` used to be `403`, is now
+  `400`, and any client-side special-casing of the two must be removed, not "fixed" back.
+- Build clean; 139 unit / 260 integration + 18 pre-existing (unchanged baseline).
+- **BA + dotnet-expert reviewed PR13b, 2026-09-11. No blockers from either.** dotnet-expert
+  independently verified the `IN`/`EXISTS` SQL equivalence, the `geographic_area_id IS NULL`
+  exception still holds, no TOCTOU concern (`IsUnscopedFor`/`IsUnscopedForGeography` are pure
+  in-memory checks against the caller's own already-loaded grants, no DB round trip either
+  place), confirmed this was a genuine CLAUDE.md invariant-11 violation before (not just a style
+  gap — the query filtered on scope-sensitive columns with no scope predicate at all), and found
+  no other caller of `ResolveCameraAsync` left stale; suggested the `UnscopedCaller()` helper use
+  the existing `CallerContext.System(...)` factory instead of hand-building the record — applied.
+  BA: confirmed the response-body wording carries no leak and severity (Medium) is defensible
+  but "verges on High" given it directly undermines invariant 12 via a live, narrowly-scoped
+  production credential class (AI worker keys); flagged two real gaps, both applied — (1) the
+  test only proved the out-of-scope half, not the "identical to nonexistent" pairing that's the
+  actual claim — added the paired assertion; (2) no note for downstream teams about the `403`→
+  `400` change on an already-integrated route — added §1.4g. BA also noted the fix doesn't rule
+  out a timing side-channel (both cases now run the same extra scope-check subqueries, so timing
+  is closer than before, but not independently measured) — accepted as a residual, unmeasured,
+  low-practical-severity gap, not blocking.
+
 ### Scope additions (agreed)
 
 - Guarded DELETE for sites/units/areas/orgs (`5-L3`) — reference-checked, 409 + blocker list.
@@ -478,7 +529,8 @@ rule does not bite — still prefer new `v1.7+` files over editing `v1.sql`. Bra
 | PR10 | **Validation / error-shape wave** (P2) — ✅ done (5-M9, 5-M10, 6-M2, 10-M3, 9-M4, 9-NEW-L ×2; 5-M2 / 16-M1 already covered by the global constraint handler; 6-M3 deferred) | `DeactivationResult` in Storage |
 | PR11 | **P3 sweep** incl. F1 | — |
 | PR12 | **Must-change-password enforcement**: 4-M1 / 5-L5 — ✅ implemented, BA/dotnet-expert reviewed, no blockers, 3 unit tests | — (code-only) |
-| PR13a | **Lockout-guard TOCTOU fix**: 6-M4 — ✅ implemented, BA/dotnet-expert review pending, 2 integration tests | — (code-only) |
+| PR13a | **Lockout-guard TOCTOU fix**: 6-M4 — ✅ implemented, BA/dotnet-expert reviewed, no blockers, 3 integration tests | — (code-only) |
+| PR13b | **Detection camera-resolution existence-oracle fix**: 15-M3 — ✅ implemented, BA/dotnet-expert review pending, 1 new + 3 updated integration tests | — (code-only) |
 | F7   | separate feature branch, **after** the design decision | approval tables |
 
 Status: **not started.**
@@ -1597,10 +1649,16 @@ Review 2026-09-04.
   `from=2020&to=now`) and NO keyset pagination — plain `LIMIT`. `detection_event` at ANPR volume
   → the same unbounded-scan risk `/events` is carefully guarded against (7-day hard cap +
   cursor). Add a max window + opaque cursor.
-- **15-M3** `ResolveCameraAsync(request.CameraId, ct)` takes no `caller` — resolves any camera in
-  the estate by `targetId:nativeId`. Combined with 15-M1 (org-only) an out-of-scope camera id is
-  still resolved before the org check; fine functionally but the org check is the only gate and
-  it's post-resolve.
+- **15-M3** ✅ PR13b — `ResolveCameraAsync` took no `caller` and resolved any camera in the estate
+  by `targetId:nativeId`; the actual scope check only ran later in `IngestAsync`, which meant an
+  out-of-scope camera id resolved fine (→ eventual `403 Forbidden`) while a truly unknown id
+  failed to resolve (→ `400 Unknown camera`) — a distinguishable pair of responses that let any
+  `observation.write` holder probe arbitrary camera ids and learn which exist anywhere in the
+  estate, regardless of their own scope (an existence oracle, CLAUDE.md invariant 11).
+  `ResolveCameraAsync` now takes a required `CallerContext` and folds the same org/geo scope
+  check `IngestAsync` already ran into its own query — an out-of-scope camera is now
+  indistinguishable from an unknown one, both `null` → `400`. `IngestAsync`'s own check is kept
+  as a defense-in-depth backstop for any other caller of the repository.
 
 ### LOW
 
