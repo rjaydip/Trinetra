@@ -304,9 +304,16 @@ The first is a choice; the two after it are gaps.
   pushed out (4-L3); `auth_audit` records authentication events (4-H3); the API-key auth path is
   rate limited with a brief grant cache (4-H5 / 8-NEW-H); the HMAC signing key is an ordered ring
   with restart-based rotation (4-H1); `password_history` blocks the last 5 and a 24h minimum age
-  (4-M5). Still deferred: **MFA** (4-H2, its own design track), an *asymmetric* signing scheme
-  (RS256/JWKS — only worth it once an external party must verify our tokens), breached-password
-  screening (4-M6), the must-change-password middleware (4-M1), forwarded-headers / trusted-proxy
+  (4-M5). The must-change-password gate (4-M1 / 5-L5, PR12) closed: `mustChangePassword` was
+  minted onto the token and read by `CallerContextFactory.MustChangePassword` but nothing
+  checked it — a flagged account (post-reset, post-compromise) authenticated normally against
+  every endpoint. `ApiMiddlewareExtensions.EnforceMustChangePasswordAsync` now runs after
+  `UseAuthorization` and refuses every authenticated route with `403` while the flag is set,
+  except the two a flagged user must still reach:
+  `POST /auth/password` (clears the flag) and `POST /auth/logout` (backs out), both opted in via
+  `PermissionEndpoints.AllowWhileMustChangePassword`. Still deferred: **MFA** (4-H2, its own design
+  track), an *asymmetric* signing scheme (RS256/JWKS — only worth it once an external party must
+  verify our tokens), breached-password screening (4-M6), forwarded-headers / trusted-proxy
   hardening (4-M3 — so a recorded `source_address` is the proxy's IP behind the on-prem proxy),
   and a per-device session list (logout is all-or-nothing).
 - **User, access-group and API-key reads were unscoped; now fixed (PR5).** Every `user.read` /
