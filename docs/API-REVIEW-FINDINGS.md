@@ -214,7 +214,7 @@ validation, `9-M1` VerifyTls non-nullable (TLS downgrade), `9-M2` org/site ACTIV
 `6-M1` geography asymmetry in group scope add/remove, `5-M1` org read perm mismatch
 (`geography.read` vs `organization.read`) ✅ PR6.
 
-**OTHER MEDIUM:**
+**OTHER MEDIUM (`4-M1` re-flagged HIGH 2026-09-11 — see below):**
 `4-M1` must-change-password advisory only, `4-M3` login rate-limit per-IP only, `4-M5` email
 unvalidated/non-unique (blocks F2/F3), `4-M6` no breached-password screen, `4-M7` CORS, `4-M8`
 bootstrap password lingers, `6-M4` lockout-guard TOCTOU, `6-M5` email, `8-M1` no key max
@@ -296,6 +296,62 @@ ResolveCamera pre-scope, `17-M1` heartbeat spoofable, `17-M2` client-supplied la
   the closed-set doc notes. Consumer-facing changes are now in
   `docs/API-CHANGES-FOR-REGISTRY-UI.md` §1.4b/§1.4d/§1.4e; coverage/eventType detail in
   `MODEL-1-API-PLAN.md` / `MODEL-2-VIDEO-METADATA-ANALYTICS.md` / `ai-worker/README.md`.
+
+**PR11c — hardening (branch `pr11c-hardening`, uncommitted 2026-09-11):**
+- **10-L6** ✅ — `GET /cameras` cursor: a malformed `cursor` used to fail open and silently
+  restart from page 1 (`DecodeCursor` swallowed `FormatException` → `null`), masking a client
+  bug. Rewritten as `TryDecodeCursor` matching `EventEndpoints.TryDecodeCursor` — a bad cursor is
+  now a named `400`, a good/absent one behaves as before.
+- **15-L1** ✅ — `POST /detections`: a same-`id` retry with **different** content used to be
+  silently accepted as "already handled" (`ON CONFLICT (event_id, occurred_at) DO NOTHING`, then
+  `return affected > 0`). `DetectionRepository.IngestAsync` now returns
+  `DetectionIngestOutcome` (`Inserted` / `DuplicateIdentical` / `DuplicateConflict`): on a
+  conflict it reads back the stored row and compares every field; a real content mismatch is a
+  `409`, an identical retry is unchanged (accepted, no second watchlist match).
+- **15-L3** ✅ — evidence root: `Path.GetFullPath` + `Directory.CreateDirectory` ran on every
+  ingest request. Moved to a singleton `EvidenceStorage` resolved once and forced to initialize
+  at startup (`ApiStartupExtensions.InitializeTrinetraAsync`) — a missing/unwritable evidence
+  root now fails at boot, not on the first snapshot upload.
+- **6-L6** ✅ — `POST /users/{id}/groups`: the audit `after` payload now carries
+  `selfAssigned: true/false` (`id == caller.UserId`) — a caller granting themselves a group they
+  already qualify for (still gated by `GroupGrantGuard`) is now distinguishable in the trail from
+  granting one to someone else.
+- **10-L7** — confirmed still correctly deferred (see PR11b note above; unchanged).
+- **6-L5** — verify-only, no change: `POST /users` already returns `409` for a taken username via
+  both the `ExistsAsync` pre-check and the DB unique-constraint backstop
+  (`ConstraintViolationExceptionHandler`: `UniqueViolation` → `409`).
+- **6-L3, 16-L2, 16-L4** — verify-only, no change: confirmed already correct / already fixed in
+  an earlier pass.
+- **Flagged, not implemented (need an owner decision, not a unilateral fix):**
+  - **6-L1** — whether `group.manage` should carry the same last-holder lockout protection
+    `user.manage` gets on removal. Deferred pending a decision.
+  - **5-L5 / 4-M1** — confirmed: `ConfigureJwtBearer.OnTokenValidated` checks `token_version` +
+    active status but never checks `MustChangePassword`, so a user flagged to change their
+    password is not actually blocked from other endpoints. This is really 4-M1's scope
+    (forced-password-change enforcement) — left for that PR rather than folded in here.
+    **Re-flagged HIGH by the BA review (2026-09-11):** this is a live, unenforced auth control
+    (a user flagged post-compromise can still authenticate normally everywhere), not a routine
+    P2 item — sequencing it as its own PR is still right, but it should be scheduled next, not
+    "someday."
+  - **13-L1** — credential-write optimistic-concurrency guard needs a new version column; too
+    large for a hardening PR, deferred to its own.
+  - **5-L6** — 11 `caller.Require(...)` calls in `HierarchyEndpoints` duplicate the route-level
+    `.RequirePermission(...)` filter. Left alone: redundant but harmless, and removing them is
+    high-churn for no behavior change.
+- New tests: `CameraCursorTests` (3, reflection-based against the private `TryDecodeCursor`),
+  `GeographyScopeTests.Detections_IngestSameIdAndContentTwice_IsIdenticalDuplicate` and
+  `…SameIdDifferentContent_IsDuplicateConflict` (2). All four sabotage-checked. Build clean;
+  136 unit / 256 integration + 18 pre-existing (unchanged baseline).
+- **BA + dotnet-expert reviewed PR11c, 2026-09-11.** dotnet-expert: no blockers — cursor
+  decode/call-site, RETURNING-based conflict detection (no race under READ COMMITTED; Postgres
+  blocks the losing `INSERT ON CONFLICT` on the row lock, so the follow-up read always sees a
+  committed row), field comparison list, `EvidenceStorage` DI lifetime/eager-init, and the
+  `selfAssigned` comparison were all verified correct; no CLAUDE.md invariant violations. BA: no
+  blockers, three doc gaps applied — (1) the 409/retry conflict key is `(id, timestamp)`
+  together, not `id` alone, now called out in `ai-worker/README.md` and
+  `API-CHANGES-FOR-REGISTRY-UI.md` §1.4f; (2) `docs/OPERATIONS.md` now notes the evidence root
+  is a hard **startup** dependency, not just an ingest-time one; (3) 5-L5/4-M1 re-flagged HIGH
+  (see above) rather than left implicitly low-priority.
 
 ### Scope additions (agreed)
 

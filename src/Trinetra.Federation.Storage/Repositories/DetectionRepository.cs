@@ -20,6 +20,26 @@ public sealed record DetectionEventRow
     public string? SnapshotReference { get; init; }
 }
 
+/// <summary>Outcome of a detection ingest attempt (finding 15-L1).</summary>
+public enum DetectionIngestOutcome
+{
+    /// <summary>A new row was inserted.</summary>
+    Inserted,
+
+    /// <summary>
+    /// This <c>id</c> was already stored with the same content — an at-least-once retry,
+    /// accepted again with no state change and no second watchlist alert.
+    /// </summary>
+    DuplicateIdentical,
+
+    /// <summary>
+    /// This <c>id</c> was already stored with <b>different</b> content — a distinct detection
+    /// reusing an id, not a retry. Silently accepting it as "already handled" would discard the
+    /// new payload, so this is surfaced to the caller instead of swallowed.
+    /// </summary>
+    DuplicateConflict,
+}
+
 /// <summary>
 /// Stores detections submitted by Model 2's AI worker, and resolves them against
 /// <c>federated_camera</c> for organization/geography scope.
@@ -64,11 +84,14 @@ public sealed class DetectionRepository
     }
 
     /// <summary>
-    /// Inserts a detection, idempotent on <see cref="DetectionEvent.Id"/>. Returns
-    /// <see langword="true"/> only when this call actually inserted a new row — a retried,
-    /// already-seen POST must not trigger a second watchlist match.
+    /// Inserts a detection, idempotent on <see cref="DetectionEvent.Id"/>. A same-id retry with
+    /// identical content is accepted again with no new row and no second watchlist match; a
+    /// same-id submission with <b>different</b> content is reported as
+    /// <see cref="DetectionIngestOutcome.DuplicateConflict"/> rather than silently dropped
+    /// (finding 15-L1) — the id is caller-supplied, so a collision from a buggy worker retry
+    /// must not be mistaken for the original detection having been stored.
     /// </summary>
-    public async Task<bool> IngestAsync(
+    public async Task<DetectionIngestOutcome> IngestAsync(
         DetectionEvent evt, Guid targetId, string nativeCameraId, Guid? cameraId,
         Guid organizationUnitId, Guid? geographicAreaId, string? plateNumberNormalized,
         CallerContext caller, UnitOfWork work, CancellationToken ct)
@@ -121,7 +144,7 @@ public sealed class DetectionRepository
             }
         }
 
-        var affected = await work.Connection.ExecuteAsync(new CommandDefinition("""
+        var insertedId = await work.Connection.ExecuteScalarAsync<string?>(new CommandDefinition("""
             INSERT INTO federation.detection_event
                 (event_id, occurred_at, target_id, native_camera_id, camera_id,
                  organization_unit_id, geographic_area_id, event_type, confidence,
@@ -129,7 +152,8 @@ public sealed class DetectionRepository
             VALUES (@EventId, @OccurredAt, @TargetId, @NativeCameraId, @CameraId,
                     @OrganizationUnitId, @GeographicAreaId, @EventType, @Confidence,
                     @VehicleType, @PlateNumberRaw, @PlateNumberNormalized, @SnapshotReference)
-            ON CONFLICT (event_id, occurred_at) DO NOTHING;
+            ON CONFLICT (event_id, occurred_at) DO NOTHING
+            RETURNING event_id;
             """, new
         {
             EventId = evt.Id,
@@ -147,7 +171,41 @@ public sealed class DetectionRepository
             SnapshotReference = evt.SnapshotReference,
         }, work.Transaction, cancellationToken: ct));
 
-        return affected > 0;
+        if (insertedId is not null)
+        {
+            return DetectionIngestOutcome.Inserted;
+        }
+
+        // The conflict target is (event_id, occurred_at), so this is the same detection id
+        // reported at the same timestamp — compare the rest of the content to tell an
+        // at-least-once retry from a genuine id collision.
+        var existing = await work.Connection.QuerySingleAsync<DetectionEventRow>(
+            new CommandDefinition("""
+                SELECT event_id AS EventId, occurred_at AS OccurredAt, target_id AS TargetId,
+                       native_camera_id AS NativeCameraId, camera_id AS CameraId,
+                       event_type AS EventType, confidence AS Confidence,
+                       vehicle_type AS VehicleType, plate_number_raw AS PlateNumberRaw,
+                       plate_number_normalized AS PlateNumberNormalized,
+                       snapshot_reference AS SnapshotReference
+                FROM federation.detection_event
+                WHERE event_id = @EventId AND occurred_at = @OccurredAt;
+                """, new { EventId = evt.Id, OccurredAt = evt.Timestamp },
+                work.Transaction, cancellationToken: ct));
+
+        var identical =
+            existing.TargetId == targetId
+            && existing.NativeCameraId == nativeCameraId
+            && existing.CameraId == cameraId
+            && existing.EventType == evt.EventType
+            && existing.Confidence == evt.Confidence
+            && existing.VehicleType == evt.VehicleType
+            && existing.PlateNumberRaw == evt.PlateNumberRaw
+            && existing.PlateNumberNormalized == plateNumberNormalized
+            && existing.SnapshotReference == evt.SnapshotReference;
+
+        return identical
+            ? DetectionIngestOutcome.DuplicateIdentical
+            : DetectionIngestOutcome.DuplicateConflict;
     }
 
     /// <summary>

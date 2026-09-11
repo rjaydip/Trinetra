@@ -139,6 +139,19 @@ Cosmetic. The reference page and every tag/endpoint description that said "Model
 uses functional wording ("the federation platform", "the AI worker", "the camera registry").
 No field or route changes.
 
+### 1.4f Hardening wave (`PR11c`)
+
+- **`GET /api/v1/cameras?cursor=…`** — a malformed `cursor` (not valid base64) is now **`400`
+  "Invalid cursor"** (was: silently restarted the listing from page 1). A cursor should always
+  come from a prior response's `nextCursor` — never hand-constructed — so this should only ever
+  surface a real client bug.
+- **`POST /api/v1/detections`** — reusing a detection `id` with **different** content (not the
+  same event retried) is now **`409` "Detection id already used"** (was: silently accepted as
+  already-handled, discarding the new payload). An identical retry on the same `id` is unchanged.
+  The idempotency/conflict key is `(id, timestamp)` together, not `id` alone — a retry must send
+  the same `timestamp` as the original to be recognized as one; a different `timestamp` under
+  the same `id` inserts as a separate row rather than hitting either the retry or the `409` path.
+
 ### 1.4c `GET /api/v1/vms/{id}/capabilities` — 404 body no longer distinguishes the reason
 
 A `404` is now returned with **no body detail** whether the target is outside your scope or

@@ -291,11 +291,11 @@ public sealed class GeographyScopeTests : IClassFixture<PostgresFixture>, IAsync
             Confidence = 0.9,
         };
 
-        var inserted = await detections.IngestAsync(
+        var outcome = await detections.IngestAsync(
             evt, resolved!.Value.TargetId, resolved.Value.NativeCameraId, resolved.Value.CameraId,
             resolved.Value.OrganizationUnitId, resolved.Value.GeographicAreaId, plateNumberNormalized: null,
             ScopedCaller(), work, CancellationToken.None);
-        inserted.ShouldBeTrue();
+        outcome.ShouldBe(DetectionIngestOutcome.Inserted);
         await work.CommitAsync(CancellationToken.None);
 
         var found = await detections.SearchAsync(
@@ -304,6 +304,89 @@ public sealed class GeographyScopeTests : IClassFixture<PostgresFixture>, IAsync
             limit: 100, ScopedCaller(), CancellationToken.None);
 
         found.ShouldContain(r => r.EventId == "evt-allowed-test");
+    }
+
+    /// <summary>Finding 15-L1: a same-id, same-content retry is a no-op, not an error.</summary>
+    [Fact]
+    public async Task Detections_IngestSameIdAndContentTwice_IsIdenticalDuplicate()
+    {
+        var detections = new DetectionRepository(_fixture.DataSource);
+        var resolved = await detections.ResolveCameraAsync($"{TargetIn}:ch1", CancellationToken.None);
+        resolved.ShouldNotBeNull();
+
+        DetectionEvent MakeEvent(DateTimeOffset ts) => new()
+        {
+            Id = "evt-retry-test",
+            CameraId = $"{TargetIn}:ch1",
+            EventType = "AnprDetection",
+            Timestamp = ts,
+            Confidence = 0.9,
+        };
+
+        var ts = DateTimeOffset.UtcNow;
+
+        await using (var work1 = await UnitOfWork.BeginAsync(_fixture.DataSource, CancellationToken.None))
+        {
+            var first = await detections.IngestAsync(
+                MakeEvent(ts), resolved!.Value.TargetId, resolved.Value.NativeCameraId,
+                resolved.Value.CameraId, resolved.Value.OrganizationUnitId,
+                resolved.Value.GeographicAreaId, plateNumberNormalized: null,
+                ScopedCaller(), work1, CancellationToken.None);
+            first.ShouldBe(DetectionIngestOutcome.Inserted);
+            await work1.CommitAsync(CancellationToken.None);
+        }
+
+        await using var work2 = await UnitOfWork.BeginAsync(_fixture.DataSource, CancellationToken.None);
+        var retry = await detections.IngestAsync(
+            MakeEvent(ts), resolved.Value.TargetId, resolved.Value.NativeCameraId,
+            resolved.Value.CameraId, resolved.Value.OrganizationUnitId,
+            resolved.Value.GeographicAreaId, plateNumberNormalized: null,
+            ScopedCaller(), work2, CancellationToken.None);
+
+        retry.ShouldBe(DetectionIngestOutcome.DuplicateIdentical);
+    }
+
+    /// <summary>
+    /// Finding 15-L1: reusing an id with different content used to be silently accepted as
+    /// "already handled" — it must instead be reported so the caller can react.
+    /// </summary>
+    [Fact]
+    public async Task Detections_IngestSameIdDifferentContent_IsDuplicateConflict()
+    {
+        var detections = new DetectionRepository(_fixture.DataSource);
+        var resolved = await detections.ResolveCameraAsync($"{TargetIn}:ch1", CancellationToken.None);
+        resolved.ShouldNotBeNull();
+
+        var ts = DateTimeOffset.UtcNow;
+
+        await using (var work1 = await UnitOfWork.BeginAsync(_fixture.DataSource, CancellationToken.None))
+        {
+            var first = await detections.IngestAsync(
+                new DetectionEvent
+                {
+                    Id = "evt-conflict-test", CameraId = $"{TargetIn}:ch1",
+                    EventType = "AnprDetection", Timestamp = ts, Confidence = 0.9,
+                },
+                resolved!.Value.TargetId, resolved.Value.NativeCameraId, resolved.Value.CameraId,
+                resolved.Value.OrganizationUnitId, resolved.Value.GeographicAreaId,
+                plateNumberNormalized: null, ScopedCaller(), work1, CancellationToken.None);
+            first.ShouldBe(DetectionIngestOutcome.Inserted);
+            await work1.CommitAsync(CancellationToken.None);
+        }
+
+        await using var work2 = await UnitOfWork.BeginAsync(_fixture.DataSource, CancellationToken.None);
+        var conflicting = await detections.IngestAsync(
+            new DetectionEvent
+            {
+                // Same id and timestamp (the conflict key), different confidence.
+                Id = "evt-conflict-test", CameraId = $"{TargetIn}:ch1",
+                EventType = "AnprDetection", Timestamp = ts, Confidence = 0.2,
+            },
+            resolved.Value.TargetId, resolved.Value.NativeCameraId, resolved.Value.CameraId,
+            resolved.Value.OrganizationUnitId, resolved.Value.GeographicAreaId,
+            plateNumberNormalized: null, ScopedCaller(), work2, CancellationToken.None);
+
+        conflicting.ShouldBe(DetectionIngestOutcome.DuplicateConflict);
     }
 
     [Fact]
