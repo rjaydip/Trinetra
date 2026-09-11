@@ -1,6 +1,7 @@
 import { request } from './client';
 import type {
   AccessGroupResponse,
+  ActivateGroupRequest,
   AddScopeRequest,
   ApiKeyCreatedResponse,
   ApiKeyResponse,
@@ -46,8 +47,10 @@ import type {
   OverviewResponse,
   PermissionResponse,
   RoleResponse,
+  RoleWriteRequest,
   SiteRequest,
   SiteResponse,
+  UpdateGroupRequest,
   VmsResponse,
   WatchlistAlertResponse,
   WatchlistEntryResponse,
@@ -68,10 +71,33 @@ function json(body: unknown): RequestInit {
   return { body: JSON.stringify(body), method: 'POST' };
 }
 
+export function normalizeAuthResponse(raw: {
+  token?: string;
+  accessToken?: string;
+  expiresAt?: string;
+  accessExpiresIn?: number | string;
+  refreshToken?: string;
+  refreshExpiresIn?: number | string;
+  mustChangePassword?: boolean;
+}): AuthResponse {
+  const token = raw.accessToken ?? raw.token ?? '';
+  const expiresAt = raw.expiresAt
+    ?? (raw.accessExpiresIn ? new Date(Date.now() + Number(raw.accessExpiresIn) * 1000).toISOString() : new Date(Date.now() + 15 * 60 * 1000).toISOString());
+  return {
+    token,
+    accessToken: raw.accessToken ?? token,
+    expiresAt,
+    accessExpiresIn: raw.accessExpiresIn ? Number(raw.accessExpiresIn) : undefined,
+    refreshToken: raw.refreshToken,
+    refreshExpiresIn: raw.refreshExpiresIn ? Number(raw.refreshExpiresIn) : undefined,
+    mustChangePassword: Boolean(raw.mustChangePassword),
+  };
+}
+
 export const api = {
   auth: {
-    login: (body: LoginRequest) => request<AuthResponse>('/api/v1/auth/login', json(body)),
-    changePassword: (body: ChangePasswordRequest) => request<AuthResponse>('/api/v1/auth/password', json(body)),
+    login: async (body: LoginRequest) => normalizeAuthResponse(await request<Record<string, unknown>>('/api/v1/auth/login', json(body))),
+    changePassword: async (body: ChangePasswordRequest) => normalizeAuthResponse(await request<Record<string, unknown>>('/api/v1/auth/password', json(body))),
   },
   cameras: {
     list: (query: CameraListQuery) => request<CameraPage>(withQuery('/api/v1/cameras', query)),
@@ -118,8 +144,11 @@ export const api = {
       list: () => request<OrganizationResponse[]>('/api/v1/organizations'),
       get: (id: string) => request<OrganizationResponse>(`/api/v1/organizations/${id}`),
       create: (body: OrganizationRequest) => request<CreatedResponse>('/api/v1/organizations', json(body)),
+      update: (id: string, body: OrganizationRequest) => request<OrganizationResponse>(`/api/v1/organizations/${id}`, { body: JSON.stringify(body), method: 'PUT' }),
       listUnits: (id: string) => request<OrganizationUnitResponse[]>(`/api/v1/organizations/${id}/units`),
       createUnit: (id: string, body: OrganizationUnitRequest) => request<CreatedResponse>(`/api/v1/organizations/${id}/units`, json(body)),
+      updateUnit: (id: string, body: OrganizationUnitRequest) => request<OrganizationUnitResponse>(`/api/v1/organization-units/${id}`, { body: JSON.stringify(body), method: 'PUT' }),
+      activateUnit: (id: string) => request<void>(`/api/v1/organization-units/${id}/activate`, { method: 'POST' }),
       deactivateUnit: (id: string, body: DeactivateRequest = {}) => request<void>(`/api/v1/organization-units/${id}/deactivate`, json(body)),
     },
     geography: {
@@ -129,6 +158,8 @@ export const api = {
       listAreaAncestors: (id: string) => request<GeographicAreaResponse[]>(`/api/v1/geographic-areas/${id}/ancestors`),
       listAreaTypes: () => request<AreaTypeResponse[]>('/api/v1/geographic-areas/types'),
       createArea: (body: GeographicAreaRequest) => request<CreatedResponse>('/api/v1/geographic-areas', json(body)),
+      updateArea: (id: string, body: GeographicAreaRequest) => request<GeographicAreaResponse>(`/api/v1/geographic-areas/${id}`, { body: JSON.stringify(body), method: 'PUT' }),
+      activateArea: (id: string) => request<void>(`/api/v1/geographic-areas/${id}/activate`, { method: 'POST' }),
       deactivateArea: (id: string, body: DeactivateRequest = {}) => request<void>(`/api/v1/geographic-areas/${id}/deactivate`, json(body)),
       listSites: (areaId?: string) => request<SiteResponse[]>(withQuery('/api/v1/sites', { areaId })),
       createSite: (body: SiteRequest) => request<CreatedResponse>('/api/v1/sites', json(body)),
@@ -138,11 +169,18 @@ export const api = {
       get: (id: string) => request<AccessGroupResponse>(`/api/v1/access-groups/${id}`),
       members: (id: string) => request<GroupMemberResponse[]>(`/api/v1/access-groups/${id}/members`),
       create: (body: CreateGroupRequest) => request<CreatedResponse>('/api/v1/access-groups', json(body)),
+      update: (id: string, body: UpdateGroupRequest) => request<AccessGroupResponse>(`/api/v1/access-groups/${id}`, { body: JSON.stringify(body), method: 'PUT' }),
+      activate: (id: string, body?: ActivateGroupRequest) => request<void>(`/api/v1/access-groups/${id}/activate`, json(body ?? {})),
+      disable: (id: string) => request<void>(`/api/v1/access-groups/${id}/disable`, { method: 'POST' }),
       addScope: (id: string, body: AddScopeRequest) => request<CreatedResponse>(`/api/v1/access-groups/${id}/scopes`, json(body)),
       removeScope: (id: string, scopeId: string) => request<void>(`/api/v1/access-groups/${id}/scopes/${scopeId}`, { method: 'DELETE' }),
     },
     roles: {
-      list: () => request<RoleResponse[]>('/api/v1/roles'),
+      list: (includeInactive = true) => request<RoleResponse[]>(withQuery('/api/v1/roles', { includeInactive })),
+      get: (id: string) => request<RoleResponse>(`/api/v1/roles/${id}`),
+      create: (body: RoleWriteRequest) => request<CreatedResponse>('/api/v1/roles', json(body)),
+      update: (id: string, body: RoleWriteRequest) => request<RoleResponse>(`/api/v1/roles/${id}`, { body: JSON.stringify(body), method: 'PUT' }),
+      delete: (id: string) => request<void>(`/api/v1/roles/${id}`, { method: 'DELETE' }),
       permissions: () => request<PermissionResponse[]>('/api/v1/permissions'),
     },
     watchlist: {

@@ -3,7 +3,7 @@ import { type FormEvent, useState } from 'react';
 
 import { isApiProblem } from '../../api/client';
 import { api } from '../../api/endpoints';
-import type { AddScopeRequest, CreateGroupRequest, ScopeResponse } from '../../api/models';
+import type { AccessGroupResponse, AddScopeRequest, CreateGroupRequest, ScopeResponse } from '../../api/models';
 import { useAuth } from '../../auth/AuthProvider';
 import { hasPermission } from '../../auth/permissions';
 import { Button, PageState, StatusBadge } from '../../components/ui';
@@ -93,17 +93,84 @@ function ScopeForm({ groupId, areas, organizations, onAdded }: {
   </form>;
 }
 
+interface EditGroupFormProps {
+  group: AccessGroupResponse;
+  roles: Array<{ id: string; name: string; code?: string }>;
+  onSave(request: { name: string; description?: string; roleId: string }): void;
+  onCancel(): void;
+  pending: boolean;
+  error: unknown;
+}
+
+function EditGroupForm({ group, roles, onSave, onCancel, pending, error }: EditGroupFormProps) {
+  const defaultRoleId = group.roleId ?? roles.find((r) => r.code === group.roleCode)?.id;
+
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    const description = field(data, 'description');
+    onSave({
+      name: field(data, 'name'),
+      roleId: field(data, 'roleId'),
+      ...(description ? { description } : {}),
+    });
+  }
+
+  return (
+    <form aria-label="Edit access group" className="admin-form" onSubmit={submit}>
+      <h4>Edit access group {group.name}</h4>
+      <p>Group code <code>{group.code}</code> is established and cannot be changed.</p>
+      <label>
+        Name
+        <input name="name" defaultValue={group.name} required />
+      </label>
+      <label>
+        Role
+        <select name="roleId" defaultValue={defaultRoleId} required>
+          {roles.map((role) => (
+            <option key={role.id} value={role.id}>
+              {role.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        Description
+        <textarea name="description" defaultValue={group.description ?? ''} />
+      </label>
+      {Boolean(error) && (
+        <p className="form-error" role="alert">
+          {errorDetail(error, 'The access group could not be updated.')}
+        </p>
+      )}
+      <div className="form-actions">
+        <Button disabled={pending} type="submit">
+          {pending ? 'Saving…' : 'Save changes'}
+        </Button>
+        <button className="button button--secondary" type="button" onClick={onCancel}>
+          Cancel
+        </button>
+      </div>
+    </form>
+  );
+}
+
 export function AccessGroupsPage() {
   const { session } = useAuth();
   const queryClient = useQueryClient();
   const canManage = hasPermission(session, 'group.manage');
   const [selectedId, setSelectedId] = useState('');
+  const [editing, setEditing] = useState(false);
+  const [confirmUnscoped, setConfirmUnscoped] = useState(false);
+  const [activationConflict, setActivationConflict] = useState('');
+
   const groups = useQuery({ queryKey: ['admin', 'access-groups'], queryFn: api.admin.groups.list });
   const detail = useQuery({ queryKey: ['admin', 'access-groups', selectedId], queryFn: () => api.admin.groups.get(selectedId), enabled: Boolean(selectedId) });
   const members = useQuery({ queryKey: ['admin', 'access-groups', selectedId, 'members'], queryFn: () => api.admin.groups.members(selectedId), enabled: Boolean(selectedId) });
-  const roles = useQuery({ queryKey: ['admin', 'roles'], queryFn: api.admin.roles.list, enabled: canManage });
+  const roles = useQuery({ queryKey: ['admin', 'roles'], queryFn: () => api.admin.roles.list(), enabled: canManage });
   const organizations = useQuery({ queryKey: ['admin', 'scope-organizations'], queryFn: api.admin.organizations.list, enabled: canManage });
   const areas = useQuery({ queryKey: ['admin', 'scope-areas'], queryFn: () => api.admin.geography.listAreas(), enabled: canManage });
+
   const create = useMutation({
     mutationFn: api.admin.groups.create,
     onSuccess: (created) => {
@@ -111,12 +178,42 @@ export function AccessGroupsPage() {
       return queryClient.invalidateQueries({ queryKey: ['admin', 'access-groups'] });
     },
   });
+
+  const update = useMutation({
+    mutationFn: ({ id, body }: { id: string; body: { code: string; name: string; roleId: string; description?: string } }) => api.admin.groups.update(id, body),
+    onSuccess: () => {
+      setEditing(false);
+      return refreshSelected();
+    },
+  });
+
+  const activate = useMutation({
+    mutationFn: ({ id, confirmUnscoped }: { id: string; confirmUnscoped?: boolean }) => (
+      api.admin.groups.activate(id, confirmUnscoped ? { confirmUnscoped } : undefined)
+    ),
+    onSuccess: () => {
+      setActivationConflict('');
+      setConfirmUnscoped(false);
+      return refreshSelected();
+    },
+    onError: (error) => {
+      if (isApiProblem(error) && error.status === 409) {
+        setActivationConflict(error.detail);
+      }
+    },
+  });
+
+  const disable = useMutation({
+    mutationFn: (id: string) => api.admin.groups.disable(id),
+    onSuccess: () => {
+      setActivationConflict('');
+      return refreshSelected();
+    },
+  });
+
   const removeScope = useMutation({
     mutationFn: ({ groupId, scopeId }: { groupId: string; scopeId: string }) => api.admin.groups.removeScope(groupId, scopeId),
-    onSuccess: () => Promise.all([
-      queryClient.invalidateQueries({ queryKey: ['admin', 'access-groups'] }),
-      queryClient.invalidateQueries({ queryKey: ['admin', 'access-groups', selectedId] }),
-    ]),
+    onSuccess: () => refreshSelected(),
   });
 
   async function refreshSelected() {
@@ -133,7 +230,7 @@ export function AccessGroupsPage() {
         {groups.isPending ? <PageState title="Loading access groups">Retrieving authorized groups…</PageState>
           : groups.isError ? <PageState title="Couldn’t load access groups">{errorDetail(groups.error, 'Access groups could not be loaded.')}</PageState>
             : groups.data.length === 0 ? <p className="admin-empty">No access groups are available.</p>
-              : <ul className="admin-record-list">{groups.data.map((group) => <li key={group.id}><div><strong>{group.name}</strong><span>{group.code} · {group.roleCode}</span><button className="admin-action-link" type="button" onClick={() => setSelectedId(group.id)}>View {group.name}</button></div><StatusBadge tone={group.status === 'ACTIVE' ? 'success' : 'warning'}>{group.status}</StatusBadge></li>)}</ul>}
+              : <ul className="admin-record-list">{groups.data.map((group) => <li key={group.id} className={group.id === selectedId ? 'admin-record--active' : ''}><div><strong>{group.name}</strong><span>{group.code} · {group.roleCode}</span><button className="admin-action-link" type="button" onClick={() => { setSelectedId(group.id); setEditing(false); }}>View {group.name}</button></div><StatusBadge tone={group.status === 'ACTIVE' ? 'success' : 'warning'}>{group.status}</StatusBadge></li>)}</ul>}
       </section>
       {canManage && <CreateGroupForm error={create.error} onCreate={(request) => create.mutate(request)} pending={create.isPending} roles={roles.data ?? []} />}
     </div>
@@ -142,12 +239,142 @@ export function AccessGroupsPage() {
       {detail.isPending ? <PageState title="Loading group detail">Retrieving scopes and permissions…</PageState>
         : detail.isError ? <PageState title="Couldn’t load group detail">{errorDetail(detail.error, 'The access group could not be loaded.')}</PageState>
           : <>
-            <header><div><p className="eyebrow">{detail.data.code}</p><h3 id="group-detail-title">{detail.data.name}</h3><p>{detail.data.description ?? 'No description provided.'}</p></div><StatusBadge tone={detail.data.status === 'ACTIVE' ? 'success' : 'warning'}>{detail.data.status}</StatusBadge></header>
+            <header>
+              <div>
+                <p className="eyebrow">{detail.data.code}</p>
+                <h3 id="group-detail-title">{detail.data.name}</h3>
+                <p>{detail.data.description ?? 'No description provided.'}</p>
+              </div>
+              <div className="group-detail-header-actions">
+                <StatusBadge tone={detail.data.status === 'ACTIVE' ? 'success' : 'warning'}>{detail.data.status}</StatusBadge>
+                {canManage && (
+                  <div className="group-management-actions" style={{ marginTop: '.5rem', display: 'flex', gap: '.5rem' }}>
+                    <button
+                      className="button button--secondary button--small"
+                      type="button"
+                      onClick={() => setEditing((prev) => !prev)}
+                    >
+                      {editing ? 'Close edit' : 'Edit group'}
+                    </button>
+                    {detail.data.status === 'ACTIVE' ? (
+                      <button
+                        className="button button--secondary button--small"
+                        disabled={disable.isPending}
+                        type="button"
+                        onClick={() => disable.mutate(detail.data.id)}
+                      >
+                        {disable.isPending ? 'Disabling…' : 'Disable group'}
+                      </button>
+                    ) : (
+                      <button
+                        className="button button--small"
+                        disabled={activate.isPending}
+                        type="button"
+                        onClick={() => activate.mutate({ id: detail.data.id })}
+                      >
+                        {activate.isPending ? 'Activating…' : 'Activate group'}
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            </header>
+
+            {activationConflict && (
+              <fieldset className="deactivation-strategy" style={{ marginTop: '1rem' }}>
+                <legend>Estate-wide scope acknowledgement required</legend>
+                <p role="alert">{activationConflict}</p>
+                <label className="strategy-option">
+                  <input
+                    type="checkbox"
+                    checked={confirmUnscoped}
+                    onChange={(e) => setConfirmUnscoped(e.target.checked)}
+                  />
+                  I confirm this group is estate-wide and unrestricted on missing dimensions
+                </label>
+                <Button
+                  disabled={!confirmUnscoped || activate.isPending}
+                  type="button"
+                  onClick={() => activate.mutate({ id: detail.data.id, confirmUnscoped: true })}
+                >
+                  Confirm estate-wide activation
+                </Button>
+              </fieldset>
+            )}
+
+            {editing && canManage && (
+              <EditGroupForm
+                group={detail.data}
+                roles={roles.data ?? []}
+                pending={update.isPending}
+                error={update.error}
+                onCancel={() => setEditing(false)}
+                onSave={(fields) => update.mutate({ id: detail.data.id, body: { code: detail.data.code, ...fields } })}
+              />
+            )}
+
             <div className="group-detail-grid">
-              <section aria-labelledby="group-permissions-title"><h4 id="group-permissions-title">Permissions from {detail.data.roleCode}</h4>{detail.data.permissions.length ? <ul className="token-list">{detail.data.permissions.map((permission) => <li key={permission}><code>{permission}</code></li>)}</ul> : <p className="admin-empty">This role has no permissions.</p>}</section>
-              <section aria-labelledby="group-members-title"><h4 id="group-members-title">Members ({detail.data.memberCount})</h4>{members.isPending ? <p>Loading members…</p> : members.isError ? <p className="form-error">{errorDetail(members.error, 'Members could not be loaded.')}</p> : members.data?.length ? <ul className="plain-list">{members.data.map((member) => <li key={member.userId}><strong>{member.username}</strong>{member.expiresAt ? <span>Expires {new Date(member.expiresAt).toLocaleDateString()}</span> : <span>No expiry</span>}</li>)}</ul> : <p className="admin-empty">This group has no members.</p>}</section>
+              <section aria-labelledby="group-permissions-title">
+                <h4 id="group-permissions-title">Permissions from {detail.data.roleCode}</h4>
+                {detail.data.permissions.length ? (
+                  <ul className="token-list">{detail.data.permissions.map((permission) => <li key={permission}><code>{permission}</code></li>)}</ul>
+                ) : (
+                  <p className="admin-empty">This role has no permissions.</p>
+                )}
+              </section>
+              <section aria-labelledby="group-members-title">
+                <h4 id="group-members-title">Members ({detail.data.memberCount})</h4>
+                {members.isPending ? (
+                  <p>Loading members…</p>
+                ) : members.isError ? (
+                  <p className="form-error">{errorDetail(members.error, 'Members could not be loaded.')}</p>
+                ) : members.data?.length ? (
+                  <ul className="plain-list">
+                    {members.data.map((member) => (
+                      <li key={member.userId}>
+                        <strong>{member.username}</strong>
+                        {member.expiresAt ? <span>Expires {new Date(member.expiresAt).toLocaleDateString()}</span> : <span>No expiry</span>}
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="admin-empty">This group has no members.</p>
+                )}
+              </section>
             </div>
-            <section aria-labelledby="group-scopes-title"><header className="scope-header"><div><h4 id="group-scopes-title">Scopes</h4><p>Removing the last scope in a dimension can widen access; the server refuses unsafe changes.</p></div></header>{detail.data.scopes.length ? <ul className="scope-list">{detail.data.scopes.map((scope) => <li key={scope.id}><div><StatusBadge>{scope.scopeType}</StatusBadge><strong>{scopeDescription(scope)}</strong></div>{canManage && <button className="admin-action-link admin-action-link--danger" disabled={removeScope.isPending} type="button" onClick={() => removeScope.mutate({ groupId: detail.data.id, scopeId: scope.id })}>Remove scope {scopeDescription(scope)}</button>}</li>)}</ul> : <p className="admin-empty">No scopes constrain this group.</p>}{removeScope.isError && <p className="form-error" role="alert">{errorDetail(removeScope.error, 'The scope could not be removed.')}</p>}</section>
+            <section aria-labelledby="group-scopes-title">
+              <header className="scope-header">
+                <div>
+                  <h4 id="group-scopes-title">Scopes</h4>
+                  <p>Removing the last scope in a dimension can widen access; the server refuses unsafe changes.</p>
+                </div>
+              </header>
+              {detail.data.scopes.length ? (
+                <ul className="scope-list">
+                  {detail.data.scopes.map((scope) => (
+                    <li key={scope.id}>
+                      <div>
+                        <StatusBadge>{scope.scopeType}</StatusBadge>
+                        <strong>{scopeDescription(scope)}</strong>
+                      </div>
+                      {canManage && (
+                        <button
+                          className="admin-action-link admin-action-link--danger"
+                          disabled={removeScope.isPending}
+                          type="button"
+                          onClick={() => removeScope.mutate({ groupId: detail.data.id, scopeId: scope.id })}
+                        >
+                          Remove scope {scopeDescription(scope)}
+                        </button>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="admin-empty">No scopes constrain this group.</p>
+              )}
+              {removeScope.isError && <p className="form-error" role="alert">{errorDetail(removeScope.error, 'The scope could not be removed.')}</p>}
+            </section>
             {canManage && <ScopeForm key={detail.data.id} areas={areas.data ?? []} groupId={detail.data.id} onAdded={refreshSelected} organizations={organizations.data ?? []} />}
           </>}
     </section>}

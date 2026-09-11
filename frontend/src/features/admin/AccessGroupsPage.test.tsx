@@ -46,6 +46,9 @@ function groupsFetch() {
     const url = new URL(String(input));
     if (url.pathname === '/api/v1/access-groups' && init?.method === 'POST') return Response.json({ id: groupId }, { status: 201 });
     if (url.pathname === '/api/v1/access-groups') return Response.json([group]);
+    if (url.pathname === `/api/v1/access-groups/${groupId}` && init?.method === 'PUT') return Response.json({ ...group, name: 'Senior Operators' });
+    if (url.pathname === `/api/v1/access-groups/${groupId}/disable` && init?.method === 'POST') return new Response(null, { status: 204 });
+    if (url.pathname === `/api/v1/access-groups/${groupId}/activate` && init?.method === 'POST') return new Response(null, { status: 204 });
     if (url.pathname === `/api/v1/access-groups/${groupId}`) return Response.json(group);
     if (url.pathname === `/api/v1/access-groups/${groupId}/members`) return Response.json([{ userId: 'u1', username: 'ravi', expiresAt: null }]);
     if (url.pathname === `/api/v1/access-groups/${groupId}/scopes` && init?.method === 'POST') return Response.json({ id: 'new-scope' }, { status: 201 });
@@ -72,10 +75,10 @@ describe('AccessGroupsPage', () => {
     expect(screen.queryByRole('button', { name: /create access group/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /add scope/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /remove scope/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /delete group|edit group|add member|remove member/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /delete group|edit group|disable group|activate group|add member|remove member/i })).not.toBeInTheDocument();
   });
 
-  it('supports only create and scope mutations for group.manage users', async () => {
+  it('supports group edit, disable/activate, and scope mutations for group.manage users', async () => {
     vi.stubGlobal('fetch', groupsFetch());
     const user = userEvent.setup();
     renderGroups(['group.read', 'group.manage']);
@@ -85,7 +88,48 @@ describe('AccessGroupsPage', () => {
     await user.click(screen.getByRole('button', { name: /view operators/i }));
     expect(await screen.findByRole('button', { name: /remove scope headquarters/i })).toBeVisible();
     expect(screen.getByRole('form', { name: /add access-group scope/i })).toBeVisible();
-    expect(screen.queryByRole('button', { name: /delete group|edit group|add member|remove member/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /edit group/i })).toBeVisible();
+    expect(screen.getByRole('button', { name: /disable group/i })).toBeVisible();
+    expect(screen.queryByRole('button', { name: /delete group|add member|remove member/i })).not.toBeInTheDocument();
+  });
+
+  it('allows editing an access group', async () => {
+    const fetch = groupsFetch();
+    vi.stubGlobal('fetch', fetch);
+    const user = userEvent.setup();
+    renderGroups(['group.read', 'group.manage']);
+
+    await user.click(await screen.findByRole('button', { name: /view operators/i }));
+    await user.click(screen.getByRole('button', { name: /edit group/i }));
+
+    const editForm = await screen.findByRole('form', { name: /edit access group/i });
+    const nameInput = within(editForm).getByLabelText(/^name$/i);
+    await user.clear(nameInput);
+    await user.type(nameInput, 'Senior Operators');
+    await user.click(within(editForm).getByRole('button', { name: /save changes/i }));
+
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith(
+      expect.stringContaining(`/api/v1/access-groups/${groupId}`),
+      expect.objectContaining({
+        method: 'PUT',
+        body: expect.stringContaining('"name":"Senior Operators"'),
+      }),
+    ));
+  });
+
+  it('allows disabling an active access group', async () => {
+    const fetch = groupsFetch();
+    vi.stubGlobal('fetch', fetch);
+    const user = userEvent.setup();
+    renderGroups(['group.read', 'group.manage']);
+
+    await user.click(await screen.findByRole('button', { name: /view operators/i }));
+    await user.click(screen.getByRole('button', { name: /disable group/i }));
+
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith(
+      expect.stringContaining(`/api/v1/access-groups/${groupId}/disable`),
+      expect.objectContaining({ method: 'POST' }),
+    ));
   });
 
   it('adds an organization scope with a live organization-unit reference', async () => {
