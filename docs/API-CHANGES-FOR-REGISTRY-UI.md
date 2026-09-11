@@ -169,6 +169,18 @@ No field or route changes.
   the same `timestamp` as the original to be recognized as one; a different `timestamp` under
   the same `id` inserts as a separate row rather than hitting either the retry or the `409` path.
 
+### 1.4g `POST /api/v1/detections` — out-of-scope `cameraId` is now `400`, not `403` (`PR13b`)
+
+A `cameraId` that resolves to a real camera **outside the caller's own organization/geography
+scope** now returns the same **`400` "Unknown camera"** as a `cameraId` that does not exist at
+all — previously it returned **`403` "Forbidden"**, which let a caller tell the two cases apart
+and probe for camera ids that exist anywhere in the estate, outside their own reach (closes an
+existence-oracle finding, 15-M3). This is a **deliberate security fix, not a bug**: if the AI
+worker or any client special-cases `403` vs `400` from this route (different retry/backoff logic,
+different user-facing copy), that code must be updated to treat both as "this cameraId is not
+usable by you" — do not try to recover the old distinction from response wording, it is gone on
+purpose.
+
 ### 1.4c `GET /api/v1/vms/{id}/capabilities` — 404 body no longer distinguishes the reason
 
 A `404` is now returned with **no body detail** whether the target is outside your scope or

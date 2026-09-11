@@ -134,6 +134,14 @@ public sealed class GeographyScopeTests : IClassFixture<PostgresFixture>, IAsync
         },
     };
 
+    /// <summary>
+    /// Unscoped for <c>observation.write</c>/<c>observation.read</c> — used only to fetch a
+    /// camera's raw resolved details irrespective of scope, so a test can independently verify
+    /// <c>IngestAsync</c>'s own defense-in-depth scope check (finding 15-M3: that check is now
+    /// backstopped by <c>ResolveCameraAsync</c>'s own scoping, but still runs on its own).
+    /// </summary>
+    private static CallerContext UnscopedCaller() => CallerContext.System("geoscope-test");
+
     // ---- ConnectorTargetRepository (9-H1) -------------------------------
 
     [Fact]
@@ -249,13 +257,40 @@ public sealed class GeographyScopeTests : IClassFixture<PostgresFixture>, IAsync
 
     // ---- DetectionRepository (15-M1) --------------------------------------
 
+    /// <summary>
+    /// Finding 15-M3: an out-of-scope camera now fails to resolve exactly like a genuinely
+    /// unknown one — both <see langword="null"/>, so <c>DetectionEndpoints.IngestAsync</c>'s
+    /// single <c>resolved is null</c> branch returns the identical `400 Unknown camera` for
+    /// either case. Asserted side by side (not just the out-of-scope half alone) so a future
+    /// change that reintroduces a distinguishable path is caught here.
+    /// </summary>
+    [Fact]
+    public async Task Detections_ResolveOutOfDistrictCamera_ReturnsNull_NotAnExistenceOracle()
+    {
+        var detections = new DetectionRepository(_fixture.DataSource);
+
+        var outOfScope = await detections.ResolveCameraAsync(
+            $"{TargetOut}:ch1", ScopedCaller(), CancellationToken.None);
+        var genuinelyUnknown = await detections.ResolveCameraAsync(
+            $"{Guid.NewGuid()}:no-such-channel", ScopedCaller(), CancellationToken.None);
+
+        outOfScope.ShouldBeNull("exists, but outside the caller's scope");
+        genuinelyUnknown.ShouldBeNull("does not exist anywhere in the estate");
+    }
+
+    /// <summary>
+    /// <c>IngestAsync</c>'s own scope check is independent defense-in-depth, still exercised here
+    /// directly (bypassing <c>ResolveCameraAsync</c>'s now-equivalent scoping) so it keeps working
+    /// for any other caller of this repository.
+    /// </summary>
     [Fact]
     public async Task Detections_IngestForOutOfDistrictCamera_ThrowsForbidden()
     {
         var detections = new DetectionRepository(_fixture.DataSource);
         await using var work = await UnitOfWork.BeginAsync(_fixture.DataSource, CancellationToken.None);
 
-        var resolved = await detections.ResolveCameraAsync($"{TargetOut}:ch1", CancellationToken.None);
+        var resolved = await detections.ResolveCameraAsync(
+            $"{TargetOut}:ch1", UnscopedCaller(), CancellationToken.None);
         resolved.ShouldNotBeNull();
 
         var evt = new DetectionEvent
@@ -279,7 +314,7 @@ public sealed class GeographyScopeTests : IClassFixture<PostgresFixture>, IAsync
         var detections = new DetectionRepository(_fixture.DataSource);
         await using var work = await UnitOfWork.BeginAsync(_fixture.DataSource, CancellationToken.None);
 
-        var resolved = await detections.ResolveCameraAsync($"{TargetIn}:ch1", CancellationToken.None);
+        var resolved = await detections.ResolveCameraAsync($"{TargetIn}:ch1", ScopedCaller(), CancellationToken.None);
         resolved.ShouldNotBeNull();
 
         var evt = new DetectionEvent
@@ -311,7 +346,7 @@ public sealed class GeographyScopeTests : IClassFixture<PostgresFixture>, IAsync
     public async Task Detections_IngestSameIdAndContentTwice_IsIdenticalDuplicate()
     {
         var detections = new DetectionRepository(_fixture.DataSource);
-        var resolved = await detections.ResolveCameraAsync($"{TargetIn}:ch1", CancellationToken.None);
+        var resolved = await detections.ResolveCameraAsync($"{TargetIn}:ch1", ScopedCaller(), CancellationToken.None);
         resolved.ShouldNotBeNull();
 
         DetectionEvent MakeEvent(DateTimeOffset ts) => new()
@@ -354,7 +389,7 @@ public sealed class GeographyScopeTests : IClassFixture<PostgresFixture>, IAsync
     public async Task Detections_IngestSameIdDifferentContent_IsDuplicateConflict()
     {
         var detections = new DetectionRepository(_fixture.DataSource);
-        var resolved = await detections.ResolveCameraAsync($"{TargetIn}:ch1", CancellationToken.None);
+        var resolved = await detections.ResolveCameraAsync($"{TargetIn}:ch1", ScopedCaller(), CancellationToken.None);
         resolved.ShouldNotBeNull();
 
         var ts = DateTimeOffset.UtcNow;

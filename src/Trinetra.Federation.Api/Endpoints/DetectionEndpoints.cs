@@ -100,8 +100,10 @@ public static class DetectionEndpoints
               + "reused across distinct submissions.\n\n"
               + "`cameraId` is `\"{targetId}:{nativeCameraId}\"`, exactly as the worker's own "
               + "camera discovery builds it from `GET /vms/{id}/cameras`. An id that does not "
-              + "resolve against the camera inventory is rejected — a detection cannot be scoped "
-              + "to an organization without a known camera.\n\n"
+              + "resolve against the camera inventory **the caller can reach** is rejected as "
+              + "`400 Unknown camera` — a detection cannot be scoped to an organization without a "
+              + "known camera, and a camera outside the caller's own scope is indistinguishable "
+              + "from one that does not exist at all.\n\n"
               + "`eventType` must be `ANPR_DETECTED` or `VEHICLE_DETECTED`; `confidence` must be "
               + "between 0 and 1 — both are 400 otherwise.\n\n"
               + "`evidence.snapshotBase64`, if present, is decoded and written under the "
@@ -143,7 +145,7 @@ public static class DetectionEndpoints
             return bad;
         }
 
-        var resolved = await detections.ResolveCameraAsync(request.CameraId, ct);
+        var resolved = await detections.ResolveCameraAsync(request.CameraId, caller, ct);
         if (resolved is null)
         {
             return TypedResults.Problem(
