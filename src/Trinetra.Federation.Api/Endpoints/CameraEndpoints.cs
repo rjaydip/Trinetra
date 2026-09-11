@@ -165,9 +165,17 @@ public static class CameraEndpoints
 
         var pageSize = Math.Clamp(limit ?? DefaultPageSize, 1, MaxPageSize);
 
+        if (!TryDecodeCursor(cursor, out var decodedCursor))
+        {
+            return TypedResults.Problem(
+                title: "Invalid cursor",
+                detail: "The cursor is malformed. Restart the listing without one.",
+                statusCode: StatusCodes.Status400BadRequest);
+        }
+
         var rows = await repo.ListAsync(
             new CameraQuery(
-                pageSize + 1, DecodeCursor(cursor), includeRetired ?? false,
+                pageSize + 1, decodedCursor, includeRetired ?? false,
                 organizationUnitId, geographicAreaId, cameraType,
                 Upper(operationalStatus), Upper(connectivityStatus), Upper(maintenanceStatus),
                 q, box),
@@ -837,20 +845,26 @@ public static class CameraEndpoints
         return true;
     }
 
-    private static string? DecodeCursor(string? cursor)
+    // Finding 10-L6: a malformed cursor used to fail open (silently restart from page 1),
+    // which masks a client bug — a truncated/corrupted cursor now reports as a 400 instead,
+    // matching EventEndpoints.TryDecodeCursor.
+    private static bool TryDecodeCursor(string? cursor, out string? code)
     {
+        code = null;
+
         if (string.IsNullOrEmpty(cursor))
         {
-            return null;
+            return true;
         }
 
         try
         {
-            return Encoding.UTF8.GetString(Convert.FromBase64String(cursor));
+            code = Encoding.UTF8.GetString(Convert.FromBase64String(cursor));
+            return true;
         }
         catch (FormatException)
         {
-            return null;
+            return false;
         }
     }
 

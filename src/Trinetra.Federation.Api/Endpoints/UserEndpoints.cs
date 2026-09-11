@@ -423,9 +423,16 @@ public static class UserEndpoints
 
         await users.AssignGroupAsync(id, request.GroupId, caller.UserId, request.ExpiresAt, work, ct);
 
+        // Finding 6-L6: a caller assigning a group to themselves is legitimate (GroupGrantGuard
+        // still enforces they already hold what the group grants) but worth distinguishing in
+        // the audit trail from assigning one to someone else.
         await work.AuditAsync(caller, "update", "user_group", id.ToString(),
             before: null,
-            after: new { groupId = request.GroupId, group = target.Code, request.ExpiresAt },
+            after: new
+            {
+                groupId = request.GroupId, group = target.Code, request.ExpiresAt,
+                selfAssigned = id == caller.UserId,
+            },
             organizationUnitId: null, ct);
         await work.CommitAsync(ct);
 

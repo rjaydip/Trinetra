@@ -95,7 +95,9 @@ public static class DetectionEndpoints
           .WithDescription(
               "The ingest sink for the standalone AI worker. Idempotent on `id` — a "
               + "retried POST for an already-seen detection is accepted again but changes "
-              + "nothing and never raises a second watchlist alert.\n\n"
+              + "nothing and never raises a second watchlist alert. A `POST` reusing an `id` "
+              + "with **different** content is a `409` — ids must be unique per detection, not "
+              + "reused across distinct submissions.\n\n"
               + "`cameraId` is `\"{targetId}:{nativeCameraId}\"`, exactly as the worker's own "
               + "camera discovery builds it from `GET /vms/{id}/cameras`. An id that does not "
               + "resolve against the camera inventory is rejected — a detection cannot be scoped "
@@ -124,7 +126,7 @@ public static class DetectionEndpoints
     private static async Task<Results<Accepted, ProblemHttpResult>> IngestAsync(
         [FromBody] DetectionEventRequest request, DetectionRepository detections,
         WatchlistRepository watchlist, NpgsqlDataSource db, IConfiguration configuration,
-        HttpContext http, CancellationToken ct)
+        EvidenceStorage evidence, HttpContext http, CancellationToken ct)
     {
         var caller = CallerContextFactory.From(http);
 
@@ -159,7 +161,7 @@ public static class DetectionEndpoints
             : PlateNormalizer.Normalize(plateRaw);
 
         var (snapshotReference, evidenceError) =
-            await ResolveSnapshotReferenceAsync(request, configuration, ct);
+            await ResolveSnapshotReferenceAsync(request, configuration, evidence, ct);
         if (evidenceError is not null)
         {
             return TypedResults.Problem(
@@ -182,11 +184,23 @@ public static class DetectionEndpoints
 
         await using var work = await UnitOfWork.BeginAsync(db, ct);
 
-        var inserted = await detections.IngestAsync(
+        var outcome = await detections.IngestAsync(
             evt, targetId, nativeCameraId, cameraId, organizationUnitId, geographicAreaId,
             plateNormalized, caller, work, ct);
 
-        if (inserted)
+        // Finding 15-L1: the id is caller-supplied, so a same-id submission with different
+        // content is a real collision, not a retry — surface it rather than silently keeping
+        // whichever payload arrived first.
+        if (outcome is DetectionIngestOutcome.DuplicateConflict)
+        {
+            return TypedResults.Problem(
+                title: "Detection id already used",
+                detail: $"'{request.Id}' was already stored with different content. Detection "
+                      + "ids must be unique per submission — retry with a fresh id.",
+                statusCode: StatusCodes.Status409Conflict);
+        }
+
+        if (outcome is DetectionIngestOutcome.Inserted)
         {
             await work.AuditAsync(caller, "ingest", "detection_event", evt.Id,
                 before: null,
@@ -221,7 +235,8 @@ public static class DetectionEndpoints
     /// a <see cref="FormatException"/> or an unbounded decode reach the write (finding 15-H2).
     /// </remarks>
     private static async Task<(string? Reference, string? Error)> ResolveSnapshotReferenceAsync(
-        DetectionEventRequest request, IConfiguration configuration, CancellationToken ct)
+        DetectionEventRequest request, IConfiguration configuration, EvidenceStorage evidence,
+        CancellationToken ct)
     {
         var base64 = request.Evidence?.GetValueOrDefault(SnapshotBase64Key);
         if (string.IsNullOrEmpty(base64))
@@ -237,8 +252,7 @@ public static class DetectionEndpoints
             return (null, error);
         }
 
-        var root = Path.GetFullPath(configuration["Evidence:RootPath"] ?? "evidence");
-        Directory.CreateDirectory(root);
+        var root = evidence.Root;
 
         var fileName = $"{request.Id}.jpg";
         var fullPath = Path.GetFullPath(Path.Combine(root, fileName));

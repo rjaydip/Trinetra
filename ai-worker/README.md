@@ -149,6 +149,16 @@ rejected (a clean `400` the worker logs and drops — not a poison message, but 
 `vendorEventType` (free text, already on the contract) stays the escape hatch for
 device-specific labels.
 
+**`id` reuse:** ingest is idempotent on `id` — retry the same detection with the same `id` and
+content as many times as needed (at-least-once submit is fine, it's a no-op past the first; the
+retry gets `202` again with no second watchlist alert and no new audit row). Reusing an `id` for
+a **different** detection, though, is a `409` — never recycle an `id`, even across pipeline
+restarts (`evt-{uuid:n}` per detection, as today, is already collision-free).
+
+The conflict/idempotency key is actually `(id, timestamp)`, not `id` alone — a resubmit under
+the same `id` with a **different** `timestamp` is not detected as a retry or a conflict at all,
+it inserts as a distinct row. Never vary `timestamp` on a retry of the same detection.
+
 ## What's deliberately not here yet
 
 - End-to-end integration testing of `backend_client.py`/`heartbeat.py` against the now-built

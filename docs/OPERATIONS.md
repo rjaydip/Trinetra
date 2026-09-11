@@ -197,6 +197,11 @@ at `MaxSnapshotBytes` — an oversized or malformed value is a `400`, decided on
 string length before anything is allocated for the decode. Both have working code defaults, so
 neither key must be set.
 
+`RootPath` is resolved and created **once, at API startup**, not lazily on the first ingest
+request — a path the process cannot create or write to (bad permissions, an unmounted volume)
+now fails the whole API at boot rather than only the first snapshot upload at runtime. Point it
+at a stable, already-writable mount before starting the service.
+
 The daily maintenance pass runs `federation.ensure_audit_partitions()` before it drops anything,
 so partitions for the coming months always exist. It is **not optional**: with `Enabled: false`,
 or if the pass never runs, every audit and event row lands in the `*_default` partition, which

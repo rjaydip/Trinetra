@@ -1,6 +1,7 @@
 using Npgsql;
 using Trinetra.Federation.Adapters;
 using Trinetra.Federation.Api.Auth;
+using Trinetra.Federation.Api.Endpoints;
 using Trinetra.Federation.Core.Abstractions;
 using Trinetra.Federation.Runtime;
 using Trinetra.Federation.Storage;
@@ -61,6 +62,7 @@ internal static class ApiInfrastructureExtensions
         services.AddScoped<WatchlistRepository>();
         services.AddScoped<AiWorkerHealthRepository>();
         services.AddScoped<SystemInfoRepository>();
+        services.AddSingleton<EvidenceStorage>();
 
         services.AddFederationAdapters();
         services.AddSingleton<ICredentialResolver>(sp => new PostgresCredentialResolver(
