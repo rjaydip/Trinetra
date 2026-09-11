@@ -40,8 +40,11 @@ describe('admin organization endpoints', () => {
     await api.admin.organizations.list();
     await api.admin.organizations.get(organizationId);
     await api.admin.organizations.create(organization);
+    await api.admin.organizations.update(organizationId, organization);
     await api.admin.organizations.listUnits(organizationId);
     await api.admin.organizations.createUnit(organizationId, unit);
+    await api.admin.organizations.updateUnit(unitId, unit);
+    await api.admin.organizations.activateUnit(unitId);
     await api.admin.organizations.deactivateUnit(unitId);
 
     expect(fetch).toHaveBeenNthCalledWith(1, ...fetchCall('/api/v1/organizations'));
@@ -49,11 +52,20 @@ describe('admin organization endpoints', () => {
     expect(fetch).toHaveBeenNthCalledWith(3, ...fetchCall('/api/v1/organizations', {
       method: 'POST', body: JSON.stringify(organization),
     }));
-    expect(fetch).toHaveBeenNthCalledWith(4, ...fetchCall(`/api/v1/organizations/${organizationId}/units`));
-    expect(fetch).toHaveBeenNthCalledWith(5, ...fetchCall(`/api/v1/organizations/${organizationId}/units`, {
+    expect(fetch).toHaveBeenNthCalledWith(4, ...fetchCall(`/api/v1/organizations/${organizationId}`, {
+      method: 'PUT', body: JSON.stringify(organization),
+    }));
+    expect(fetch).toHaveBeenNthCalledWith(5, ...fetchCall(`/api/v1/organizations/${organizationId}/units`));
+    expect(fetch).toHaveBeenNthCalledWith(6, ...fetchCall(`/api/v1/organizations/${organizationId}/units`, {
       method: 'POST', body: JSON.stringify(unit),
     }));
-    expect(fetch).toHaveBeenNthCalledWith(6, ...fetchCall(`/api/v1/organization-units/${unitId}/deactivate`, {
+    expect(fetch).toHaveBeenNthCalledWith(7, ...fetchCall(`/api/v1/organization-units/${unitId}`, {
+      method: 'PUT', body: JSON.stringify(unit),
+    }));
+    expect(fetch).toHaveBeenNthCalledWith(8, ...fetchCall(`/api/v1/organization-units/${unitId}/activate`, {
+      method: 'POST',
+    }));
+    expect(fetch).toHaveBeenNthCalledWith(9, ...fetchCall(`/api/v1/organization-units/${unitId}/deactivate`, {
       method: 'POST', body: '{}',
     }));
   });
@@ -74,6 +86,8 @@ describe('admin geography endpoints', () => {
     await api.admin.geography.listAreaAncestors(areaId);
     await api.admin.geography.listAreaTypes();
     await api.admin.geography.createArea(area);
+    await api.admin.geography.updateArea(areaId, area);
+    await api.admin.geography.activateArea(areaId);
     await api.admin.geography.deactivateArea(areaId, deactivation);
     await api.admin.geography.listSites(areaId);
     await api.admin.geography.createSite(site);
@@ -86,25 +100,35 @@ describe('admin geography endpoints', () => {
     expect(fetch).toHaveBeenNthCalledWith(6, ...fetchCall('/api/v1/geographic-areas', {
       method: 'POST', body: JSON.stringify(area),
     }));
-    expect(fetch).toHaveBeenNthCalledWith(7, ...fetchCall(`/api/v1/geographic-areas/${areaId}/deactivate`, {
+    expect(fetch).toHaveBeenNthCalledWith(7, ...fetchCall(`/api/v1/geographic-areas/${areaId}`, {
+      method: 'PUT', body: JSON.stringify(area),
+    }));
+    expect(fetch).toHaveBeenNthCalledWith(8, ...fetchCall(`/api/v1/geographic-areas/${areaId}/activate`, {
+      method: 'POST',
+    }));
+    expect(fetch).toHaveBeenNthCalledWith(9, ...fetchCall(`/api/v1/geographic-areas/${areaId}/deactivate`, {
       method: 'POST', body: JSON.stringify(deactivation),
     }));
-    expect(fetch).toHaveBeenNthCalledWith(8, ...fetchCall(`/api/v1/sites?areaId=${areaId}`));
-    expect(fetch).toHaveBeenNthCalledWith(9, ...fetchCall('/api/v1/sites', {
+    expect(fetch).toHaveBeenNthCalledWith(10, ...fetchCall(`/api/v1/sites?areaId=${areaId}`));
+    expect(fetch).toHaveBeenNthCalledWith(11, ...fetchCall('/api/v1/sites', {
       method: 'POST', body: JSON.stringify(site),
     }));
   });
 });
 
 describe('admin access-control endpoints', () => {
-  it('maps access-group reads, creation, and scope changes without inventing other mutations', async () => {
+  it('maps access-group reads, creation, update, activation, disable, and scope changes', async () => {
     const group = { code: 'OPERATORS', name: 'Operators', roleId, description: 'Camera operators' };
+    const updateGroup = { code: 'OPERATORS', name: 'Senior Operators', roleId, description: 'Senior camera operators' };
     const scope = { scopeType: 'ORGANIZATION', organizationUnitId: unitId, description: 'Headquarters' };
 
     await api.admin.groups.list();
     await api.admin.groups.get(groupId);
     await api.admin.groups.members(groupId);
     await api.admin.groups.create(group);
+    await api.admin.groups.update(groupId, updateGroup);
+    await api.admin.groups.activate(groupId, { confirmUnscoped: true });
+    await api.admin.groups.disable(groupId);
     await api.admin.groups.addScope(groupId, scope);
     await api.admin.groups.removeScope(groupId, scopeId);
 
@@ -114,26 +138,45 @@ describe('admin access-control endpoints', () => {
     expect(fetch).toHaveBeenNthCalledWith(4, ...fetchCall('/api/v1/access-groups', {
       method: 'POST', body: JSON.stringify(group),
     }));
-    expect(fetch).toHaveBeenNthCalledWith(5, ...fetchCall(`/api/v1/access-groups/${groupId}/scopes`, {
+    expect(fetch).toHaveBeenNthCalledWith(5, ...fetchCall(`/api/v1/access-groups/${groupId}`, {
+      method: 'PUT', body: JSON.stringify(updateGroup),
+    }));
+    expect(fetch).toHaveBeenNthCalledWith(6, ...fetchCall(`/api/v1/access-groups/${groupId}/activate`, {
+      method: 'POST', body: JSON.stringify({ confirmUnscoped: true }),
+    }));
+    expect(fetch).toHaveBeenNthCalledWith(7, ...fetchCall(`/api/v1/access-groups/${groupId}/disable`, {
+      method: 'POST',
+    }));
+    expect(fetch).toHaveBeenNthCalledWith(8, ...fetchCall(`/api/v1/access-groups/${groupId}/scopes`, {
       method: 'POST', body: JSON.stringify(scope),
     }));
-    expect(fetch).toHaveBeenNthCalledWith(6, ...fetchCall(`/api/v1/access-groups/${groupId}/scopes/${scopeId}`, {
+    expect(fetch).toHaveBeenNthCalledWith(9, ...fetchCall(`/api/v1/access-groups/${groupId}/scopes/${scopeId}`, {
       method: 'DELETE',
     }));
   });
 
-  it('exposes roles and permissions as read-only reference data', async () => {
-    await api.admin.roles.list();
+  it('exposes role catalogue operations according to backend specification', async () => {
+    const role = { code: 'DISPATCHER', name: 'Dispatcher', permissions: ['camera.read'], description: 'Dispatch staff' };
+
+    await api.admin.roles.list(true);
+    await api.admin.roles.get(roleId);
+    await api.admin.roles.create(role);
+    await api.admin.roles.update(roleId, role);
+    await api.admin.roles.delete(roleId);
     await api.admin.roles.permissions();
 
-    expect(fetch).toHaveBeenNthCalledWith(1, ...fetchCall('/api/v1/roles'));
-    expect(fetch).toHaveBeenNthCalledWith(2, ...fetchCall('/api/v1/permissions'));
-    expect(api.admin.roles).not.toHaveProperty('create');
-
-    type AdminRoles = typeof api.admin.roles;
-    // @ts-expect-error The backend exposes no role mutation route.
-    const unsupportedRoleMutation: AdminRoles['create'] = undefined;
-    expect(unsupportedRoleMutation).toBeUndefined();
+    expect(fetch).toHaveBeenNthCalledWith(1, ...fetchCall('/api/v1/roles?includeInactive=true'));
+    expect(fetch).toHaveBeenNthCalledWith(2, ...fetchCall(`/api/v1/roles/${roleId}`));
+    expect(fetch).toHaveBeenNthCalledWith(3, ...fetchCall('/api/v1/roles', {
+      method: 'POST', body: JSON.stringify(role),
+    }));
+    expect(fetch).toHaveBeenNthCalledWith(4, ...fetchCall(`/api/v1/roles/${roleId}`, {
+      method: 'PUT', body: JSON.stringify(role),
+    }));
+    expect(fetch).toHaveBeenNthCalledWith(5, ...fetchCall(`/api/v1/roles/${roleId}`, {
+      method: 'DELETE',
+    }));
+    expect(fetch).toHaveBeenNthCalledWith(6, ...fetchCall('/api/v1/permissions'));
   });
 });
 

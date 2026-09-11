@@ -7,7 +7,11 @@ export interface ApiProblemShape {
 
 export interface AuthResponse {
   token: string;
+  accessToken?: string;
   expiresAt: string;
+  accessExpiresIn?: number;
+  refreshToken?: string;
+  refreshExpiresIn?: number;
   mustChangePassword: boolean;
 }
 
@@ -427,9 +431,21 @@ export interface AccessGroupResponse {
   description: string | null;
   status: string;
   roleCode: string;
+  roleId?: string;
   permissions: string[];
   scopes: ScopeResponse[];
   memberCount: number;
+}
+
+export interface UpdateGroupRequest {
+  code: string;
+  name: string;
+  roleId: string;
+  description?: string | null;
+}
+
+export interface ActivateGroupRequest {
+  confirmUnscoped?: boolean;
 }
 
 export interface GroupMemberResponse {
@@ -438,12 +454,43 @@ export interface GroupMemberResponse {
   expiresAt: string | null;
 }
 
+export interface RolePermissionDetailResponse {
+  code: string;
+  name: string;
+  category: string;
+  description: string | null;
+}
+
+export interface RoleUsedByResponse {
+  id: string;
+  code: string;
+  name: string;
+  status: string;
+}
+
+export interface RoleWriteRequest {
+  code: string;
+  name: string;
+  permissions: string[];
+  description?: string | null;
+  status?: string | null;
+}
+
 export interface RoleResponse {
   id: string;
   code: string;
   name: string;
   description: string | null;
   isSystem: boolean;
+  status?: string;
+  customized?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+  customizedAt?: string | null;
+  usageCount?: number;
+  permissions?: string[];
+  permissionDetails?: RolePermissionDetailResponse[] | null;
+  usedBy?: RoleUsedByResponse[] | null;
 }
 
 export interface PermissionResponse {

@@ -95,7 +95,13 @@ export function VmsPage() {
             : <ul>{vmsList.data.map((target) => <li key={target.id}><div><Link to={`/vms/${target.id}`}>{target.displayName}</Link><p>{target.code} · {target.vendor}</p></div><StatusBadge tone={target.state.toLowerCase() === 'active' ? 'success' : 'warning'}>{target.state}</StatusBadge></li>)}</ul>}
     </section>
     {canCreate && <section className="vms-registration" aria-labelledby="vms-registration-title">
-      <header><p className="eyebrow">Step 1</p><h2 id="vms-registration-title">Register a VMS</h2><p>Save the target configuration first. Device credentials are entered on the next screen.</p></header>
+      <header>
+        <div>
+          <p className="eyebrow">Step 1</p>
+          <h2 id="vms-registration-title">Register a VMS</h2>
+        </div>
+        <p>Save the target configuration first. Device credentials are entered on the next screen.</p>
+      </header>
       {createdId && <p className="save-confirmation" role="status">VMS registered. <Link to={`/vms/${createdId}`}>Continue to credentials</Link></p>}
       <VmsForm
         organizations={organizations.data ?? []}

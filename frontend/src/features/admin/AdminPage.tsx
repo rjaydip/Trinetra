@@ -28,8 +28,8 @@ const adminDestinations = [
   {
     to: '/admin/roles',
     label: 'Roles & permissions',
-    description: 'Read the platform role and permission catalogue.',
-    permissions: ['group.read'],
+    description: 'Maintain roles, workflow statuses, and permissions catalogue.',
+    permissions: ['role.read', 'group.read'],
   },
   {
     to: '/admin/access-groups',

@@ -184,40 +184,119 @@ export function VmsForm({ organizations, organizationUnits, sites, selectorState
     }
   })}>
     <fieldset>
-      <legend>Target identity <span aria-hidden="true">* Required</span></legend>
-      <label>VMS code<span aria-hidden="true"> *</span><input aria-required="true" maxLength={100} {...register('code')} {...validationProps('code')} /></label><FieldError id="code-error" message={errors.code?.message} />
-      <label>Display name<span aria-hidden="true"> *</span><input aria-required="true" maxLength={255} {...register('displayName')} {...validationProps('displayName')} /></label><FieldError id="displayName-error" message={errors.displayName?.message} />
-      <label>Organization<select aria-describedby={selectorStates.organizations.state === 'ready' ? undefined : 'vms-organizations-status'} disabled={selectorStates.organizations.state !== 'ready'} {...organizationRegistration} onChange={(event) => {
-        organizationRegistration.onChange(event);
-        form.setValue('organizationUnitId', '');
-        form.clearErrors('organizationUnitId');
-        onOrganizationChange(event.target.value);
-      }}><option value="">Select an organization</option>{organizations.map((organization) => <option key={organization.id} value={organization.id}>{organization.name} ({organization.code})</option>)}</select></label>
+      <legend>Target identity <span className="legend-note">* Required fields</span></legend>
+      <label>
+        <span className="form-label-title">VMS code <span className="required-indicator" aria-hidden="true">*</span></span>
+        <input aria-required="true" maxLength={100} {...register('code')} {...validationProps('code')} />
+        <FieldError id="code-error" message={errors.code?.message} />
+      </label>
+      <label>
+        <span className="form-label-title">Display name <span className="required-indicator" aria-hidden="true">*</span></span>
+        <input aria-required="true" maxLength={255} {...register('displayName')} {...validationProps('displayName')} />
+        <FieldError id="displayName-error" message={errors.displayName?.message} />
+      </label>
+      <label>
+        <span className="form-label-title">Organization</span>
+        <select aria-describedby={selectorStates.organizations.state === 'ready' ? undefined : 'vms-organizations-status'} disabled={selectorStates.organizations.state !== 'ready'} {...organizationRegistration} onChange={(event) => {
+          organizationRegistration.onChange(event);
+          form.setValue('organizationUnitId', '');
+          form.clearErrors('organizationUnitId');
+          onOrganizationChange(event.target.value);
+        }}>
+          <option value="">Select an organization</option>
+          {organizations.map((organization) => <option key={organization.id} value={organization.id}>{organization.name} ({organization.code})</option>)}
+        </select>
+      </label>
       <SelectorStatus id="vms-organizations-status" label="Organizations" selector={selectorStates.organizations} emptyMessage="No organizations are available. Ask an administrator to create an organization before registering a VMS." />
-      <label>Organization unit<span aria-hidden="true"> *</span><select aria-required="true" disabled={!selectedOrganizationId || selectorStates.organizationUnits.state !== 'ready'} {...register('organizationUnitId')} {...validationProps('organizationUnitId', selectorStates.organizationUnits.state === 'ready' ? undefined : 'vms-organization-units-status')}><option value="">Select an organization unit</option>{organizationUnits.map((unit) => <option key={unit.id} value={unit.id}>{unit.name} ({unit.code})</option>)}</select></label><FieldError id="organizationUnitId-error" message={errors.organizationUnitId?.message} />
+      <label>
+        <span className="form-label-title">Organization unit <span className="required-indicator" aria-hidden="true">*</span></span>
+        <select aria-required="true" disabled={!selectedOrganizationId || selectorStates.organizationUnits.state !== 'ready'} {...register('organizationUnitId')} {...validationProps('organizationUnitId', selectorStates.organizationUnits.state === 'ready' ? undefined : 'vms-organization-units-status')}>
+          <option value="">Select an organization unit</option>
+          {organizationUnits.map((unit) => <option key={unit.id} value={unit.id}>{unit.name} ({unit.code})</option>)}
+        </select>
+        <FieldError id="organizationUnitId-error" message={errors.organizationUnitId?.message} />
+      </label>
       <SelectorStatus id="vms-organization-units-status" label="Organization units" selector={selectorStates.organizationUnits} idleMessage="Select an organization to load its organization units." emptyMessage="No organization units are available for this organization." />
-      <label>Site<select disabled={selectorStates.sites.state !== 'ready'} {...register('siteId')} aria-describedby={selectorStates.sites.state === 'ready' ? undefined : 'vms-sites-status'}><option value="">No site selected</option>{sites.map((site) => <option key={site.id} value={site.id}>{site.name} ({site.code})</option>)}</select></label>
+      <label>
+        <span className="form-label-title">Site</span>
+        <select disabled={selectorStates.sites.state !== 'ready'} {...register('siteId')} aria-describedby={selectorStates.sites.state === 'ready' ? undefined : 'vms-sites-status'}>
+          <option value="">No site selected</option>
+          {sites.map((site) => <option key={site.id} value={site.id}>{site.name} ({site.code})</option>)}
+        </select>
+      </label>
       <SelectorStatus id="vms-sites-status" label="Sites" selector={selectorStates.sites} emptyMessage="No sites are available. You can register this VMS without a site." />
     </fieldset>
     <fieldset>
-      <legend>Connection configuration</legend>
-      <label>Vendor<span aria-hidden="true"> *</span><select aria-required="true" {...register('vendor')} {...validationProps('vendor')}><option value="">Select a vendor adapter</option>{vendors.map((vendor) => <option key={vendor} value={vendor}>{vendor}</option>)}</select></label><FieldError id="vendor-error" message={errors.vendor?.message} />
-      <label>Endpoint<span aria-hidden="true"> *</span><input aria-required="true" inputMode="url" placeholder="https://nvr.example.gov" {...register('endpoint')} {...validationProps('endpoint')} /></label><FieldError id="endpoint-error" message={errors.endpoint?.message} />
-      <label>Credential reference<span aria-hidden="true"> *</span><input aria-required="true" autoComplete="off" {...register('credentialReference')} {...validationProps('credentialReference')} /></label><FieldError id="credentialReference-error" message={errors.credentialReference?.message} />
+      <legend>Connection configuration <span className="legend-note">* Required fields</span></legend>
+      <label>
+        <span className="form-label-title">Vendor <span className="required-indicator" aria-hidden="true">*</span></span>
+        <select aria-required="true" {...register('vendor')} {...validationProps('vendor')}>
+          <option value="">Select a vendor adapter</option>
+          {vendors.map((vendor) => <option key={vendor} value={vendor}>{vendor}</option>)}
+        </select>
+        <FieldError id="vendor-error" message={errors.vendor?.message} />
+      </label>
+      <label>
+        <span className="form-label-title">Endpoint <span className="required-indicator" aria-hidden="true">*</span></span>
+        <input aria-required="true" inputMode="url" placeholder="https://nvr.example.gov" {...register('endpoint')} {...validationProps('endpoint')} />
+        <FieldError id="endpoint-error" message={errors.endpoint?.message} />
+      </label>
+      <label>
+        <span className="form-label-title">Credential reference <span className="required-indicator" aria-hidden="true">*</span></span>
+        <input aria-required="true" autoComplete="off" {...register('credentialReference')} {...validationProps('credentialReference')} />
+        <FieldError id="credentialReference-error" message={errors.credentialReference?.message} />
+      </label>
       <p className="field-help">This is a non-secret storage reference. Enter the device password or token only after the VMS is registered.</p>
-      <label className="checkbox-label"><input type="checkbox" {...register('verifyTls')} /> Verify TLS certificate</label>
+      <label className="checkbox-label">
+        <input type="checkbox" {...register('verifyTls')} />
+        <span>Verify TLS certificate</span>
+      </label>
     </fieldset>
     <button aria-controls="vms-connection-tuning" aria-expanded={tuningOpen} className="button button--secondary" type="button" onClick={() => setTuningOpen((open) => !open)}>Connection tuning</button>
     {tuningOpen && <fieldset id="vms-connection-tuning">
       <legend>Optional connection tuning</legend>
-      <label>Runtime class<select {...register('runtimeClass')}><option value="">Use server default</option>{runtimeClasses.map((runtimeClass) => <option key={runtimeClass} value={runtimeClass}>{runtimeClass}</option>)}</select></label>
-      <label>Rate limit per second<input inputMode="decimal" type="number" min="0" step="any" {...register('rateLimitPerSecond')} {...validationProps('rateLimitPerSecond')} /></label><FieldError id="rateLimitPerSecond-error" message={errors.rateLimitPerSecond?.message} />
-      <label>Rate limit burst<input inputMode="numeric" type="number" min="1" step="1" {...register('rateLimitBurst')} {...validationProps('rateLimitBurst')} /></label><FieldError id="rateLimitBurst-error" message={errors.rateLimitBurst?.message} />
-      <label>Inventory poll seconds<input inputMode="numeric" type="number" min="30" step="1" {...register('inventoryPollSeconds')} {...validationProps('inventoryPollSeconds')} /></label><FieldError id="inventoryPollSeconds-error" message={errors.inventoryPollSeconds?.message} />
-      <label>Status poll seconds<input inputMode="numeric" type="number" min="5" step="1" {...register('statusPollSeconds')} {...validationProps('statusPollSeconds')} /></label><FieldError id="statusPollSeconds-error" message={errors.statusPollSeconds?.message} />
-      <label>Event poll seconds<input inputMode="numeric" type="number" min="1" step="1" {...register('eventPollSeconds')} {...validationProps('eventPollSeconds')} /></label><FieldError id="eventPollSeconds-error" message={errors.eventPollSeconds?.message} />
-      <label>Maximum concurrent requests<input inputMode="numeric" type="number" min="1" step="1" {...register('maxConcurrentRequests')} {...validationProps('maxConcurrentRequests')} /></label><FieldError id="maxConcurrentRequests-error" message={errors.maxConcurrentRequests?.message} />
-      <label>Expected camera count<input inputMode="numeric" type="number" min="0" step="1" {...register('expectedCameraCount')} {...validationProps('expectedCameraCount')} /></label><FieldError id="expectedCameraCount-error" message={errors.expectedCameraCount?.message} />
+      <label>
+        <span className="form-label-title">Runtime class</span>
+        <select {...register('runtimeClass')}>
+          <option value="">Use server default</option>
+          {runtimeClasses.map((runtimeClass) => <option key={runtimeClass} value={runtimeClass}>{runtimeClass}</option>)}
+        </select>
+      </label>
+      <label>
+        <span className="form-label-title">Rate limit per second</span>
+        <input inputMode="decimal" type="number" min="0" step="any" {...register('rateLimitPerSecond')} {...validationProps('rateLimitPerSecond')} />
+        <FieldError id="rateLimitPerSecond-error" message={errors.rateLimitPerSecond?.message} />
+      </label>
+      <label>
+        <span className="form-label-title">Rate limit burst</span>
+        <input inputMode="numeric" type="number" min="1" step="1" {...register('rateLimitBurst')} {...validationProps('rateLimitBurst')} />
+        <FieldError id="rateLimitBurst-error" message={errors.rateLimitBurst?.message} />
+      </label>
+      <label>
+        <span className="form-label-title">Inventory poll seconds</span>
+        <input inputMode="numeric" type="number" min="30" step="1" {...register('inventoryPollSeconds')} {...validationProps('inventoryPollSeconds')} />
+        <FieldError id="inventoryPollSeconds-error" message={errors.inventoryPollSeconds?.message} />
+      </label>
+      <label>
+        <span className="form-label-title">Status poll seconds</span>
+        <input inputMode="numeric" type="number" min="5" step="1" {...register('statusPollSeconds')} {...validationProps('statusPollSeconds')} />
+        <FieldError id="statusPollSeconds-error" message={errors.statusPollSeconds?.message} />
+      </label>
+      <label>
+        <span className="form-label-title">Event poll seconds</span>
+        <input inputMode="numeric" type="number" min="1" step="1" {...register('eventPollSeconds')} {...validationProps('eventPollSeconds')} />
+        <FieldError id="eventPollSeconds-error" message={errors.eventPollSeconds?.message} />
+      </label>
+      <label>
+        <span className="form-label-title">Maximum concurrent requests</span>
+        <input inputMode="numeric" type="number" min="1" step="1" {...register('maxConcurrentRequests')} {...validationProps('maxConcurrentRequests')} />
+        <FieldError id="maxConcurrentRequests-error" message={errors.maxConcurrentRequests?.message} />
+      </label>
+      <label>
+        <span className="form-label-title">Expected camera count</span>
+        <input inputMode="numeric" type="number" min="0" step="1" {...register('expectedCameraCount')} {...validationProps('expectedCameraCount')} />
+        <FieldError id="expectedCameraCount-error" message={errors.expectedCameraCount?.message} />
+      </label>
     </fieldset>}
     <FieldError id="vms-form-error" message={errors.root?.message} />
     <Button disabled={isSubmitting} type="submit">{isSubmitting ? 'Registering VMS…' : 'Register VMS'}</Button>

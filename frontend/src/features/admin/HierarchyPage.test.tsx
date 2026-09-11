@@ -49,6 +49,10 @@ function hierarchyFetch(options: { areaConflict?: boolean } = {}) {
   let deactivationAttempts = 0;
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input));
+    if (url.pathname === '/api/v1/organizations' && init?.method === 'PUT') return Response.json(organizations[0]);
+    if (url.pathname === `/api/v1/organizations/${organizationId}` && init?.method === 'PUT') return Response.json(organizations[0]);
+    if (url.pathname === `/api/v1/organization-units/${unitId}` && init?.method === 'PUT') return Response.json(units[0]);
+    if (url.pathname === `/api/v1/geographic-areas/${areaId}` && init?.method === 'PUT') return Response.json(areas[0]);
     if (url.pathname === '/api/v1/organizations') return Response.json(organizations);
     if (url.pathname === `/api/v1/organizations/${organizationId}/units`) return Response.json(units);
     if (url.pathname === '/api/v1/geographic-areas/types') return Response.json([{ code: 'ZONE', name: 'Zone', levelOrder: 1 }]);
@@ -165,5 +169,59 @@ describe('HierarchyPage supported creation', () => {
     expect(await within(unitForm).findByRole('option', { name: /state police/i })).toHaveValue(organizationId);
     const siteForm = screen.getByRole('form', { name: /create site/i });
     expect(await within(siteForm).findByRole('option', { name: /north zone/i })).toHaveValue(areaId);
+  });
+});
+
+describe('HierarchyPage editing and tree navigation', () => {
+  it('allows editing an organization for organization.manage users', async () => {
+    const fetch = hierarchyFetch();
+    vi.stubGlobal('fetch', fetch);
+    const user = userEvent.setup();
+    renderHierarchy(['organization.read', 'organization.manage']);
+
+    const editOrgBtn = await screen.findByRole('button', { name: /edit organization/i });
+    await user.click(editOrgBtn);
+
+    const editForm = await screen.findByRole('form', { name: /edit organization/i });
+    expect(within(editForm).getByLabelText(/^name$/i)).toHaveValue('State Police');
+
+    await user.clear(within(editForm).getByLabelText(/^name$/i));
+    await user.type(within(editForm).getByLabelText(/^name$/i), 'Gujarat Police');
+    await user.click(within(editForm).getByRole('button', { name: /save changes/i }));
+
+    await waitFor(() => {
+      const putCalls = fetch.mock.calls.filter(([input, init]) => (
+        String(input).includes(`/organizations/${organizationId}`) && (init as RequestInit | undefined)?.method === 'PUT'
+      ));
+      expect(putCalls.length).toBeGreaterThan(0);
+      const sent = JSON.parse(String((putCalls[0][1] as RequestInit).body));
+      expect(sent.name).toBe('Gujarat Police');
+    });
+  });
+
+  it('allows editing an organization unit for organization.manage users', async () => {
+    const fetch = hierarchyFetch();
+    vi.stubGlobal('fetch', fetch);
+    const user = userEvent.setup();
+    renderHierarchy(['organization.read', 'organization.manage']);
+
+    const editUnitBtn = await screen.findByRole('button', { name: /edit unit/i });
+    await user.click(editUnitBtn);
+
+    const editForm = await screen.findByRole('form', { name: /edit unit headquarters/i });
+    expect(within(editForm).getByLabelText(/^name$/i)).toHaveValue('Headquarters');
+
+    await user.clear(within(editForm).getByLabelText(/^name$/i));
+    await user.type(within(editForm).getByLabelText(/^name$/i), 'Main HQ');
+    await user.click(within(editForm).getByRole('button', { name: /save changes/i }));
+
+    await waitFor(() => {
+      const putCalls = fetch.mock.calls.filter(([input, init]) => (
+        String(input).includes(`/organization-units/${unitId}`) && (init as RequestInit | undefined)?.method === 'PUT'
+      ));
+      expect(putCalls.length).toBeGreaterThan(0);
+      const sent = JSON.parse(String((putCalls[0][1] as RequestInit).body));
+      expect(sent.name).toBe('Main HQ');
+    });
   });
 });
