@@ -17,6 +17,14 @@ public sealed class RequiredPermissionMetadata
     public string Permission { get; }
 }
 
+/// <summary>Marks a route reachable even while the caller's <c>mustChangePassword</c> is set.</summary>
+public sealed class AllowWhileMustChangePasswordMetadata
+{
+    public AllowWhileMustChangePasswordMetadata(string why) => Why = why;
+
+    public string Why { get; }
+}
+
 public static partial class PermissionEndpoints
 {
     /// <summary>
@@ -72,6 +80,20 @@ public static partial class PermissionEndpoints
     {
         ArgumentNullException.ThrowIfNull(builder);
         builder.WithMetadata(new RequiredPermissionMetadata($"(any authenticated: {why})"));
+        return builder;
+    }
+
+    /// <summary>
+    /// Exempts a route from the must-change-password gate (finding 4-M1 / 5-L5): a user flagged
+    /// <c>mustChangePassword</c> is otherwise refused every authenticated endpoint until they
+    /// change it, and the routes that let them do exactly that — and step out again — would
+    /// otherwise lock themselves out.
+    /// </summary>
+    public static TBuilder AllowWhileMustChangePassword<TBuilder>(this TBuilder builder, string why)
+        where TBuilder : IEndpointConventionBuilder
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        builder.WithMetadata(new AllowWhileMustChangePasswordMetadata(why));
         return builder;
     }
 

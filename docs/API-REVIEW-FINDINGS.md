@@ -214,8 +214,8 @@ validation, `9-M1` VerifyTls non-nullable (TLS downgrade), `9-M2` org/site ACTIV
 `6-M1` geography asymmetry in group scope add/remove, `5-M1` org read perm mismatch
 (`geography.read` vs `organization.read`) ✅ PR6.
 
-**OTHER MEDIUM (`4-M1` re-flagged HIGH 2026-09-11 — see below):**
-`4-M1` must-change-password advisory only, `4-M3` login rate-limit per-IP only, `4-M5` email
+**OTHER MEDIUM (`4-M1` ✅ PR12, was re-flagged HIGH 2026-09-11):**
+`4-M3` login rate-limit per-IP only, `4-M5` email
 unvalidated/non-unique (blocks F2/F3), `4-M6` no breached-password screen, `4-M7` CORS, `4-M8`
 bootstrap password lingers, `6-M4` lockout-guard TOCTOU, `6-M5` email, `8-M1` no key max
 lifetime, `8-M2` no key rotation endpoint, `10-M4` bulk import 500 sync txns, `10-M5` bulk audit,
@@ -353,6 +353,45 @@ ResolveCamera pre-scope, `17-M1` heartbeat spoofable, `17-M2` client-supplied la
   is a hard **startup** dependency, not just an ingest-time one; (3) 5-L5/4-M1 re-flagged HIGH
   (see above) rather than left implicitly low-priority.
 
+**PR12 — must-change-password enforcement (branch `pr12-must-change-password`, uncommitted
+2026-09-11):**
+- **4-M1 / 5-L5** ✅ — `mustChangePassword` was minted onto the token
+  (`TrinetraClaims.MustChangePassword`) and read back by `CallerContextFactory.MustChangePassword`,
+  but nothing ever called it: a flagged account authenticated normally against every endpoint.
+  New `ApiMiddlewareExtensions.EnforceMustChangePasswordAsync` runs after `UseAuthorization` and
+  refuses every authenticated route with `403 "Password change required"` while the flag is set.
+  Two routes opt out via a new `PermissionEndpoints.AllowWhileMustChangePassword(why)` metadata
+  marker (parallel to the existing `AllowAnyAuthenticated`): `POST /auth/password` (the route
+  that clears the flag) and `POST /auth/logout` (so a flagged user can still back out). Runs
+  after `UseAuthorization`, not before, so a caller who fails auth outright still gets that more
+  specific reason; `RequirePermission`'s own check is a later endpoint filter, not part of
+  `UseAuthorization`, so a caller who is both flagged and lacking the route's permission gets
+  "password change required" first — the right order, rotating the password before anything
+  leaks about what the route would have needed.
+  API-key callers never carry the claim (only user JWTs do), so this has no effect on them.
+- Accepted gap, same posture as `OnTokenValidated` (documented in `TokenRevocationTests`): the
+  end-to-end pipeline wiring (endpoint metadata → `403`) has no `WebApplicationFactory` test —
+  this suite deliberately hasn't taken one on. `MustChangePasswordEnforcementTests` (3, unit)
+  covers the claim-reading predicate directly instead; sabotage-checked.
+- Docs: `docs/AUTHORIZATION.md` "Auth hardening (PR7)" note updated (4-M1 moved out of "still
+  deferred"); `docs/API-CHANGES-FOR-REGISTRY-UI.md` new §1.1a — this is a **frontend-breaking**
+  behavior change (every authenticated route now 403s for a flagged account, not just an
+  advisory flag on login) and needs its own entry, not folded into the P3/hardening notes above.
+- Build clean; 139 unit / 256 integration + 18 pre-existing (unchanged baseline).
+- **BA + dotnet-expert reviewed PR12, 2026-09-11. No blockers from either.** dotnet-expert:
+  middleware ordering, `IAuthorizeData` detection, and every auth-path exclusion (API keys,
+  `/auth/token`, `/auth/login`, `/auth/refresh`) verified correct by reading code, not inferred;
+  confirmed the `WebApplicationFactory` gap matches `TokenRevocationTests`' existing precedent
+  exactly, not a new one; flagged the pipeline-ordering doc comment as overstating what running
+  after `UseAuthorization` buys relative to `RequirePermission` — fixed (see above). BA: confirmed
+  the two exemptions are the right and only ones needed; flagged one open question for the
+  frontend team rather than a code change — **does the change-password screen need an
+  authenticated `GET /users/{id}` (self) to render, e.g. to prefill a username?** If so, that
+  route needs its own `AllowWhileMustChangePassword` exemption; if the login/refresh response
+  already carries everything the screen needs, no change is required. Left open pending
+  `d/registry-ui` confirmation — not blocking, since today the flow is only reachable through the
+  login response's own `mustChangePassword` field either way.
+
 ### Scope additions (agreed)
 
 - Guarded DELETE for sites/units/areas/orgs (`5-L3`) — reference-checked, 409 + blocker list.
@@ -398,6 +437,7 @@ rule does not bite — still prefer new `v1.7+` files over editing `v1.sql`. Bra
 | PR9  | **Pagination wave** (P2) | — |
 | PR10 | **Validation / error-shape wave** (P2) — ✅ done (5-M9, 5-M10, 6-M2, 10-M3, 9-M4, 9-NEW-L ×2; 5-M2 / 16-M1 already covered by the global constraint handler; 6-M3 deferred) | `DeactivationResult` in Storage |
 | PR11 | **P3 sweep** incl. F1 | — |
+| PR12 | **Must-change-password enforcement**: 4-M1 / 5-L5 — ✅ implemented, BA/dotnet-expert review pending, 3 unit tests | — (code-only) |
 | F7   | separate feature branch, **after** the design decision | approval tables |
 
 Status: **not started.**
@@ -829,8 +869,8 @@ Desktop).
   Own audit row. Deactivate stays the normal path.
 - **5-L4** `ListAreasAsync` with `rootsOnly=true` AND `parentId=x` → `parent IS NULL AND
   parent=@x` → always empty. Reject combo with 400.
-- **5-L5** None of these mutation endpoints check `MustChangePassword` — confirm it's enforced by
-  global middleware (ties to 4-M1).
+- **5-L5** ✅ PR12 — global middleware now enforces `MustChangePassword` (ties to 4-M1); see the
+  PR12 block above.
 - **5-L6** style: create handlers call `caller.Require("*.manage")` — dead given
   `.RequirePermission` filter + repo check; list handlers don't (inconsistent). `GetAncestorsAsync`
   opens two pool connections per request.

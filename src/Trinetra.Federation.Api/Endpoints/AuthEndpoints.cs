@@ -77,6 +77,7 @@ public static class AuthEndpoints
 
         group.MapPost("/logout", LogoutAsync).RequireAuthorization()
              .AllowAnyAuthenticated("a user must always be able to end their own session")
+             .AllowWhileMustChangePassword("ending the session is how a flagged user backs out")
              .WithSummary("End your session on every device")
              .WithDescription(
                  "Revokes all of the calling user's refresh tokens and invalidates every access "
@@ -87,6 +88,7 @@ public static class AuthEndpoints
 
         group.MapPost("/password", ChangePasswordAsync).RequireAuthorization()
             .AllowAnyAuthenticated("a user must always be able to rotate their own password")
+            .AllowWhileMustChangePassword("this is the one route that clears the flag")
             .WithSummary("Change your own password")
             .WithDescription(
                 "Rotates the calling user's own password — never anyone else's; an administrator "

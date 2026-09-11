@@ -28,6 +28,23 @@ The frontend client of record is `frontend/src/api/endpoints.ts` + `frontend/src
 - Frontend work: `frontend/src/auth/` token store + the `request()` wrapper's 401 handling.
 - **Docs:** OpenAPI on all four routes; `docs/AUTHORIZATION.md` §1 (Principals).
 
+### 1.1a `mustChangePassword` is now enforced, not just advisory (`PR12`)
+
+`AuthTokenResponse.mustChangePassword` was already returned by `/auth/login` — the frontend just
+wasn't required to act on it, since the API accepted every other request regardless. That is no
+longer true: while it is `true`, **every authenticated route except `POST /auth/password` and
+`POST /auth/logout` now returns `403` with `title: "Password change required"`**, until the user
+successfully calls `POST /auth/password`.
+
+- Check `mustChangePassword` on every login response (and on the response to `/auth/refresh`,
+  which re-resolves it) and route straight to the change-password screen before anything else —
+  do not let the app proceed to a normal view and let the first real request come back `403`.
+- The `request()` wrapper's error handling should treat this `403` shape distinctly from a
+  permission-denied `403` (`title` differs: `"Password change required"` vs `"Forbidden"`), so a
+  flagged user is routed to the right screen instead of a generic "not allowed" error.
+- **Docs:** `docs/AUTHORIZATION.md` §"Auth hardening (PR7)" note; OpenAPI has no new route —
+  this changes the response of every *other* authenticated route while the flag is set.
+
 ### 1.2 `sites` are removed
 
 The `sites` table and every `/api/v1/sites` route are gone. A camera / VMS target / event
