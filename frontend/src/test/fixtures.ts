@@ -12,7 +12,7 @@ export function sessionFixture(subject = 'reviewer', permissions: string[] | str
 export function cameraFixture(overrides: Partial<CameraResponse> = {}): CameraResponse {
   return {
     id: 'c0a80101-0000-4000-8000-000000000001', cameraCode: 'CAM-001', name: 'North Gate',
-    organizationUnitId: 'c0a80101-0000-4000-8000-000000000010', siteId: 'c0a80101-0000-4000-8000-000000000020',
+    organizationUnitId: 'c0a80101-0000-4000-8000-000000000010', geographicAreaId: 'c0a80101-0000-4000-8000-000000000020',
     cameraType: 'FIXED', latitude: 12.9716, longitude: 77.5946,
     manufacturer: null, model: null, serialNumber: null, altitude: null, mountingHeight: null,
     azimuth: null, tilt: null, horizontalFov: null, verticalFov: null, effectiveRange: null,

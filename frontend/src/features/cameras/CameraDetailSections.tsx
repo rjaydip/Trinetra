@@ -27,7 +27,7 @@ export function CameraDetailSections({ camera }: { camera: CameraResponse }) {
           <div><dt>Camera code</dt><dd>{camera.cameraCode}</dd></div>
           <div><dt>Camera ID</dt><dd>{camera.id}</dd></div>
           <div><dt>Organization unit ID</dt><dd>{camera.organizationUnitId}</dd></div>
-          <div><dt>Site ID</dt><dd>{camera.siteId}</dd></div>
+          <div><dt>Geographic area ID</dt><dd>{camera.geographicAreaId}</dd></div>
           <div><dt>Type</dt><dd>{camera.cameraType}</dd></div>
           <div><dt>Coordinates</dt><dd>{camera.latitude}, {camera.longitude}</dd></div>
           <div><dt>Manufacturer</dt><dd>{camera.manufacturer ?? 'Not recorded'}</dd></div>

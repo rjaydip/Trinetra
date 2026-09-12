@@ -29,7 +29,7 @@ export interface CameraWriteRequest {
   cameraCode: string;
   name: string;
   organizationUnitId: string;
-  siteId: string;
+  geographicAreaId: string;
   cameraType: string;
   latitude: number;
   longitude: number;
@@ -63,7 +63,7 @@ export interface CameraPatchRequest {
   serialNumber?: string | null;
   cameraType?: string;
   organizationUnitId?: string;
-  siteId?: string;
+  geographicAreaId?: string;
   latitude?: number;
   longitude?: number;
   altitude?: number | null;
@@ -106,7 +106,6 @@ export interface CameraListQuery {
   cursor?: string;
   includeRetired?: boolean;
   organizationUnitId?: string;
-  siteId?: string;
   geographicAreaId?: string;
   cameraType?: string;
   operationalStatus?: string;
@@ -278,34 +277,11 @@ export interface AreaTypeResponse {
   levelOrder: number;
 }
 
-export interface SiteRequest {
-  code: string;
-  name: string;
-  geographicAreaId: string;
-  siteType?: string | null;
-  address?: string | null;
-  latitude?: number | null;
-  longitude?: number | null;
-  status?: string | null;
-}
-
-export interface SiteResponse {
-  id: string;
-  code: string;
-  name: string;
-  geographicAreaId: string;
-  siteType: string | null;
-  address: string | null;
-  latitude: number | null;
-  longitude: number | null;
-  status: string;
-}
-
 export interface VmsResponse {
   id: string;
   code: string;
   organizationUnitId: string;
-  siteId: string | null;
+  geographicAreaId: string | null;
   displayName: string;
   vendor: string;
   runtimeClass: string;
@@ -323,7 +299,7 @@ export interface ConnectorTargetRequest {
   vendor: string;
   endpoint: string;
   credentialReference: string;
-  siteId?: string | null;
+  geographicAreaId?: string | null;
   verifyTls?: boolean;
   runtimeClass?: string | null;
   rateLimitPerSecond?: number | null;

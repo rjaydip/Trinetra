@@ -14,18 +14,18 @@ import { DiscoveryPage } from './DiscoveryPage';
 
 const organizationId = '11111111-1111-4111-8111-111111111111';
 const organizationUnitId = '22222222-2222-4222-8222-222222222222';
-const siteId = '33333333-3333-4333-8333-333333333333';
+const areaId = '33333333-3333-4333-8333-333333333333';
 const vmsId = '44444444-4444-4444-8444-444444444444';
 const secondVmsId = '77777777-7777-4777-8777-777777777777';
 
 const organization = { id: organizationId, code: 'OPS', name: 'Operations', organizationType: 'PUBLIC', description: null, status: 'ACTIVE' };
 const organizationUnit = { id: organizationUnitId, organizationId, parentUnitId: null, code: 'NORTH', name: 'North Unit', unitType: 'REGION', status: 'ACTIVE' };
-const site = { id: siteId, code: 'HQ', name: 'Headquarters', geographicAreaId: '55555555-5555-4555-8555-555555555555', siteType: 'OFFICE', address: null, latitude: null, longitude: null, status: 'ACTIVE' };
+const area = { id: areaId, parentAreaId: null, code: 'HQ', name: 'Headquarters', areaType: 'DISTRICT', status: 'ACTIVE' };
 const vms = {
   id: vmsId,
   code: 'NVR-001',
   organizationUnitId,
-  siteId,
+  geographicAreaId: areaId,
   displayName: 'North NVR',
   vendor: 'DahuaCgi',
   runtimeClass: 'Managed',
@@ -54,7 +54,7 @@ function apiHandler(requests: Array<{ path: string; method: string; body?: unkno
   created: 0,
   updated: 0,
   failed: 1,
-  rows: [{ index: 0, cameraCode: 'NVR-001-CAM-07', status: 'error', cameraId: null, error: 'Site is outside your authorized scope.' }],
+  rows: [{ index: 0, cameraCode: 'NVR-001-CAM-07', status: 'error', cameraId: null, error: 'Geographic area is outside your authorized scope.' }],
 }, bulkStatus = 200, target = vms, discoveredCameras = cameras) {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input));
@@ -64,7 +64,7 @@ function apiHandler(requests: Array<{ path: string; method: string; body?: unkno
     if (url.pathname === `/api/v1/vms/${vmsId}/cameras`) return Response.json(discoveredCameras);
     if (url.pathname === '/api/v1/organizations') return Response.json([organization]);
     if (url.pathname === `/api/v1/organizations/${organizationId}/units`) return Response.json([organizationUnit]);
-    if (url.pathname === '/api/v1/sites') return Response.json([site]);
+    if (url.pathname === '/api/v1/geographic-areas') return Response.json([area]);
     if (url.pathname === '/api/v1/gis/cameras') return Response.json({ type: 'FeatureCollection', features: [] });
     if (url.pathname === '/api/v1/cameras/bulk-import' && method === 'POST') return Response.json(result, { status: bulkStatus });
     return new Response(null, { status: 404 });
@@ -94,7 +94,7 @@ function DiscoveryRouteSwitcher() {
 async function completeGate7(user: ReturnType<typeof userEvent.setup>) {
   await user.selectOptions(screen.getByLabelText(/^organization for gate 7$/i), organizationId);
   await user.selectOptions(await screen.findByLabelText(/^organization unit for gate 7$/i), organizationUnitId);
-  await user.selectOptions(screen.getByLabelText(/^site for gate 7$/i), siteId);
+  await user.selectOptions(screen.getByLabelText(/^geographic area for gate 7$/i), areaId);
   await user.selectOptions(screen.getByLabelText(/^camera type for gate 7$/i), 'FIXED');
   await user.type(screen.getByLabelText(/^latitude for gate 7$/i), '19.076012345');
   await user.type(screen.getByLabelText(/^longitude for gate 7$/i), '72.877700049');
@@ -170,7 +170,7 @@ describe('DiscoveryPage', () => {
         cameraCode: 'NVR-001-CAM-07',
         name: 'Gate 7',
         organizationUnitId,
-        siteId,
+        geographicAreaId: areaId,
         cameraType: 'FIXED',
         latitude: 19.0760123,
         longitude: 72.8777,
@@ -183,7 +183,7 @@ describe('DiscoveryPage', () => {
 
     const result = await screen.findByRole('region', { name: /import results/i });
     expect(within(result).getByText('Created: 0. Updated: 0. Failed: 1.')).toBeVisible();
-    expect(within(result).getByText('Site is outside your authorized scope.')).toBeVisible();
+    expect(within(result).getByText('Geographic area is outside your authorized scope.')).toBeVisible();
   });
 
   it('renders a request-level API problem without losing the selected row', async () => {
@@ -289,7 +289,7 @@ describe('DiscoveryPage', () => {
       if (path === `/api/v1/vms/${secondVmsId}`) return Response.json(secondVms);
       if (path === `/api/v1/vms/${vmsId}/cameras` || path === `/api/v1/vms/${secondVmsId}/cameras`) return Response.json(cameras);
       if (path === '/api/v1/organizations') return Response.json([organization]);
-      if (path === '/api/v1/sites') return Response.json([site]);
+      if (path === '/api/v1/geographic-areas') return Response.json([area]);
       return new Response(null, { status: 404 });
     }));
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });

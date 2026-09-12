@@ -8,9 +8,9 @@ import type {
   BulkImportResult,
   FederatedCameraResponse,
   GeoJsonFeatureCollection,
+  GeographicAreaResponse,
   OrganizationResponse,
   OrganizationUnitResponse,
-  SiteResponse,
 } from '../../api/models';
 import { Button, PageState, StatusBadge } from '../../components/ui';
 import { LocationPicker } from '../cameras/LocationPicker';
@@ -58,9 +58,9 @@ interface DiscoveryRowProps {
   enrichment: DiscoveredCameraEnrichment;
   organizationId: string;
   organizations: OrganizationResponse[];
-  sites: SiteResponse[];
+  geographicAreas: GeographicAreaResponse[];
   organizationsReady: boolean;
-  sitesReady: boolean;
+  geographicAreasReady: boolean;
   selected: boolean;
   expanded: boolean;
   errors: DiscoveryEnrichmentErrors;
@@ -75,9 +75,9 @@ function DiscoveryRow({
   enrichment,
   organizationId,
   organizations,
-  sites,
+  geographicAreas,
   organizationsReady,
-  sitesReady,
+  geographicAreasReady,
   selected,
   expanded,
   errors,
@@ -134,7 +134,7 @@ function DiscoveryRow({
           <label>{label('Organization')}<select disabled={!organizationsReady} value={organizationId} onChange={(event) => onOrganizationChange(event.target.value)}><option value="">Select an organization</option>{organizations.map((organization) => <option key={organization.id} value={organization.id}>{organization.name} ({organization.code})</option>)}</select></label>
           <label>{label('Organization unit')}<select aria-required="true" disabled={!organizationId || organizationUnits.isPending || organizationUnits.isError} value={enrichment.organizationUnitId} onChange={(event) => update('organizationUnitId', event.target.value)} {...errorProps('organizationUnitId')}><option value="">Select an organization unit</option>{(organizationUnits.data ?? []).map((unit: OrganizationUnitResponse) => <option key={unit.id} value={unit.id}>{unit.name} ({unit.code})</option>)}</select></label><FieldError id={`${row.nativeCameraId}-organizationUnitId-error`} message={errors.organizationUnitId} />
           {organizationUnits.isError && <ReferenceError retry={() => { void organizationUnits.refetch(); }}>{errorDetail(organizationUnits.error, 'Organization units could not be loaded. Please try again.')}</ReferenceError>}
-          <label>{label('Site')}<select aria-required="true" disabled={!sitesReady} value={enrichment.siteId} onChange={(event) => update('siteId', event.target.value)} {...errorProps('siteId')}><option value="">Select a site</option>{sites.map((site) => <option key={site.id} value={site.id}>{site.name} ({site.code})</option>)}</select></label><FieldError id={`${row.nativeCameraId}-siteId-error`} message={errors.siteId} />
+          <label>{label('Geographic area')}<select aria-required="true" disabled={!geographicAreasReady} value={enrichment.geographicAreaId} onChange={(event) => update('geographicAreaId', event.target.value)} {...errorProps('geographicAreaId')}><option value="">Select a geographic area</option>{geographicAreas.map((area) => <option key={area.id} value={area.id}>{area.name} ({area.code})</option>)}</select></label><FieldError id={`${row.nativeCameraId}-geographicAreaId-error`} message={errors.geographicAreaId} />
           <label>{label('Camera type')}<select aria-required="true" value={enrichment.cameraType} onChange={(event) => update('cameraType', event.target.value)} {...errorProps('cameraType')}><option value="">Select a camera type</option>{cameraTypes.map((type) => <option key={type} value={type}>{type}</option>)}</select></label><FieldError id={`${row.nativeCameraId}-cameraType-error`} message={errors.cameraType} />
           <label>{label('Latitude')}<input aria-required="true" inputMode="decimal" value={enrichment.latitude} onChange={(event) => update('latitude', event.target.value)} {...errorProps('latitude')} /></label><FieldError id={`${row.nativeCameraId}-latitude-error`} message={errors.latitude} />
           <label>{label('Longitude')}<input aria-required="true" inputMode="decimal" value={enrichment.longitude} onChange={(event) => update('longitude', event.target.value)} {...errorProps('longitude')} /></label><FieldError id={`${row.nativeCameraId}-longitude-error`} message={errors.longitude} />
@@ -174,7 +174,7 @@ function DiscoveryWorkspace({ vmsId }: { vmsId: string }) {
   const target = useQuery({ queryKey: ['vms', vmsId], queryFn: () => api.vms.get(vmsId), enabled: Boolean(vmsId) });
   const cameras = useQuery({ queryKey: ['vms', vmsId, 'discovered-cameras'], queryFn: () => api.vms.discoveredCameras(vmsId), enabled: Boolean(vmsId) });
   const organizations = useQuery({ queryKey: ['reference', 'organizations'], queryFn: api.reference.organizations });
-  const sites = useQuery({ queryKey: ['reference', 'sites'], queryFn: () => api.reference.sites() });
+  const geographicAreas = useQuery({ queryKey: ['reference', 'geographic-areas'], queryFn: () => api.reference.geographicAreas() });
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [enrichments, setEnrichments] = useState<Record<string, DiscoveredCameraEnrichment>>({});
@@ -201,7 +201,7 @@ function DiscoveryWorkspace({ vmsId }: { vmsId: string }) {
   if (cameras.isError) return <><PageState title="Couldn’t load discovered cameras">{errorDetail(cameras.error, 'The discovered camera inventory could not be loaded.')}</PageState><button className="button" type="button" onClick={() => cameras.refetch()}>Try again</button></>;
 
   const organizationsReady = !organizations.isPending && !organizations.isError && Boolean(organizations.data?.length);
-  const sitesReady = !sites.isPending && !sites.isError && Boolean(sites.data?.length);
+  const geographicAreasReady = !geographicAreas.isPending && !geographicAreas.isError && Boolean(geographicAreas.data?.length);
   const enrichmentFor = (row: FederatedCameraResponse) => enrichments[row.nativeCameraId]
     ?? createDiscoveredCameraEnrichment(row, target.data.id, target.data.code);
   const updateEnrichment = (row: FederatedCameraResponse, patch: Partial<DiscoveredCameraEnrichment>) => {
@@ -265,7 +265,7 @@ function DiscoveryWorkspace({ vmsId }: { vmsId: string }) {
     <Link className="back-link" to={`/vms/${target.data.id}`}>Back to {target.data.displayName}</Link>
     <header><p className="eyebrow">VMS discovery</p><h1 id="discovery-page-title">Import cameras from {target.data.displayName}</h1><p>Select cameras and add the registry placement needed to import them. VMS facts remain read-only.</p></header>
     {organizations.isError && <ReferenceError retry={() => { void organizations.refetch(); }}>{errorDetail(organizations.error, 'Organizations could not be loaded. Please try again.')}</ReferenceError>}
-    {sites.isError && <ReferenceError retry={() => { void sites.refetch(); }}>{errorDetail(sites.error, 'Sites could not be loaded. Please try again.')}</ReferenceError>}
+    {geographicAreas.isError && <ReferenceError retry={() => { void geographicAreas.refetch(); }}>{errorDetail(geographicAreas.error, 'Geographic areas could not be loaded. Please try again.')}</ReferenceError>}
     {cameras.data.length === 0 ? <PageState title="No discovered cameras">This VMS has not reported any cameras yet.</PageState> : <form className="discovery-form" onSubmit={(event) => { void submit(event); }}>
       <label className="checkbox-label"><input
         aria-label="Select all importable cameras"
@@ -288,9 +288,9 @@ function DiscoveryWorkspace({ vmsId }: { vmsId: string }) {
         enrichment={enrichmentFor(row)}
         organizationId={organizationIds[row.nativeCameraId] ?? ''}
         organizations={organizations.data ?? []}
-        sites={sites.data ?? []}
+        geographicAreas={geographicAreas.data ?? []}
         organizationsReady={organizationsReady}
-        sitesReady={sitesReady}
+        geographicAreasReady={geographicAreasReady}
         selected={selected.has(row.nativeCameraId)}
         expanded={expanded.has(row.nativeCameraId)}
         errors={errors[row.nativeCameraId] ?? {}}

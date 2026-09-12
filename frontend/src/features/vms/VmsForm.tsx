@@ -4,7 +4,7 @@ import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 
 import { isApiProblem } from '../../api/client';
-import type { ConnectorTargetRequest, OrganizationResponse, OrganizationUnitResponse, SiteResponse } from '../../api/models';
+import type { ConnectorTargetRequest, GeographicAreaResponse, OrganizationResponse, OrganizationUnitResponse } from '../../api/models';
 import { Button } from '../../components/ui';
 import type { SelectorState } from '../cameras/CameraForm';
 
@@ -17,7 +17,7 @@ interface VmsFormValues {
   code: string;
   organizationId: string;
   organizationUnitId: string;
-  siteId: string;
+  geographicAreaId: string;
   displayName: string;
   vendor: '' | typeof vendors[number];
   endpoint: string;
@@ -37,7 +37,7 @@ const defaults: VmsFormValues = {
   code: '',
   organizationId: '',
   organizationUnitId: '',
-  siteId: '',
+  geographicAreaId: '',
   displayName: '',
   vendor: '',
   endpoint: '',
@@ -78,7 +78,7 @@ const vmsFormSchema = z.object({
   code: requiredText('VMS code', 100),
   organizationId: z.string(),
   organizationUnitId: requiredText('Organization unit'),
-  siteId: z.string(),
+  geographicAreaId: z.string(),
   displayName: requiredText('Display name', 255),
   vendor: z.union([z.literal(''), z.enum(vendors)]).refine((value) => Boolean(value), 'Vendor is required.'),
   endpoint: requiredText('Endpoint').refine((value) => {
@@ -116,7 +116,7 @@ export function toConnectorTargetRequest(values: VmsFormValues): ConnectorTarget
     credentialReference: values.credentialReference.trim(),
     verifyTls: values.verifyTls,
   };
-  if (values.siteId) request.siteId = values.siteId;
+  if (values.geographicAreaId) request.geographicAreaId = values.geographicAreaId;
   if (values.runtimeClass) request.runtimeClass = values.runtimeClass;
   const numericFields: OptionalNumericField[] = [
     'rateLimitPerSecond', 'rateLimitBurst', 'inventoryPollSeconds', 'statusPollSeconds',
@@ -154,17 +154,17 @@ function SelectorStatus({ id, label, selector, emptyMessage, idleMessage }: {
 interface VmsFormProps {
   organizations: OrganizationResponse[];
   organizationUnits: OrganizationUnitResponse[];
-  sites: SiteResponse[];
+  geographicAreas: GeographicAreaResponse[];
   selectorStates: {
     organizations: SelectorState;
     organizationUnits: SelectorState;
-    sites: SelectorState;
+    geographicAreas: SelectorState;
   };
   onOrganizationChange(organizationId: string): void;
   onSubmit(values: ConnectorTargetRequest): Promise<void>;
 }
 
-export function VmsForm({ organizations, organizationUnits, sites, selectorStates, onOrganizationChange, onSubmit }: VmsFormProps) {
+export function VmsForm({ organizations, organizationUnits, geographicAreas, selectorStates, onOrganizationChange, onSubmit }: VmsFormProps) {
   const form = useForm<VmsFormValues>({ defaultValues: defaults, resolver: zodResolver(vmsFormSchema) });
   const [tuningOpen, setTuningOpen] = useState(false);
   const { register, formState: { errors, isSubmitting } } = form;
@@ -218,13 +218,13 @@ export function VmsForm({ organizations, organizationUnits, sites, selectorState
       </label>
       <SelectorStatus id="vms-organization-units-status" label="Organization units" selector={selectorStates.organizationUnits} idleMessage="Select an organization to load its organization units." emptyMessage="No organization units are available for this organization." />
       <label>
-        <span className="form-label-title">Site</span>
-        <select disabled={selectorStates.sites.state !== 'ready'} {...register('siteId')} aria-describedby={selectorStates.sites.state === 'ready' ? undefined : 'vms-sites-status'}>
-          <option value="">No site selected</option>
-          {sites.map((site) => <option key={site.id} value={site.id}>{site.name} ({site.code})</option>)}
+        <span className="form-label-title">Geographic area</span>
+        <select disabled={selectorStates.geographicAreas.state !== 'ready'} {...register('geographicAreaId')} aria-describedby={selectorStates.geographicAreas.state === 'ready' ? undefined : 'vms-geographic-areas-status'}>
+          <option value="">No geographic area selected</option>
+          {geographicAreas.map((area) => <option key={area.id} value={area.id}>{area.name} ({area.code})</option>)}
         </select>
       </label>
-      <SelectorStatus id="vms-sites-status" label="Sites" selector={selectorStates.sites} emptyMessage="No sites are available. You can register this VMS without a site." />
+      <SelectorStatus id="vms-geographic-areas-status" label="Geographic areas" selector={selectorStates.geographicAreas} emptyMessage="No geographic areas are available. You can register this VMS without one." />
     </fieldset>
     <fieldset>
       <legend>Connection configuration <span className="legend-note">* Required fields</span></legend>

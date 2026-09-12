@@ -4,7 +4,7 @@ import { useForm, useWatch } from 'react-hook-form';
 import { z } from 'zod';
 
 import { isApiProblem } from '../../api/client';
-import type { CameraWriteRequest, GeoJsonFeatureCollection, OrganizationResponse, OrganizationUnitResponse, SiteResponse, VmsResponse } from '../../api/models';
+import type { CameraWriteRequest, GeoJsonFeatureCollection, GeographicAreaResponse, OrganizationResponse, OrganizationUnitResponse, VmsResponse } from '../../api/models';
 import { Button } from '../../components/ui';
 import {
   cameraTypes,
@@ -25,7 +25,7 @@ export interface CameraFormValues {
   name: string;
   organizationId: string;
   organizationUnitId: string;
-  siteId: string;
+  geographicAreaId: string;
   cameraType: string;
   latitude: string;
   longitude: string;
@@ -51,7 +51,7 @@ export interface CameraFormValues {
 }
 
 const defaults: CameraFormValues = {
-  cameraCode: '', name: '', organizationId: '', organizationUnitId: '', siteId: '', cameraType: '', latitude: '', longitude: '',
+  cameraCode: '', name: '', organizationId: '', organizationUnitId: '', geographicAreaId: '', cameraType: '', latitude: '', longitude: '',
   manufacturer: '', model: '', serialNumber: '', altitude: '', mountingHeight: '', azimuth: '', tilt: '',
   horizontalFov: '', verticalFov: '', effectiveRange: '', ipAddress: '', port: '', protocol: '', vmsId: '',
   streamReference: '', installationDate: '', operationalStatus: '', connectivityStatus: '', maintenanceStatus: '',
@@ -90,7 +90,7 @@ const cameraFormSchema = z.object({
   name: requiredText('Name', 255),
   organizationId: z.string(),
   organizationUnitId: z.string().trim().min(1, 'Organization unit is required.'),
-  siteId: z.string().trim().min(1, 'Site is required.'),
+  geographicAreaId: z.string().trim().min(1, 'Geographic area is required.'),
   cameraType: choice(cameraTypes, 'Camera type is required.', true),
   latitude: numeric('Latitude', -90, 90, true),
   longitude: numeric('Longitude', -180, 180, true),
@@ -140,7 +140,7 @@ function optionalNumber(value: string) {
 export function toCameraWriteRequest(values: CameraFormValues): CameraWriteRequest {
   const request: CameraWriteRequest = {
     cameraCode: values.cameraCode.trim(), name: values.name.trim(), organizationUnitId: values.organizationUnitId,
-    siteId: values.siteId, cameraType: values.cameraType,
+    geographicAreaId: values.geographicAreaId, cameraType: values.cameraType,
     latitude: roundCoordinate(Number(values.latitude)), longitude: roundCoordinate(Number(values.longitude)),
   };
   const optionalStrings: Array<keyof Pick<CameraWriteRequest, 'manufacturer' | 'model' | 'serialNumber' | 'ipAddress' | 'protocol' | 'vmsId' | 'streamReference' | 'installationDate' | 'operationalStatus' | 'connectivityStatus' | 'maintenanceStatus'>> = [
@@ -162,7 +162,7 @@ export function toCameraWriteRequest(values: CameraFormValues): CameraWriteReque
 interface CameraFormProps {
   organizations: OrganizationResponse[];
   organizationUnits: OrganizationUnitResponse[];
-  sites: SiteResponse[];
+  geographicAreas: GeographicAreaResponse[];
   vms: VmsResponse[];
   selectorStates?: CameraSelectorStates;
   mapFeatures?: GeoJsonFeatureCollection;
@@ -181,14 +181,14 @@ export interface SelectorState {
 export interface CameraSelectorStates {
   organizations: SelectorState;
   organizationUnits: SelectorState;
-  sites: SelectorState;
+  geographicAreas: SelectorState;
   vms: SelectorState;
 }
 
 const readySelectorStates: CameraSelectorStates = {
   organizations: { state: 'ready' },
   organizationUnits: { state: 'ready' },
-  sites: { state: 'ready' },
+  geographicAreas: { state: 'ready' },
   vms: { state: 'ready' },
 };
 
@@ -226,7 +226,7 @@ function optionalNumericValue(value: string) {
   return value.trim() && Number.isFinite(number) ? number : null;
 }
 
-export function CameraForm({ organizations, organizationUnits, sites, vms, selectorStates = readySelectorStates, mapFeatures, initialValues, onOrganizationChange, onCoordinatesChange, onSubmit }: CameraFormProps) {
+export function CameraForm({ organizations, organizationUnits, geographicAreas, vms, selectorStates = readySelectorStates, mapFeatures, initialValues, onOrganizationChange, onCoordinatesChange, onSubmit }: CameraFormProps) {
   const form = useForm<CameraFormValues>({ defaultValues: initialValues ?? defaults, resolver: zodResolver(cameraFormSchema) });
   const [detailsOpen, setDetailsOpen] = useState(false);
   const { register, formState: { errors, isSubmitting } } = form;
@@ -273,8 +273,8 @@ export function CameraForm({ organizations, organizationUnits, sites, vms, selec
         <SelectorStatus id="organizations-status" label="Organizations" selector={selectorStates.organizations} emptyMessage="No organizations are available. Ask an administrator to create an organization before registering a camera." />
         <label>Organization unit<span aria-hidden="true"> *</span><select aria-required="true" disabled={!selectedOrganizationId || selectorStates.organizationUnits.state !== 'ready'} {...register('organizationUnitId')} {...validationProps('organizationUnitId', selectorStates.organizationUnits.state === 'ready' ? undefined : 'organization-units-status')}><option value="">Select an organization unit</option>{organizationUnits.map((unit) => <option key={unit.id} value={unit.id}>{unit.name} ({unit.code})</option>)}</select></label><FieldError id="organizationUnitId-error" message={errors.organizationUnitId?.message} />
         <SelectorStatus id="organization-units-status" label="Organization units" selector={selectorStates.organizationUnits} idleMessage="Select an organization to load its organization units." emptyMessage="No organization units are available for this organization. Choose another organization or ask an administrator to create an organization unit." />
-        <label>Site<span aria-hidden="true"> *</span><select aria-required="true" disabled={selectorStates.sites.state !== 'ready'} {...register('siteId')} {...validationProps('siteId', selectorStates.sites.state === 'ready' ? undefined : 'sites-status')}><option value="">Select a site</option>{sites.map((site) => <option key={site.id} value={site.id}>{site.name} ({site.code})</option>)}</select></label><FieldError id="siteId-error" message={errors.siteId?.message} />
-        <SelectorStatus id="sites-status" label="Sites" selector={selectorStates.sites} emptyMessage="No sites are available. Ask an administrator to create a site before registering a camera." />
+        <label>Geographic area<span aria-hidden="true"> *</span><select aria-required="true" disabled={selectorStates.geographicAreas.state !== 'ready'} {...register('geographicAreaId')} {...validationProps('geographicAreaId', selectorStates.geographicAreas.state === 'ready' ? undefined : 'geographic-areas-status')}><option value="">Select a geographic area</option>{geographicAreas.map((area) => <option key={area.id} value={area.id}>{area.name} ({area.code})</option>)}</select></label><FieldError id="geographicAreaId-error" message={errors.geographicAreaId?.message} />
+        <SelectorStatus id="geographic-areas-status" label="Geographic areas" selector={selectorStates.geographicAreas} emptyMessage="No geographic areas are available. Ask an administrator to create one before registering a camera." />
         <label>Camera type<span aria-hidden="true"> *</span><select aria-required="true" {...register('cameraType')} {...validationProps('cameraType')}><option value="">Select a camera type</option>{cameraTypes.map((type) => <option key={type} value={type}>{type}</option>)}</select></label><FieldError id="cameraType-error" message={errors.cameraType?.message} />
         <label>Latitude<span aria-hidden="true"> *</span><input aria-required="true" inputMode="decimal" {...register('latitude')} {...validationProps('latitude')} /></label><FieldError id="latitude-error" message={errors.latitude?.message} />
         <label>Longitude<span aria-hidden="true"> *</span><input aria-required="true" inputMode="decimal" {...register('longitude')} {...validationProps('longitude')} /></label><FieldError id="longitude-error" message={errors.longitude?.message} />

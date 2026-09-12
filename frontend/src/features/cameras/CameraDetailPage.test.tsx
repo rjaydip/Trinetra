@@ -25,7 +25,7 @@ function camera() {
   return {
     id: cameraId, cameraCode: 'CAM-001', name: 'North Gate',
     organizationUnitId: 'c0a80101-0000-4000-8000-000000000010',
-    siteId: 'c0a80101-0000-4000-8000-000000000020',
+    geographicAreaId: 'c0a80101-0000-4000-8000-000000000020',
     cameraType: 'FIXED', latitude: 12.9716, longitude: 77.5946,
     manufacturer: 'Axis', model: null, serialNumber: null, altitude: null,
     mountingHeight: null, azimuth: null, tilt: null, horizontalFov: null,
@@ -54,7 +54,7 @@ describe('CameraDetailPage', () => {
     renderApp(`/cameras/${cameraId}`);
     await screen.findByRole('heading', { name: 'North Gate' });
     const metadata = [
-      ['Organization unit ID', record.organizationUnitId], ['Site ID', record.siteId], ['Model', 'Q6135'], ['Serial number', 'AX-4421'],
+      ['Organization unit ID', record.organizationUnitId], ['Geographic area ID', record.geographicAreaId], ['Model', 'Q6135'], ['Serial number', 'AX-4421'],
       ['Installation date', '2025-02-14'], ['IP address', '10.0.0.8'], ['Port', '554'], ['Protocol', 'RTSP'],
       ['VMS ID', record.vmsId!], ['Stream reference', 'external-stream-17'], ['Altitude', '12 m'], ['Mounting height', '8 m'],
       ['Azimuth', '0°'], ['Tilt', '-15°'], ['Horizontal field of view', '90°'], ['Vertical field of view', '45°'], ['Effective range', '70 m'],

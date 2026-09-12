@@ -65,7 +65,7 @@ export function VmsPage() {
   const [createdId, setCreatedId] = useState('');
   const vmsList = useQuery({ queryKey: ['vms'], queryFn: api.vms.list, enabled: !vmsId });
   const organizations = useQuery({ queryKey: ['reference', 'organizations'], queryFn: api.reference.organizations, enabled: canCreate && !vmsId });
-  const sites = useQuery({ queryKey: ['reference', 'sites'], queryFn: () => api.reference.sites(), enabled: canCreate && !vmsId });
+  const geographicAreas = useQuery({ queryKey: ['reference', 'geographic-areas'], queryFn: () => api.reference.geographicAreas(), enabled: canCreate && !vmsId });
   const organizationUnits = useQuery({
     queryKey: ['reference', 'organization-units', organizationId],
     queryFn: () => api.reference.organizationUnits(organizationId),
@@ -106,11 +106,11 @@ export function VmsPage() {
       <VmsForm
         organizations={organizations.data ?? []}
         organizationUnits={organizationUnits.data ?? []}
-        sites={sites.data ?? []}
+        geographicAreas={geographicAreas.data ?? []}
         selectorStates={{
           organizations: selectorState(organizations, 'Organizations could not be loaded. Please try again.'),
           organizationUnits: organizationUnitsState,
-          sites: selectorState(sites, 'Sites could not be loaded. Please try again.'),
+          geographicAreas: selectorState(geographicAreas, 'Geographic areas could not be loaded. Please try again.'),
         }}
         onOrganizationChange={setOrganizationId}
         onSubmit={async (values) => { setCreatedId(''); await create.mutateAsync(values); }}

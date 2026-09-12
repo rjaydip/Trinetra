@@ -160,8 +160,6 @@ export function HierarchyPage() {
 
   const [selectedAreaId, setSelectedAreaId] = useState('');
   const [editingAreaId, setEditingAreaId] = useState('');
-  const [siteFilterAreaId, setSiteFilterAreaId] = useState('');
-  const [selectedSiteId, setSelectedSiteId] = useState('');
 
   const organizations = useQuery({
     queryKey: ['admin', 'organizations'], queryFn: api.admin.organizations.list, enabled: showOrganizationDomain,
@@ -188,12 +186,6 @@ export function HierarchyPage() {
   const areaTypes = useQuery({
     queryKey: ['admin', 'geographic-area-types'], queryFn: api.admin.geography.listAreaTypes, enabled: showGeographyDomain && canManageGeography,
   });
-  const sites = useQuery({
-    queryKey: ['admin', 'sites'], queryFn: () => api.admin.geography.listSites(), enabled: showGeographyDomain,
-  });
-  const siteList = sites.data ?? [];
-  const filteredSites = siteFilterAreaId ? siteList.filter((s) => s.geographicAreaId === siteFilterAreaId) : siteList;
-  const currentSite = siteList.find((s) => s.id === selectedSiteId);
 
   // Mutations for creation
   const createOrganization = useMutation({
@@ -207,10 +199,6 @@ export function HierarchyPage() {
   const createArea = useMutation({
     mutationFn: api.admin.geography.createArea,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin', 'geographic-areas'] }),
-  });
-  const createSite = useMutation({
-    mutationFn: api.admin.geography.createSite,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin', 'sites'] }),
   });
 
   // Mutations for updates & activation
@@ -264,19 +252,6 @@ export function HierarchyPage() {
     const form = event.currentTarget;
     const data = new FormData(form);
     createArea.mutate({ code: value(data, 'code'), name: value(data, 'name'), areaType: value(data, 'areaType'), parentAreaId: optional(value(data, 'parentAreaId')) }, { onSuccess: () => form.reset() });
-  }
-
-  function submitSite(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const form = event.currentTarget;
-    const data = new FormData(form);
-    const latitude = value(data, 'latitude');
-    const longitude = value(data, 'longitude');
-    createSite.mutate({
-      code: value(data, 'code'), name: value(data, 'name'), geographicAreaId: value(data, 'geographicAreaId'),
-      siteType: optional(value(data, 'siteType')), address: optional(value(data, 'address')),
-      latitude: latitude ? Number(latitude) : undefined, longitude: longitude ? Number(longitude) : undefined,
-    }, { onSuccess: () => form.reset() });
   }
 
   function submitEditOrg(event: FormEvent<HTMLFormElement>, org: OrganizationResponse) {
@@ -796,8 +771,8 @@ export function HierarchyPage() {
         <section className="admin-domain" aria-labelledby="geography-title">
           <header>
             <div>
-              <h3 id="geography-title">Geography &amp; Sites</h3>
-              <p>Physical territories, zones, and attached camera installation facilities.</p>
+              <h3 id="geography-title">Geography</h3>
+              <p>The territory hierarchy cameras, VMS targets, and events attach to directly.</p>
             </div>
           </header>
 
@@ -963,100 +938,6 @@ export function HierarchyPage() {
                 )}
               </div>
 
-              {/* Sites Panel */}
-              <div className="admin-panel">
-                <header className="panel-header">
-                  <h4>Sites</h4>
-                </header>
-
-                <div className="site-selectors">
-                  <label className="admin-selector">
-                    Filter by area
-                    <select
-                      value={siteFilterAreaId}
-                      onChange={(event) => {
-                        setSiteFilterAreaId(event.target.value);
-                        setSelectedSiteId('');
-                      }}
-                    >
-                      <option value="">All geographic areas</option>
-                      {areaList.map((area) => (
-                        <option key={area.id} value={area.id}>
-                          {area.name} ({area.code})
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-
-                  <label className="admin-selector">
-                    Select site
-                    <select
-                      value={selectedSiteId}
-                      onChange={(event) => setSelectedSiteId(event.target.value)}
-                      disabled={!filteredSites.length}
-                    >
-                      <option value="">{filteredSites.length ? 'Select a site to inspect' : 'No sites match filter'}</option>
-                      {filteredSites.map((site) => (
-                        <option key={site.id} value={site.id}>
-                          {site.name} ({site.code})
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                </div>
-
-                {currentSite && (
-                  <div className="hierarchy-inspect-card" style={{ marginBottom: '1rem' }}>
-                    <div className="hierarchy-inspect-card__header">
-                      <div>
-                        <h5>{currentSite.name}</h5>
-                        <p className="hierarchy-card__meta">
-                          <code>{currentSite.code}</code>
-                          {currentSite.siteType ? ` · ${currentSite.siteType}` : ''}
-                        </p>
-                      </div>
-                      <StatusBadge tone={currentSite.status === 'ACTIVE' ? 'success' : 'warning'}>
-                        {currentSite.status}
-                      </StatusBadge>
-                    </div>
-                    {currentSite.address && <p className="hierarchy-card__desc">{currentSite.address}</p>}
-                    {currentSite.latitude !== null && currentSite.longitude !== null && (
-                      <p className="hierarchy-card__coords">
-                        Coordinates: {currentSite.latitude}, {currentSite.longitude}
-                      </p>
-                    )}
-                  </div>
-                )}
-
-                {sites.isPending ? (
-                  <p>Loading sites…</p>
-                ) : sites.isError ? (
-                  <p className="form-error">{errorDetail(sites.error, 'Sites could not be loaded.')}</p>
-                ) : filteredSites.length ? (
-                  <ul className="admin-record-list">
-                    {filteredSites.map((site) => (
-                      <li
-                        key={site.id}
-                        className={site.id === selectedSiteId ? 'admin-record--active' : ''}
-                        onClick={() => setSelectedSiteId(site.id)}
-                      >
-                        <div>
-                          <strong>{site.name}</strong>
-                          <span>
-                            {site.code}
-                            {site.siteType ? ` · ${site.siteType}` : ''}
-                          </span>
-                        </div>
-                        <StatusBadge tone={site.status === 'ACTIVE' ? 'success' : 'warning'}>
-                          {site.status}
-                        </StatusBadge>
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <p className="admin-empty">No sites are available.</p>
-                )}
-              </div>
             </div>
           )}
 
@@ -1101,55 +982,6 @@ export function HierarchyPage() {
                 )}
                 <Button disabled={createArea.isPending} type="submit">
                   Create geographic area
-                </Button>
-              </form>
-
-              <form aria-label="Create site" className="admin-form" onSubmit={submitSite}>
-                <h4>Create site</h4>
-                <label>
-                  Code
-                  <input name="code" required />
-                </label>
-                <label>
-                  Name
-                  <input name="name" required />
-                </label>
-                <label>
-                  Geographic area
-                  <select name="geographicAreaId" required>
-                    <option value="">Select an area</option>
-                    {areas.data?.map((area) => (
-                      <option key={area.id} value={area.id}>
-                        {area.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  Site type
-                  <input name="siteType" />
-                </label>
-                <label>
-                  Address
-                  <textarea name="address" />
-                </label>
-                <div className="admin-coordinate-grid">
-                  <label>
-                    Latitude
-                    <input max="90" min="-90" name="latitude" step="any" type="number" />
-                  </label>
-                  <label>
-                    Longitude
-                    <input max="180" min="-180" name="longitude" step="any" type="number" />
-                  </label>
-                </div>
-                {createSite.isError && (
-                  <p className="form-error" role="alert">
-                    {errorDetail(createSite.error, 'The site could not be created.')}
-                  </p>
-                )}
-                <Button disabled={createSite.isPending} type="submit">
-                  Create site
                 </Button>
               </form>
             </div>

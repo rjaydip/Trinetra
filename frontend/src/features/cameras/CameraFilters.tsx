@@ -3,7 +3,7 @@ import type { ChangeEvent } from 'react';
 import type { CameraListQuery } from '../../api/models';
 
 export type RegistryFilters = Pick<CameraListQuery,
-  'q' | 'cameraType' | 'organizationUnitId' | 'siteId' | 'geographicAreaId' |
+  'q' | 'cameraType' | 'organizationUnitId' | 'geographicAreaId' |
   'operationalStatus' | 'connectivityStatus' | 'maintenanceStatus' | 'includeRetired'>;
 
 export function CameraFilters({ filters, onChange, onClear }: {
@@ -31,9 +31,6 @@ export function CameraFilters({ filters, onChange, onClear }: {
       </label>
       <label>Organization unit ID
         <input name="organizationUnitId" onChange={update} value={filters.organizationUnitId ?? ''} />
-      </label>
-      <label>Site ID
-        <input name="siteId" onChange={update} value={filters.siteId ?? ''} />
       </label>
       <label>Geographic area ID
         <input name="geographicAreaId" onChange={update} value={filters.geographicAreaId ?? ''} />

@@ -15,19 +15,19 @@ import { VmsPage } from './VmsPage';
 
 const organizationId = '11111111-1111-4111-8111-111111111111';
 const organizationUnitId = '22222222-2222-4222-8222-222222222222';
-const siteId = '33333333-3333-4333-8333-333333333333';
+const areaId = '33333333-3333-4333-8333-333333333333';
 const vmsId = '44444444-4444-4444-8444-444444444444';
 const secondVmsId = '77777777-7777-4777-8777-777777777777';
 const connectionTestId = '66666666-6666-4666-8666-666666666666';
 
 const organization = { id: organizationId, code: 'OPS', name: 'Operations', organizationType: 'PUBLIC', description: null, status: 'ACTIVE' };
 const organizationUnit = { id: organizationUnitId, organizationId, parentUnitId: null, code: 'NORTH', name: 'North Unit', unitType: 'REGION', status: 'ACTIVE' };
-const site = { id: siteId, code: 'HQ', name: 'Headquarters', geographicAreaId: '55555555-5555-4555-8555-555555555555', siteType: 'OFFICE', address: null, latitude: null, longitude: null, status: 'ACTIVE' };
+const area = { id: areaId, parentAreaId: null, code: 'HQ', name: 'Headquarters', areaType: 'DISTRICT', status: 'ACTIVE' };
 const vms = {
   id: vmsId,
   code: 'NORTH-NVR',
   organizationUnitId,
-  siteId,
+  geographicAreaId: areaId,
   displayName: 'North NVR',
   vendor: 'DahuaCgi',
   runtimeClass: 'Managed',
@@ -82,8 +82,8 @@ function renderVmsForm() {
   render(<VmsForm
     organizations={[organization]}
     organizationUnits={[organizationUnit]}
-    sites={[site]}
-    selectorStates={{ organizations: { state: 'ready' }, organizationUnits: { state: 'ready' }, sites: { state: 'ready' } }}
+    geographicAreas={[area]}
+    selectorStates={{ organizations: { state: 'ready' }, organizationUnits: { state: 'ready' }, geographicAreas: { state: 'ready' } }}
     onOrganizationChange={() => undefined}
     onSubmit={onSubmit}
   />);
@@ -217,7 +217,7 @@ describe('VmsPage', () => {
     expect(document.body).not.toHaveTextContent(/password|token/i);
   });
 
-  it('registers a VMS with live organization, unit, and site selections', async () => {
+  it('registers a VMS with live organization, unit, and geographic area selections', async () => {
     const requests: Array<{ path: string; method: string; body?: Record<string, unknown> }> = [];
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = new URL(String(input)).pathname;
@@ -228,7 +228,7 @@ describe('VmsPage', () => {
       });
       if (path === '/api/v1/organizations') return Response.json([organization]);
       if (path === `/api/v1/organizations/${organizationId}/units`) return Response.json([organizationUnit]);
-      if (path === '/api/v1/sites') return Response.json([site]);
+      if (path === '/api/v1/geographic-areas') return Response.json([area]);
       if (path === '/api/v1/vms' && init?.method === 'POST') return Response.json({ id: vmsId }, { status: 201 });
       if (path === '/api/v1/vms') return Response.json([]);
       return new Response(null, { status: 404 });
@@ -241,7 +241,7 @@ describe('VmsPage', () => {
     await user.type(screen.getByLabelText(/display name/i), ' North NVR ');
     await user.selectOptions(screen.getByLabelText(/^organization$/i), organizationId);
     await user.selectOptions(await screen.findByLabelText(/organization unit/i), organizationUnitId);
-    await user.selectOptions(screen.getByLabelText(/^site/i), siteId);
+    await user.selectOptions(screen.getByLabelText(/^geographic area/i), areaId);
     await user.selectOptions(screen.getByLabelText(/^vendor/i), 'DahuaCgi');
     await user.type(screen.getByLabelText(/^endpoint/i), ' https://nvr.example.test ');
     await user.type(screen.getByLabelText(/credential reference/i), ' vms/north-nvr ');
@@ -256,7 +256,7 @@ describe('VmsPage', () => {
     expect(create?.body).toEqual(expect.objectContaining({
       code: 'NORTH-NVR',
       organizationUnitId,
-      siteId,
+      geographicAreaId: areaId,
       displayName: 'North NVR',
       vendor: 'DahuaCgi',
       endpoint: 'https://nvr.example.test',

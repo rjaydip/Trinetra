@@ -11,7 +11,7 @@ const nullableDateOnly = z.iso.date({ error: 'Installation date must use the YYY
 // validation. The API's BulkImportResult is the authoritative per-row validation report.
 const importItemSchema = z.object({
   cameraCode: z.string().optional(), name: z.string().optional(), organizationUnitId: z.string().optional(),
-  siteId: z.string().optional(), cameraType: z.string().optional(), latitude: z.number().finite().optional(), longitude: z.number().finite().optional(),
+  geographicAreaId: z.string().optional(), cameraType: z.string().optional(), latitude: z.number().finite().optional(), longitude: z.number().finite().optional(),
   manufacturer: nullableString, model: nullableString, serialNumber: nullableString, altitude: nullableNumber,
   mountingHeight: nullableNumber, azimuth: nullableNumber, tilt: nullableNumber, horizontalFov: nullableNumber,
   verticalFov: nullableNumber, effectiveRange: nullableNumber, ipAddress: nullableString, port: z.number().int().nullable().optional(),
@@ -31,7 +31,7 @@ export function createSampleImport(): BulkImportRequest {
       cameraCode: 'CAM-EXAMPLE-001',
       name: 'Example camera',
       organizationUnitId: '00000000-0000-0000-0000-000000000001',
-      siteId: '00000000-0000-0000-0000-000000000002',
+      geographicAreaId: '00000000-0000-0000-0000-000000000002',
       cameraType: 'FIXED',
       latitude: 19.076,
       longitude: 72.8777,

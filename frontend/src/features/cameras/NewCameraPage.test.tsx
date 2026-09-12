@@ -13,7 +13,7 @@ afterEach(() => { vi.unstubAllGlobals(); sessionStorage.clear(); });
 const organizationId = 'c0a80101-0000-4000-8000-000000000001';
 const organization = { id: organizationId, code: 'OPS', name: 'Operations', organizationType: 'PUBLIC', description: null, status: 'ACTIVE' };
 const organizationUnit = { id: 'c0a80101-0000-4000-8000-000000000010', organizationId, parentUnitId: null, code: 'NORTH', name: 'North Unit', unitType: 'REGION', status: 'ACTIVE' };
-const site = { id: 'c0a80101-0000-4000-8000-000000000020', code: 'HQ', name: 'Headquarters', geographicAreaId: 'c0a80101-0000-4000-8000-000000000030', siteType: 'OFFICE', address: null, latitude: null, longitude: null, status: 'ACTIVE' };
+const area = { id: 'c0a80101-0000-4000-8000-000000000020', parentAreaId: null, code: 'HQ', name: 'Headquarters', areaType: 'DISTRICT', status: 'ACTIVE' };
 
 it('shows a retryable organization failure beside the selector', async () => {
   saveSession(sessionFixture('registrar', ['camera.create']));
@@ -44,7 +44,7 @@ it('preserves entered camera values while organization units fail and retry', as
       if (unitsUnavailable) return Response.json({ title: 'Unavailable', detail: 'Organization units are temporarily unavailable.' }, { status: 503 });
       return Response.json([organizationUnit]);
     }
-    if (url.pathname === '/api/v1/sites') return Response.json([site]);
+    if (url.pathname === '/api/v1/geographic-areas') return Response.json([area]);
     if (url.pathname === '/api/v1/vms') return Response.json([]);
     return new Response(null, { status: 404 });
   });
@@ -76,7 +76,7 @@ it('explains why organization and organization-unit selectors are unavailable wh
   saveSession(sessionFixture('registrar', ['camera.create']));
   vi.stubGlobal('fetch', async (input: RequestInfo | URL) => {
     const url = new URL(String(input));
-    if (url.pathname === '/api/v1/sites') return Response.json([site]);
+    if (url.pathname === '/api/v1/geographic-areas') return Response.json([area]);
     return Response.json([]);
   });
 
@@ -94,7 +94,7 @@ it('explains why an organization unit is unavailable when the selected organizat
   vi.stubGlobal('fetch', async (input: RequestInfo | URL) => {
     const url = new URL(String(input));
     if (url.pathname === '/api/v1/organizations') return Response.json([organization]);
-    if (url.pathname === '/api/v1/sites') return Response.json([site]);
+    if (url.pathname === '/api/v1/geographic-areas') return Response.json([area]);
     return Response.json([]);
   });
   const user = userEvent.setup();
@@ -109,7 +109,7 @@ it('explains why an organization unit is unavailable when the selected organizat
   expect(unitStatus).toHaveTextContent(/choose another organization or ask an administrator/i);
 });
 
-it('explains why the required site selector is unavailable when no sites exist', async () => {
+it('explains why the required geographic area selector is unavailable when none exist', async () => {
   saveSession(sessionFixture('registrar', ['camera.create']));
   vi.stubGlobal('fetch', async (input: RequestInfo | URL) => {
     const url = new URL(String(input));
@@ -119,10 +119,10 @@ it('explains why the required site selector is unavailable when no sites exist',
 
   render(<MemoryRouter initialEntries={['/cameras/new']}><AuthProvider><App /></AuthProvider></MemoryRouter>);
 
-  expect(await screen.findByLabelText(/^site/i)).toBeDisabled();
-  const siteStatus = await screen.findByText(/no sites are available/i);
-  expect(siteStatus.closest('[role="status"]')).toHaveAttribute('aria-live', 'polite');
-  expect(siteStatus).toHaveTextContent(/ask an administrator to create a site/i);
+  expect(await screen.findByLabelText(/^geographic area/i)).toBeDisabled();
+  const areaStatus = await screen.findByText(/no geographic areas are available/i);
+  expect(areaStatus.closest('[role="status"]')).toHaveAttribute('aria-live', 'polite');
+  expect(areaStatus).toHaveTextContent(/ask an administrator to create one/i);
 });
 
 it('loads map context only with a bounded bbox after coordinates are valid', async () => {
