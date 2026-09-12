@@ -68,8 +68,15 @@ public static class CameraEndpoints
           .WithDescription(
               $"Synchronous, 1..{MaxBulkRows} rows. `mode` is `insert` (a row whose code exists "
               + "fails, others proceed) or `upsert` (an existing code is replaced). Each row is "
-              + "its own transaction and its own audit entry, so one bad row never rolls back the "
-              + "good ones. Always 200: the body reports every row's outcome.");
+              + "isolated (via a per-row savepoint) and gets its own audit entry, so one bad row "
+              + "never rolls back the good ones. All rows commit together when the request "
+              + "finishes, not independently as it proceeds — a connection lost mid-batch takes "
+              + "the whole batch with it, including rows already reflected in an earlier partial "
+              + "read of this response. Only a completed `200` response means the batch landed: "
+              + "on any error, timeout, or disconnect before then, assume nothing committed and "
+              + "retry the whole batch — `upsert` mode is safe to retry as-is; a retried `insert` "
+              + "will report already-materialized rows as `duplicate camera_code`, which is safe "
+              + "to ignore. Always 200: the body reports every row's outcome.");
 
         group.MapGet("/{id:guid}", GetAsync)
           .RequirePermission("camera.read")
@@ -217,6 +224,21 @@ public static class CameraEndpoints
         var results = new List<BulkRowResult>(request.Items.Count);
         int created = 0, updated = 0, failed = 0;
 
+        // Finding 10-M4: one connection and one transaction for the whole batch, not up to 500 —
+        // each row's write used to open and commit its own full transaction (a connection-pool
+        // round trip every time), which is most of this route's cost at 500 rows. A per-row
+        // SAVEPOINT keeps the same isolation promise (one bad row is discarded without touching
+        // the others) at a fraction of it: a savepoint create/release/rollback is one lightweight
+        // statement on an already-open connection, not a new connection and transaction.
+        //
+        // One real trade-off, not present before: rows now commit together at the very end, not
+        // independently. If the connection is lost partway through, every row processed so far —
+        // including ones already reported "created"/"updated" in an earlier response — is rolled
+        // back with it, whereas a genuinely separate transaction per row would have kept whatever
+        // had already committed. Ordinary per-row failures (validation, scope, duplicate code)
+        // are unaffected by this — those still isolate exactly as before via the savepoint.
+        await using var work = await UnitOfWork.BeginAsync(db, ct);
+
         for (var i = 0; i < request.Items.Count; i++)
         {
             var item = request.Items[i];
@@ -230,12 +252,13 @@ public static class CameraEndpoints
                 continue;
             }
 
+            var savepoint = $"bulk_row_{i}";
+            await work.Transaction.SaveAsync(savepoint, ct);
+
             try
             {
-                await using var work = await UnitOfWork.BeginAsync(db, ct);
-
                 var existingId = upsert
-                    ? await repo.FindLiveIdByCodeAsync(code, caller, ct)
+                    ? await repo.FindLiveIdByCodeAsync(code, caller, work, ct)
                     : null;
 
                 if (existingId is { } eid)
@@ -253,15 +276,15 @@ public static class CameraEndpoints
 
                     if (!await repo.ReplaceAsync(eid, camera!, caller, work, ct))
                     {
+                        await work.Transaction.RollbackAsync(savepoint, ct);
                         failed++;
                         results.Add(new BulkRowResult(i, code, "error", null, "not in scope"));
                         continue;
                     }
 
                     await work.AuditAsync(caller, "update", "camera", eid.ToString(),
-                        before: before is null ? null : Redact(before), after: Redact(camera!),
-                        camera!.OrganizationUnitId, ct);
-                    await work.CommitAsync(ct);
+                        before: null, after: Redact(camera!), camera!.OrganizationUnitId, ct);
+                    await work.Transaction.ReleaseAsync(savepoint, ct);
 
                     updated++;
                     results.Add(new BulkRowResult(i, code, "updated", eid, null));
@@ -271,7 +294,7 @@ public static class CameraEndpoints
                     var newId = await repo.CreateAsync(camera!, caller, work, ct);
                     await work.AuditAsync(caller, "create", "camera", newId.ToString(),
                         before: null, after: Redact(camera!), camera!.OrganizationUnitId, ct);
-                    await work.CommitAsync(ct);
+                    await work.Transaction.ReleaseAsync(savepoint, ct);
 
                     created++;
                     results.Add(new BulkRowResult(i, code, "created", newId, null));
@@ -279,16 +302,22 @@ public static class CameraEndpoints
             }
             catch (PostgresException e) when (e.SqlState == PostgresErrorCodes.UniqueViolation)
             {
+                // A failed statement leaves the transaction "aborted" until rolled back — to the
+                // savepoint, not the whole batch, so row i+1 can still run.
+                await work.Transaction.RollbackAsync(savepoint, ct);
                 failed++;
                 results.Add(new BulkRowResult(i, code, "error", null, "duplicate camera_code"));
             }
             catch (ForbiddenException)
             {
+                await work.Transaction.RollbackAsync(savepoint, ct);
                 failed++;
                 results.Add(new BulkRowResult(i, code, "error", null,
                     "organization_unit or geographic_area not in scope"));
             }
         }
+
+        await work.CommitAsync(ct);
 
         return TypedResults.Ok(new BulkImportResult(created, updated, failed, results));
     }
