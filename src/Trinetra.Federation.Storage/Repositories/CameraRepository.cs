@@ -74,6 +74,13 @@ public sealed class CameraRepository
 
         await using var c = await _dataSource.OpenConnectionAsync(ct);
 
+        // Finding 10-M6: a retired camera's code is freed for reuse (v1.6.sql), so two live+
+        // retired rows can share a camera_code once `includeRetired=true` widens the result set.
+        // Keying the cursor on code alone made `> @Cursor` an unstable tiebreak between them —
+        // whichever tied row landed last on a page could be skipped entirely on the next page
+        // (both compare equal to the boundary, "greater than" excludes both). Ordering and
+        // paging on (camera_code, id) together makes the sequence total and stable regardless of
+        // how many rows share a code.
         var sql = $"""
             SELECT {Columns}
             FROM federation.cameras c
@@ -94,12 +101,13 @@ public sealed class CameraRepository
               AND (@MinLon::numeric IS NULL OR (
                        c.longitude BETWEEN @MinLon AND @MaxLon
                        AND c.latitude BETWEEN @MinLat AND @MaxLat))
-              AND (@Cursor::text IS NULL OR c.camera_code > @Cursor)
-            ORDER BY c.camera_code
+              AND (@Cursor::text IS NULL OR (c.camera_code, c.id) > (@Cursor, @CursorId::uuid))
+            ORDER BY c.camera_code, c.id
             LIMIT @Limit
             """;
 
         var args = new DynamicParameters(ScopeArgs(Guid.Empty, caller, "camera.read"));
+        args.Add("CursorId", query.CursorId);
         args.Add("IncludeRetired", query.IncludeRetired);
         args.Add("OrganizationUnitId", query.OrganizationUnitId);
         args.Add("GeographicAreaId", query.GeographicAreaId);
@@ -509,6 +517,7 @@ public readonly record struct BoundingBox(double MinLon, double MinLat, double M
 public readonly record struct CameraQuery(
     int Limit,
     string? Cursor,
+    Guid? CursorId,
     bool IncludeRetired,
     Guid? OrganizationUnitId,
     Guid? GeographicAreaId,

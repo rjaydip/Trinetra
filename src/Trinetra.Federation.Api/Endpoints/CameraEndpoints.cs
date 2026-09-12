@@ -172,7 +172,7 @@ public static class CameraEndpoints
 
         var pageSize = Math.Clamp(limit ?? DefaultPageSize, 1, MaxPageSize);
 
-        if (!TryDecodeCursor(cursor, out var decodedCursor))
+        if (!TryDecodeCursor(cursor, out var decodedCode, out var decodedId))
         {
             return TypedResults.Problem(
                 title: "Invalid cursor",
@@ -182,7 +182,7 @@ public static class CameraEndpoints
 
         var rows = await repo.ListAsync(
             new CameraQuery(
-                pageSize + 1, decodedCursor, includeRetired ?? false,
+                pageSize + 1, decodedCode, decodedId, includeRetired ?? false,
                 organizationUnitId, geographicAreaId, cameraType,
                 Upper(operationalStatus), Upper(connectivityStatus), Upper(maintenanceStatus),
                 q, box),
@@ -193,7 +193,7 @@ public static class CameraEndpoints
         if (rows.Count > pageSize)
         {
             items = [.. rows.Take(pageSize)];
-            next = EncodeCursor(items[^1].Code);
+            next = EncodeCursor(items[^1].Code, items[^1].Id);
         }
 
         return TypedResults.Ok(new CameraPage([.. items.Select(ToResponse)], next));
@@ -283,7 +283,8 @@ public static class CameraEndpoints
                     }
 
                     await work.AuditAsync(caller, "update", "camera", eid.ToString(),
-                        before: null, after: Redact(camera!), camera!.OrganizationUnitId, ct);
+                        before: before is null ? null : Redact(before), after: Redact(camera!),
+                        camera!.OrganizationUnitId, ct);
                     await work.Transaction.ReleaseAsync(savepoint, ct);
 
                     updated++;
@@ -889,9 +890,14 @@ public static class CameraEndpoints
     // Finding 10-L6: a malformed cursor used to fail open (silently restart from page 1),
     // which masks a client bug — a truncated/corrupted cursor now reports as a 400 instead,
     // matching EventEndpoints.TryDecodeCursor.
-    private static bool TryDecodeCursor(string? cursor, out string? code)
+    // Finding 10-M6: keyed on (code, id) together, not code alone — a retired camera's code is
+    // freed for reuse, so two rows can share one once `includeRetired=true` is set; code-only
+    // paging could then skip or loop on the tied rows. The pair together is always unique and
+    // total, matching the repository's ORDER BY.
+    private static bool TryDecodeCursor(string? cursor, out string? code, out Guid? id)
     {
         code = null;
+        id = null;
 
         if (string.IsNullOrEmpty(cursor))
         {
@@ -900,7 +906,19 @@ public static class CameraEndpoints
 
         try
         {
-            code = Encoding.UTF8.GetString(Convert.FromBase64String(cursor));
+            // The id comes first specifically because it's fixed-format and never contains '|' —
+            // camera_code has no charset restriction, so splitting on the FIRST '|' and taking
+            // everything after it as the code is safe even if a code itself contains one.
+            // Ordering it the other way round would not be.
+            var parts = Encoding.UTF8.GetString(Convert.FromBase64String(cursor)).Split('|', 2);
+
+            if (parts.Length != 2 || !Guid.TryParse(parts[0], out var parsedId))
+            {
+                return false;
+            }
+
+            id = parsedId;
+            code = parts[1];
             return true;
         }
         catch (FormatException)
@@ -909,8 +927,8 @@ public static class CameraEndpoints
         }
     }
 
-    private static string EncodeCursor(string code) =>
-        Convert.ToBase64String(Encoding.UTF8.GetBytes(code));
+    private static string EncodeCursor(string code, Guid id) =>
+        Convert.ToBase64String(Encoding.UTF8.GetBytes($"{id}|{code}"));
 
     private static CameraResponse ToResponse(Camera c) => new(
         c.Id, c.Code, c.Name, c.OrganizationUnitId, c.GeographicAreaId, c.CameraType,
