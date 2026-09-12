@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Text.Json;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Trinetra.Federation.Api.Auth;
 using Trinetra.Federation.Api.Contracts;
@@ -138,36 +137,10 @@ public static class GisEndpoints
 
         foreach (var r in rows.Items)
         {
-            var props = new Dictionary<string, JsonElement>
-            {
-                ["cameraId"] = Json(r.Id),
-                ["cameraCode"] = Json(r.Code),
-                ["name"] = Json(r.Name),
-                ["organizationUnitId"] = Json(r.OrganizationUnitId),
-                ["manufacturer"] = Json(r.Manufacturer),
-                ["cameraType"] = Json(r.CameraType),
-                ["operationalStatus"] = Json(r.OperationalStatus),
-                ["connectivityStatus"] = Json(r.ConnectivityStatus),
-                ["maintenanceStatus"] = Json(r.MaintenanceStatus),
-                ["azimuth"] = Json(r.Azimuth),
-                ["horizontalFov"] = Json(r.HorizontalFov),
-                ["effectiveRange"] = Json(r.EffectiveRange),
-                ["hasCoverage"] = Json(CoverageSector.CanCompute(r.Azimuth, r.HorizontalFov, r.EffectiveRange)),
-            };
-
-            if (withSectors
-                && CoverageSector.CanCompute(r.Azimuth, r.HorizontalFov, r.EffectiveRange))
-            {
-                var ring = CoverageSector.Ring(
-                    r.Latitude, r.Longitude, r.Azimuth!.Value, r.HorizontalFov!.Value, r.EffectiveRange!.Value);
-                props["coverageSector"] = Json(new[] { ring });
-                props["coverageEstimated"] = Json(true);
-            }
-
             features.Add(new GeoJsonFeature(
                 "Feature",
                 new GeoJsonGeometry("Point", new[] { r.Longitude, r.Latitude }),
-                props));
+                BuildCameraProperties(r, withSectors)));
         }
 
         return TypedResults.Json(
@@ -189,14 +162,14 @@ public static class GisEndpoints
         var hasCoverage = CoverageSector.CanCompute(
             camera.Azimuth, camera.HorizontalFov, camera.EffectiveRange);
 
-        var props = new Dictionary<string, JsonElement>
+        var props = new Dictionary<string, object?>
         {
-            ["cameraId"] = Json(camera.Id),
-            ["cameraCode"] = Json(camera.Code),
-            ["azimuth"] = Json(camera.Azimuth),
-            ["horizontalFov"] = Json(camera.HorizontalFov),
-            ["effectiveRange"] = Json(camera.EffectiveRange),
-            ["hasCoverage"] = Json(hasCoverage),
+            ["cameraId"] = camera.Id,
+            ["cameraCode"] = camera.Code,
+            ["azimuth"] = camera.Azimuth,
+            ["horizontalFov"] = camera.HorizontalFov,
+            ["effectiveRange"] = camera.EffectiveRange,
+            ["hasCoverage"] = hasCoverage,
         };
 
         // A camera the caller can see always returns a Feature (finding 10-L5): a 204 for
@@ -209,8 +182,8 @@ public static class GisEndpoints
                 camera.Latitude, camera.Longitude,
                 camera.Azimuth!.Value, camera.HorizontalFov!.Value, camera.EffectiveRange!.Value);
             geometry = new GeoJsonGeometry("Polygon", new[] { ring });
-            props["estimated"] = Json(true);
-            props["disclaimer"] = Json(CoverageSector.EstimateDisclaimer);
+            props["estimated"] = true;
+            props["disclaimer"] = CoverageSector.EstimateDisclaimer;
         }
 
         return TypedResults.Json(
@@ -260,11 +233,44 @@ public static class GisEndpoints
 
     // -------------------------------------------------------------------
 
+    /// <summary>
+    /// The GeoJSON <c>properties</c> bag for one camera in the feed. Extracted so a test can
+    /// assert on the actual keys this endpoint builds — a hand-built dictionary in a test proves
+    /// serialization is correct (finding 10-M8) but can't catch a typo introduced editing this
+    /// method itself, since it would never see the mistake.
+    /// </summary>
+    private static Dictionary<string, object?> BuildCameraProperties(GisCameraRow r, bool withSectors)
+    {
+        var props = new Dictionary<string, object?>
+        {
+            ["cameraId"] = r.Id,
+            ["cameraCode"] = r.Code,
+            ["name"] = r.Name,
+            ["organizationUnitId"] = r.OrganizationUnitId,
+            ["manufacturer"] = r.Manufacturer,
+            ["cameraType"] = r.CameraType,
+            ["operationalStatus"] = r.OperationalStatus,
+            ["connectivityStatus"] = r.ConnectivityStatus,
+            ["maintenanceStatus"] = r.MaintenanceStatus,
+            ["azimuth"] = r.Azimuth,
+            ["horizontalFov"] = r.HorizontalFov,
+            ["effectiveRange"] = r.EffectiveRange,
+            ["hasCoverage"] = CoverageSector.CanCompute(r.Azimuth, r.HorizontalFov, r.EffectiveRange),
+        };
+
+        if (withSectors && CoverageSector.CanCompute(r.Azimuth, r.HorizontalFov, r.EffectiveRange))
+        {
+            var ring = CoverageSector.Ring(
+                r.Latitude, r.Longitude, r.Azimuth!.Value, r.HorizontalFov!.Value, r.EffectiveRange!.Value);
+            props["coverageSector"] = new[] { ring };
+            props["coverageEstimated"] = true;
+        }
+
+        return props;
+    }
+
     private static string? Upper(string? s) =>
         string.IsNullOrWhiteSpace(s) ? null : s.Trim().ToUpperInvariant();
-
-    private static JsonElement Json<T>(T value) =>
-        JsonSerializer.SerializeToElement(value);
 
     private static ProblemHttpResult Problem(string title, string detail) =>
         TypedResults.Problem(title: title, detail: detail, statusCode: StatusCodes.Status400BadRequest);

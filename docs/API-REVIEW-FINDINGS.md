@@ -217,8 +217,8 @@ validation, `9-M1` VerifyTls non-nullable (TLS downgrade), `9-M2` org/site ACTIV
 **OTHER MEDIUM (`4-M1` ✅ PR12, `6-M4` ✅ PR13a, `15-M3` ✅ PR13b, `10-M5` ✅ PR13c, `10-M4` ✅
 PR13d, `10-M6` ✅ PR14, `10-M7` ✅ PR15, `17-M1..M3` ✅ v1.13 — all corrected here 2026-09-12,
 was stale):**
-`4-M6` no breached-password screen, `4-M7` CORS, `4-M8` bootstrap password lingers, `6-M5` ✅
-PR16 email unvalidated/non-unique (blocks F2/F3), `10-M8` GIS feed per-prop JsonElement alloc.
+`4-M6` no breached-password screen, `4-M7` CORS, `4-M8` bootstrap password lingers, `10-M8` GIS
+feed per-prop JsonElement alloc. `6-M5` ✅ PR16.
 (`4-M5` is a different, already-closed finding — password history/minimum age, PR7e — not email;
 an earlier pass here mislabeled the email gap as also being `4-M5`, corrected 2026-09-12.)
 **Parked (2026-09-11, see the PR13b block below for why):** `4-M3` login rate-limit per-IP only,
@@ -716,6 +716,48 @@ PR13d both merged by this point; uncommitted 2026-09-12):**
   fix into this PR was fine — a one-line label correction, zero code overlap, not worth its own
   commit.
 
+**PR17 — GIS feed serialization perf (branch `pr17-gis-feed-perf`, off `main`; uncommitted
+2026-09-12):**
+- **10-M8** ✅ — see the finding entry above for the fix itself. Contract change:
+  `GeoJsonFeature.Properties` from `IReadOnlyDictionary<string, JsonElement>` to
+  `IReadOnlyDictionary<string, object?>`; both `FeedAsync` and `CoverageAsync` in
+  `GisEndpoints.cs` updated to assign raw values directly instead of wrapping each in
+  `Json(value)` (the removed `Json<T>() => JsonSerializer.SerializeToElement(value)` helper).
+  No other call site existed for either the helper or the contract's old shape (checked); no
+  test referenced `GeoJsonFeature.Properties`' type directly, so nothing else needed updating.
+- New `GeoJsonFeatureSerializationTests` (2, unit): asserts a `GeoJsonFeature` with a mixed-type
+  properties bag (`Guid`, `string`, `double`, `null`, `bool`, a nested `double[][]`) serializes
+  to plain JSON values — not a string containing escaped JSON, not a value wrapped in an extra
+  object — proving the wire format is unchanged by the internal representation change; a second
+  test confirms `geometry: null` still serializes per RFC 7946 §3.2 (unaffected by this PR, kept
+  as a regression guard since it sits right next to what changed). Sabotage-checked: replacing
+  one property's raw value with its own pre-serialized JSON string (the mistake this refactor
+  could plausibly introduce) made the test fail with a double-quoted, double-escaped value
+  instead of the plain one; restored, reverified.
+- No integration test added — this is a pure internal-representation change with an
+  observably-identical wire format, and no existing camera/GIS endpoint test infrastructure to
+  extend (there was none for `GisEndpoints` before this PR either).
+- Per BA review, extracted the per-camera properties-bag construction out of `FeedAsync`'s loop
+  into a new private static `BuildCameraProperties(GisCameraRow, bool)`, and added 3 more unit
+  tests calling it directly via reflection — the original 2 tests proved a hand-built dictionary
+  serializes correctly but couldn't see a key-name typo introduced editing the real method; these
+  pin its exact key set across the no-optics, optics-with-sectors, and optics-without-sectors
+  branches. Sabotage-checked: renaming `"cameraCode"` to `"cameraCodeTypo"` in the method failed
+  exactly the new key-set assertion; restored, reverified. 5 unit tests total in the file now.
+- dotnet-expert review also caught a stray unused `using System.Text.Json;` left in
+  `GisEndpoints.cs` after the `Json<T>()` helper was removed — dead but not a build error since
+  it compiled clean; removed.
+- Build clean; 159 unit / 275 integration + 18 pre-existing (unchanged baseline).
+- BA + dotnet-expert reviewed: **no blockers.** BA confirmed the fix is tightly scoped to 10-M8,
+  the contract change is safe (`GeoJsonFeature.Properties` had no other reader), and test coverage
+  exceeds the bar for a perf-only change. dotnet-expert confirmed `System.Text.Json`'s default
+  behavior for `Dictionary<string, object?>` resolves each value's runtime type at serialization
+  time correctly (no `JsonPolymorphic`/converter needed — this isn't polymorphic deserialization),
+  verified the wire shape is unchanged, and independently sabotage-checked the new key-set test.
+  Both non-blocking notes (the stray `using`, and a forward-looking note that a future
+  `DateTimeOffset` property in the bag would need a converter — none exists today) were addressed
+  above or noted for later. Clear to commit as-is.
+
 ### Scope additions (agreed)
 
 - Guarded DELETE for sites/units/areas/orgs (`5-L3`) — reference-checked, 409 + blocker list.
@@ -777,6 +819,7 @@ rule does not bite — still prefer new `v1.7+` files over editing `v1.sql`. Bra
 | PR14 | **Camera cursor tiebreaker**: 10-M6 — ✅ implemented; also fixed a live regression in already-merged PR13c/PR13d code found while testing, BA/dotnet-expert reviewed, no blockers | — (code-only) |
 | PR15 | **Reconciliation mutual-consistency check**: 10-M7 — ✅ implemented, BA/dotnet-expert reviewed, 1 blocker found + fixed, `from-federated` override narrowing flagged for Jaydip's decision (not unilaterally settled), 5 integration tests | — (code-only) |
 | PR16 | **Email format + uniqueness**: 6-M5 (was mislabeled 4-M5 too, corrected) — ✅ implemented, BA/dotnet-expert reviewed, 1 blocker found + fixed (display-name syntax silently accepted), 13 unit + 2 integration tests | `ux_platform_users_email` (v1.14.sql) |
+| PR17 | **GIS feed serialization perf**: 10-M8 — ✅ implemented, BA + dotnet-expert reviewed (no blockers), 5 unit tests | — (code-only) |
 | F7   | separate feature branch, **after** the design decision | approval tables |
 
 Status: **not started.**
@@ -1739,9 +1782,16 @@ Findings are mostly M/L.
   diverge; a genuine cross-department placement now needs re-siting on the VMS side, not an
   override here — **flagged as a real, if narrow, behavior change**, not something decided
   unilaterally as obviously desirable).
-- **10-M8** `FeedAsync` builds properties via `JsonSerializer.SerializeToElement` per-property
-  per-camera — 5000 cameras × 13 props = ~65k JsonElement allocations on a map-render hot path.
-  Project to a typed shape or serialise once.
+- **10-M8** ✅ PR17 — `FeedAsync` built properties via `JsonSerializer.SerializeToElement`
+  per-property per-camera — 5000 cameras × 13 props = ~65k values each individually serialized
+  to a buffer and reparsed into a `JsonElement`, then serialized AGAIN when the whole feature
+  collection was written — a full round trip per property, per camera, on the map's own render
+  hot path. `GeoJsonFeature.Properties` changed from `IReadOnlyDictionary<string, JsonElement>`
+  to `IReadOnlyDictionary<string, object?>` — the wire format is identical (a boxed primitive
+  serializes to the same JSON a `JsonElement` holding it would), but each value now serializes
+  exactly once, when the response itself is written. Applies to both `FeedAsync` (the hot path)
+  and `CoverageAsync` (single-camera, not perf-sensitive, but now consistent with the same
+  contract). The `Json<T>()` helper this displaced is removed as dead code.
 
 ### LOW
 

@@ -88,14 +88,25 @@ public sealed record GeoJsonGeometry(
 
 /// <summary>A GeoJSON feature: one geometry plus a free-form properties bag.</summary>
 /// <remarks>
+/// <para>
 /// <c>Geometry</c> is nullable per RFC 7946 §3.2 — a feature that has no location yet (e.g. a
 /// camera with no coverage optics) carries <c>"geometry": null</c> and describes itself in
 /// <c>Properties</c>.
+/// </para>
+/// <para>
+/// <c>Properties</c> holds raw CLR values (<c>Guid</c>, <c>string</c>, <c>double?</c>, arrays,
+/// …), not <see cref="JsonElement"/> (finding 10-M8) — the wire shape is identical either way,
+/// since a boxed primitive and a <c>JsonElement</c> holding the same value serialize to the same
+/// JSON, but building a <see cref="JsonElement"/> per value means serializing each one to a
+/// buffer and parsing it back before the whole feature collection is serialized a second time —
+/// a full round trip per property, per camera, on the map's own render hot path. Plain values
+/// are serialized exactly once, when the response itself is written.
+/// </para>
 /// </remarks>
 public sealed record GeoJsonFeature(
     [property: JsonPropertyName("type")] string Type,
     [property: JsonPropertyName("geometry")] GeoJsonGeometry? Geometry,
-    [property: JsonPropertyName("properties")] IReadOnlyDictionary<string, JsonElement> Properties);
+    [property: JsonPropertyName("properties")] IReadOnlyDictionary<string, object?> Properties);
 
 /// <summary>A GeoJSON <c>FeatureCollection</c> — the shape the map source returns.</summary>
 [System.Diagnostics.CodeAnalysis.SuppressMessage(
