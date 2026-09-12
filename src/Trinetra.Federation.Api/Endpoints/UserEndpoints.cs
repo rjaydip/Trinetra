@@ -1,3 +1,4 @@
+using System.Net.Mail;
 using Npgsql;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Mvc;
@@ -93,14 +94,18 @@ public static class UserEndpoints
               + "added to a group**, so this grants no access by itself.\n\n"
               + "The initial password must meet the policy and is always flagged must-change, so "
               + "the credential the creator typed never stays the user's working one. A duplicate "
-              + "username is a 409.");
+              + "username is a 409. `email` is optional and must be a bare address — no display "
+              + "name (`\"Name <addr>\"` is a 400, not silently reduced to `addr`); one already "
+              + "in use by another account (case-insensitively) is a 409.");
 
         group.MapPut("/{id:guid}", UpdateAsync)
           .RequirePermission("user.manage")
           .WithSummary("Update a user's profile or status")
           .WithDescription(
               "Changes display name, email or status. Membership is not touched here — use "
-              + "`/users/{id}/groups`.\n\n"
+              + "`/users/{id}/groups`. `email` follows the same validation as create: a malformed "
+              + "address is 400, one already in use by another account is 409; omitting it "
+              + "clears it (this is a full replace, not a patch).\n\n"
               + "Deactivating an account (setting `status` to anything other than `ACTIVE`) "
               + "takes effect **immediately**: its access tokens fail on their next request and "
               + "all its refresh tokens are revoked, in the same transaction as the status "
@@ -222,7 +227,47 @@ public static class UserEndpoints
         return TypedResults.Ok<IReadOnlyList<string>>([.. permissions.OrderBy(p => p, StringComparer.Ordinal)]);
     }
 
-    private static async Task<Results<Created<CreatedResponse>, ProblemHttpResult>> CreateAsync(
+    /// <summary>
+    /// Finding 4-M5 / 6-M5: <c>email</c> had no format check and no uniqueness — two accounts
+    /// could share one, or store a typo that would silently break F2 (forgot-password) or F3
+    /// (SSO account linking) once either lands. Uniqueness is enforced in the database
+    /// (`ux_platform_users_email`, v1.14.sql, case-insensitive, `NULL` excluded) — this is the
+    /// named 400 ahead of that, for the failure the database can't catch: a malformed address.
+    /// <see cref="MailAddress"/> parsing is deliberately not full RFC 5322 (nothing practical is
+    /// — hand-rolling a regex would be worse); it rejects the obviously-wrong shapes a typo
+    /// produces without being so strict it bounces a real address.
+    /// </summary>
+    private static bool TryValidateEmail(string? email, out string? normalized, out string? error)
+    {
+        normalized = null;
+        error = null;
+
+        if (string.IsNullOrWhiteSpace(email))
+        {
+            return true;
+        }
+
+        // MailAddress.TryCreate parses RFC 5322 "Display Name <addr@x.com>" and even a bare
+        // "leading word addr@x.com" as a display-name-plus-address pair — real mail-client
+        // syntax, but this is an admin field, not a mail composer. Rejecting anything where the
+        // parsed address isn't the ENTIRE trimmed input (rather than storing .Address instead of
+        // the raw string) means a pasted "John Doe <john@x.com>" is a named 400, not silently
+        // stripped down to john@x.com — the admin sees the correction they need to make, instead
+        // of the system quietly deciding what they meant.
+        var trimmed = email.Trim();
+        if (trimmed.Length > 255
+            || !MailAddress.TryCreate(trimmed, out var parsed)
+            || parsed.Address != trimmed)
+        {
+            error = "email must be a bare address (no display name), at most 255 characters.";
+            return false;
+        }
+
+        normalized = trimmed;
+        return true;
+    }
+
+    internal static async Task<Results<Created<CreatedResponse>, ProblemHttpResult>> CreateAsync(
         [FromBody] CreateUserRequest request, UserRepository users,
         NpgsqlDataSource db, HttpContext http, CancellationToken ct)
     {
@@ -233,6 +278,13 @@ public static class UserEndpoints
         {
             return TypedResults.Problem(
                 title: "Password rejected", detail: reason,
+                statusCode: StatusCodes.Status400BadRequest);
+        }
+
+        if (!TryValidateEmail(request.Email, out var email, out var emailError))
+        {
+            return TypedResults.Problem(
+                title: "Invalid email", detail: emailError,
                 statusCode: StatusCodes.Status400BadRequest);
         }
 
@@ -249,14 +301,29 @@ public static class UserEndpoints
         // credential the user ends up with.
         await using var work = await UnitOfWork.BeginAsync(db, ct);
 
-        var id = await users.CreateAsync(
-            request.Username, request.DisplayName, request.Email,
-            PasswordHasher.Hash(request.Password),
-            mustChangePassword: true, isSystem: false, work, ct);
+        Guid id;
+        try
+        {
+            id = await users.CreateAsync(
+                request.Username, request.DisplayName, email,
+                PasswordHasher.Hash(request.Password),
+                mustChangePassword: true, isSystem: false, work, ct);
+        }
+        catch (PostgresException e) when (e.SqlState == PostgresErrorCodes.UniqueViolation
+            && e.ConstraintName == "ux_platform_users_email")
+        {
+            // Named ahead of the global ConstraintViolationExceptionHandler's generic "Already
+            // exists" — the ExistsAsync pre-check above only covers username; this is email's
+            // own backstop against the same create-time race (finding 4-M5 / 6-M5).
+            return TypedResults.Problem(
+                title: "Email already in use",
+                detail: $"'{email}' is already used by another account.",
+                statusCode: StatusCodes.Status409Conflict);
+        }
 
         await work.AuditAsync(caller, "create", "user", id.ToString(),
             before: null,
-            after: new { request.Username, request.DisplayName, request.Email },
+            after: new { request.Username, request.DisplayName, Email = email },
             organizationUnitId: null, ct);
         await work.CommitAsync(ct);
 
@@ -282,6 +349,13 @@ public static class UserEndpoints
             return refused;
         }
 
+        if (!TryValidateEmail(request.Email, out var email, out var emailError))
+        {
+            return TypedResults.Problem(
+                title: "Invalid email", detail: emailError,
+                statusCode: StatusCodes.Status400BadRequest);
+        }
+
         var status = request.Status ?? before.Status;
 
         await using var work = await UnitOfWork.BeginAsync(db, ct);
@@ -301,7 +375,18 @@ public static class UserEndpoints
                 statusCode: StatusCodes.Status409Conflict);
         }
 
-        await users.UpdateAsync(id, request.DisplayName, request.Email, status, work, ct);
+        try
+        {
+            await users.UpdateAsync(id, request.DisplayName, email, status, work, ct);
+        }
+        catch (PostgresException e) when (e.SqlState == PostgresErrorCodes.UniqueViolation
+            && e.ConstraintName == "ux_platform_users_email")
+        {
+            return TypedResults.Problem(
+                title: "Email already in use",
+                detail: $"'{email}' is already used by another account.",
+                statusCode: StatusCodes.Status409Conflict);
+        }
 
         // Deactivation is immediate: kill every session the account has, in this same
         // transaction, so an access token issued minutes ago cannot outlive it.
@@ -311,7 +396,7 @@ public static class UserEndpoints
         }
 
         await work.AuditAsync(caller, "update", "user", id.ToString(), before,
-            new { request.DisplayName, request.Email, status }, organizationUnitId: null, ct);
+            new { request.DisplayName, Email = email, status }, organizationUnitId: null, ct);
         await work.CommitAsync(ct);
 
         return TypedResults.NoContent();

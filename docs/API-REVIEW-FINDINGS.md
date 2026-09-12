@@ -215,10 +215,12 @@ validation, `9-M1` VerifyTls non-nullable (TLS downgrade), `9-M2` org/site ACTIV
 (`geography.read` vs `organization.read`) ✅ PR6.
 
 **OTHER MEDIUM (`4-M1` ✅ PR12, `6-M4` ✅ PR13a, `15-M3` ✅ PR13b, `10-M5` ✅ PR13c, `10-M4` ✅
-PR13d, `10-M6` ✅ PR14, `17-M1..M3` ✅ v1.13 — all corrected here 2026-09-12, was stale):**
-`4-M5` email unvalidated/non-unique (blocks F2/F3), `4-M6` no breached-password screen, `4-M7`
-CORS, `4-M8` bootstrap password lingers, `6-M5` email (same underlying gap as 4-M5), `10-M7`
-reconcile location consistency, `10-M8` GIS feed per-prop JsonElement alloc.
+PR13d, `10-M6` ✅ PR14, `10-M7` ✅ PR15, `17-M1..M3` ✅ v1.13 — all corrected here 2026-09-12,
+was stale):**
+`4-M6` no breached-password screen, `4-M7` CORS, `4-M8` bootstrap password lingers, `6-M5` ✅
+PR16 email unvalidated/non-unique (blocks F2/F3), `10-M8` GIS feed per-prop JsonElement alloc.
+(`4-M5` is a different, already-closed finding — password history/minimum age, PR7e — not email;
+an earlier pass here mislabeled the email gap as also being `4-M5`, corrected 2026-09-12.)
 **Parked (2026-09-11, see the PR13b block below for why):** `4-M3` login rate-limit per-IP only,
 `8-M1` no key max lifetime, `8-M2` no key rotation endpoint.
 **Moved to the design track (2026-09-11, see below):** `14-M2` `event.acknowledge` seeded w/ no
@@ -653,6 +655,67 @@ PR13d both merged by this point; uncommitted 2026-09-12):**
   `federated_camera` rows that are ALREADY inconsistent from before this fix shipped — worth a
   follow-up ticket, this PR only stops new ones.
 
+**PR16 — email format + uniqueness (branch `pr16-email-validation`, off `main`; uncommitted
+2026-09-12):**
+- **6-M5** ✅ — see the finding entry above for the fix itself. New `db/versions/v1.14.sql`:
+  `CREATE UNIQUE INDEX ux_platform_users_email ON platform_users (lower(email)) WHERE email IS
+  NOT NULL` — case-insensitive, partial (every pre-existing row has `email = NULL`, which must
+  never collide with itself). `db/full-schema.sql` updated to match. New
+  `UserEndpoints.TryValidateEmail` (`System.Net.Mail.MailAddress.TryCreate` — deliberately not a
+  hand-rolled regex; nothing practical is full RFC 5322 either) wired into both `CreateAsync` and
+  `UpdateAsync`, ahead of the DB constraint, for the failure the database can't catch: a
+  malformed address. The DB constraint itself is the backstop for the race a pre-check can't
+  close — both endpoints now catch `PostgresException` on `ux_platform_users_email` specifically
+  for a named `409 "Email already in use"`, rather than relying on the global
+  `ConstraintViolationExceptionHandler`'s generic "Already exists" (which the endpoint calls in
+  this repo's own tests can't observe anyway — those bypass the middleware pipeline).
+- Both endpoints' `.WithDescription` updated; `UserRepository.CreateAsync`/`UpdateAsync` audit
+  rows now record the trimmed/normalized email, not the raw request value.
+- New `UserEmailValidationTests` (13, unit, reflection against the private `TryValidateEmail`):
+  empty/whitespace clears the field; well-formed addresses round-trip; surrounding whitespace is
+  trimmed; malformed shapes and an over-255-char address are rejected; display-name syntax is
+  rejected outright (see review below). New `UserEmailUniquenessTests` (2, integration, via
+  `internal CreateAsync` called directly): case-different duplicate email is `409`, not a raw
+  `500`; two accounts with no email at all both succeed (confirms the partial index's `NULL`
+  exclusion actually works, not just in theory). Sabotage-checked: dropping the migration's
+  index reproduced silent duplicate acceptance (both accounts created, `201`/`201`); disabling
+  the format check reproduced acceptance of every malformed test case; disabling the
+  display-name rejection specifically reproduced accepting all three display-name test cases.
+  All restored, reverified.
+- Doc correction while here: the priority index above had `4-M5` doing double duty as both the
+  real, already-closed password-history finding (PR7e) AND this email gap — a mislabeling from
+  an earlier pass, not a genuine second finding. Corrected; `6-M5` is the only number for the
+  email gap.
+- Build clean; 154 unit / 275 integration + 18 pre-existing (unchanged baseline).
+- **BA + dotnet-expert reviewed PR16, 2026-09-12.** dotnet-expert: no blockers — migration
+  idempotency, the `db/full-schema.sql` sync, `PostgresException.ConstraintName` reliably
+  reporting an INDEX name (not just a table `CONSTRAINT`) on a unique-violation, the `internal`
+  pattern, and audit fidelity (normalized value strictly more accurate than the raw request) all
+  verified correct; confirmed `PostgresFixture` sorts version files numerically, not
+  alphabetically, so `v1.14.sql` is genuinely exercised, not skipped.
+  **BA found a real blocker, fixed**: `MailAddress.TryCreate` also accepts RFC 5322 "Display
+  Name &lt;addr&gt;" syntax — and even a bare "leading-word addr@x.com" as a display-name-plus-
+  address pair — and the original code stored the raw trimmed input as `normalized`, not the
+  parsed address. An admin pasting a "From:" line (an easy accident) would have had the literal
+  string, display name included, silently stored and used for uniqueness — a real, untested,
+  silent data-quality bug directly contradicting this finding's own point (email must reliably
+  identify one account for F2/F3). Fixed by rejecting any input where the parsed address isn't
+  the *entire* trimmed string, rather than accepting it and keeping only `.Address` — this is an
+  admin field, not a mail composer, so the admin sees the correction needed instead of the
+  system quietly deciding what they meant. 3 new unit tests added and sabotage-confirmed against
+  exactly the bug BA found.
+  BA also raised (not applied, recorded as follow-ups): catching the specific unique-constraint
+  exception per-endpoint is a real message-quality improvement over the global handler's generic
+  "Already exists" (wrong wording for email — "Codes must be unique" doesn't fit), not purely a
+  test-infrastructure workaround — but the pattern doesn't scale to future unique fields; a
+  small per-constraint message registry on `ConstraintViolationExceptionHandler`, or a thin
+  `WebApplicationFactory`-based test host so future endpoints can exercise the real global path,
+  would be the right fix instead of more per-endpoint catches. Confirmed deferring
+  "email-verified" state is correct (no verification flow exists yet to design the flag around;
+  shipping one now risks locking in the wrong shape). Confirmed folding the `4-M5` doc-hygiene
+  fix into this PR was fine — a one-line label correction, zero code overlap, not worth its own
+  commit.
+
 ### Scope additions (agreed)
 
 - Guarded DELETE for sites/units/areas/orgs (`5-L3`) — reference-checked, 409 + blocker list.
@@ -713,6 +776,7 @@ rule does not bite — still prefer new `v1.7+` files over editing `v1.sql`. Bra
 | PR13d | **Bulk-import savepoints**: 10-M4 — ✅ implemented, BA/dotnet-expert reviewed, 1 blocker found + fixed, 4 integration tests | — (code-only) |
 | PR14 | **Camera cursor tiebreaker**: 10-M6 — ✅ implemented; also fixed a live regression in already-merged PR13c/PR13d code found while testing, BA/dotnet-expert reviewed, no blockers | — (code-only) |
 | PR15 | **Reconciliation mutual-consistency check**: 10-M7 — ✅ implemented, BA/dotnet-expert reviewed, 1 blocker found + fixed, `from-federated` override narrowing flagged for Jaydip's decision (not unilaterally settled), 5 integration tests | — (code-only) |
+| PR16 | **Email format + uniqueness**: 6-M5 (was mislabeled 4-M5 too, corrected) — ✅ implemented, BA/dotnet-expert reviewed, 1 blocker found + fixed (display-name syntax silently accepted), 13 unit + 2 integration tests | `ux_platform_users_email` (v1.14.sql) |
 | F7   | separate feature branch, **after** the design decision | approval tables |
 
 Status: **not started.**
@@ -1264,9 +1328,12 @@ Review 2026-09-04. Write paths are meticulously guarded (escalation chokepoint +
   refusal is a clean rollback (transaction never committed). Confirmed reproducible without the
   fix — reverted it locally, the concurrent-race test failed 3/3 runs (both deactivations
   succeeded, leaving zero admins) — then re-verified the fix passes 3/3.
-- **6-M5** Email unvalidated + not unique on `CreateAsync`/`UpdateAsync` — needed for F2 (forgot
-  password) and F3 (SSO account linking). Add format check + unique constraint + (later)
-  verification state.
+- **6-M5** ✅ PR16 — email was unvalidated and not unique on `CreateAsync`/`UpdateAsync`. Format
+  checked application-side (`MailAddress.TryCreate`, 400); uniqueness enforced in the database
+  (`ux_platform_users_email`, v1.14.sql, case-insensitive, `NULL` excluded, 409). Email-
+  verification state deliberately NOT added here — that's real scope for F2/F3 themselves, not a
+  prerequisite gap; this PR only removes what would otherwise block them (garbage/duplicate data
+  already on file by the time either lands).
 - **6-M6** ✅ PR9 (+ review fix — the paged members query 500'd on any non-empty roster; fixed).
 - **6-M6 (orig)** No pagination on `ListAsync` (users), `ListAsync` (groups), `MembersAsync`. Same class
   as 5-M7. Thousands of users/members at scale.
