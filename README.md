@@ -98,6 +98,11 @@ dotnet run --project src/Trinetra.Federation.Worker    # connector workers
 In the Development environment, the interactive Scalar API Reference is available at
 `/scalar`; the generated OpenAPI document is at `/openapi/v1.json`.
 
+The Model 1 registry frontend lives in [`frontend/`](frontend/README.md). From that directory,
+copy `.env.example`, run `npm install`, and start it with `npm run dev -- --host 0.0.0.0`. It uses
+the deployed API (default `http://localhost:5261`); configure the API's explicit
+`Auth:AllowedOrigins` entry for the frontend origin before signing in.
+
 Nothing in the running system creates, changes or checks the schema — that is entirely yours.
 `db/versions/v1.sql` builds a complete database; a later version adds its own file. To change the
 schema, write the next version and apply it yourself. `docs/OPERATIONS.md` covers configuration,

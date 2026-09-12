@@ -1,0 +1,152 @@
+import '@testing-library/jest-dom/vitest';
+import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router-dom';
+import { afterEach, expect, it, vi } from 'vitest';
+import { App } from '../../App';
+import { AuthProvider } from '../../auth/AuthProvider';
+import { saveSession } from '../../auth/session';
+import { sessionFixture } from '../../test/fixtures';
+
+afterEach(() => { vi.unstubAllGlobals(); sessionStorage.clear(); });
+
+const organizationId = 'c0a80101-0000-4000-8000-000000000001';
+const organization = { id: organizationId, code: 'OPS', name: 'Operations', organizationType: 'PUBLIC', description: null, status: 'ACTIVE' };
+const organizationUnit = { id: 'c0a80101-0000-4000-8000-000000000010', organizationId, parentUnitId: null, code: 'NORTH', name: 'North Unit', unitType: 'REGION', status: 'ACTIVE' };
+const site = { id: 'c0a80101-0000-4000-8000-000000000020', code: 'HQ', name: 'Headquarters', geographicAreaId: 'c0a80101-0000-4000-8000-000000000030', siteType: 'OFFICE', address: null, latitude: null, longitude: null, status: 'ACTIVE' };
+
+it('shows a retryable organization failure beside the selector', async () => {
+  saveSession(sessionFixture('registrar', ['camera.create']));
+  let organizationsUnavailable = true;
+  vi.stubGlobal('fetch', async (input: RequestInfo | URL) => {
+    if (String(input).endsWith('/organizations') && organizationsUnavailable) {
+      return Response.json({ title: 'Unavailable', detail: 'Reference data is temporarily unavailable.' }, { status: 503 });
+    }
+    if (String(input).endsWith('/organizations')) return Response.json([organization]);
+    return Response.json([]);
+  });
+  render(<MemoryRouter initialEntries={['/cameras/new']}><AuthProvider><App /></AuthProvider></MemoryRouter>);
+  const message = await screen.findByText('Reference data is temporarily unavailable.');
+  expect(message.closest('[role="status"]')).toHaveAttribute('aria-live', 'polite');
+  expect(screen.getByLabelText(/^organization$/i)).toBeDisabled();
+  organizationsUnavailable = false;
+  await userEvent.click(screen.getByRole('button', { name: /retry organizations/i }));
+  expect(await screen.findByRole('option', { name: /operations/i })).toBeVisible();
+});
+
+it('preserves entered camera values while organization units fail and retry', async () => {
+  saveSession(sessionFixture('registrar', ['camera.create']));
+  let unitsUnavailable = true;
+  vi.stubGlobal('fetch', async (input: RequestInfo | URL) => {
+    const url = new URL(String(input));
+    if (url.pathname === '/api/v1/organizations') return Response.json([organization]);
+    if (url.pathname === `/api/v1/organizations/${organizationId}/units`) {
+      if (unitsUnavailable) return Response.json({ title: 'Unavailable', detail: 'Organization units are temporarily unavailable.' }, { status: 503 });
+      return Response.json([organizationUnit]);
+    }
+    if (url.pathname === '/api/v1/sites') return Response.json([site]);
+    if (url.pathname === '/api/v1/vms') return Response.json([]);
+    return new Response(null, { status: 404 });
+  });
+  const user = userEvent.setup();
+
+  render(<MemoryRouter initialEntries={['/cameras/new']}><AuthProvider><App /></AuthProvider></MemoryRouter>);
+
+  const cameraCode = await screen.findByLabelText(/camera code/i);
+  await user.type(cameraCode, 'CAM-PRESERVED');
+  await user.type(screen.getByLabelText(/^name/i), 'Preserved camera');
+  await user.selectOptions(screen.getByLabelText(/^organization$/i), organizationId);
+
+  const error = await screen.findByText('Organization units are temporarily unavailable.');
+  expect(error.closest('[role="status"]')).toHaveAttribute('aria-live', 'polite');
+  expect(screen.getByLabelText(/camera code/i)).toHaveValue('CAM-PRESERVED');
+  expect(screen.getByLabelText(/^name/i)).toHaveValue('Preserved camera');
+  expect(screen.getByLabelText(/^organization unit/i)).toBeDisabled();
+
+  unitsUnavailable = false;
+  await user.click(screen.getByRole('button', { name: /retry organization units/i }));
+
+  expect(await screen.findByRole('option', { name: /north unit/i })).toBeVisible();
+  expect(screen.getByLabelText(/camera code/i)).toHaveValue('CAM-PRESERVED');
+  expect(screen.getByLabelText(/^name/i)).toHaveValue('Preserved camera');
+  expect(screen.getByLabelText(/^organization unit/i)).toBeEnabled();
+});
+
+it('explains why organization and organization-unit selectors are unavailable when results are empty', async () => {
+  saveSession(sessionFixture('registrar', ['camera.create']));
+  vi.stubGlobal('fetch', async (input: RequestInfo | URL) => {
+    const url = new URL(String(input));
+    if (url.pathname === '/api/v1/sites') return Response.json([site]);
+    return Response.json([]);
+  });
+
+  render(<MemoryRouter initialEntries={['/cameras/new']}><AuthProvider><App /></AuthProvider></MemoryRouter>);
+
+  expect(await screen.findByLabelText(/^organization$/i)).toBeDisabled();
+  const organizationStatus = await screen.findByText(/no organizations are available/i);
+  expect(organizationStatus.closest('[role="status"]')).toHaveAttribute('aria-live', 'polite');
+  expect(screen.getByLabelText(/^organization unit/i)).toBeDisabled();
+  expect(screen.getByText(/select an organization to load its organization units/i)).toBeVisible();
+});
+
+it('explains why an organization unit is unavailable when the selected organization has none', async () => {
+  saveSession(sessionFixture('registrar', ['camera.create']));
+  vi.stubGlobal('fetch', async (input: RequestInfo | URL) => {
+    const url = new URL(String(input));
+    if (url.pathname === '/api/v1/organizations') return Response.json([organization]);
+    if (url.pathname === '/api/v1/sites') return Response.json([site]);
+    return Response.json([]);
+  });
+  const user = userEvent.setup();
+
+  render(<MemoryRouter initialEntries={['/cameras/new']}><AuthProvider><App /></AuthProvider></MemoryRouter>);
+  await screen.findByRole('option', { name: /operations/i });
+  await user.selectOptions(screen.getByLabelText(/^organization$/i), organizationId);
+
+  expect(await screen.findByLabelText(/^organization unit/i)).toBeDisabled();
+  const unitStatus = screen.getByText(/no organization units are available for this organization/i);
+  expect(unitStatus.closest('[role="status"]')).toHaveAttribute('aria-live', 'polite');
+  expect(unitStatus).toHaveTextContent(/choose another organization or ask an administrator/i);
+});
+
+it('explains why the required site selector is unavailable when no sites exist', async () => {
+  saveSession(sessionFixture('registrar', ['camera.create']));
+  vi.stubGlobal('fetch', async (input: RequestInfo | URL) => {
+    const url = new URL(String(input));
+    if (url.pathname === '/api/v1/organizations') return Response.json([organization]);
+    return Response.json([]);
+  });
+
+  render(<MemoryRouter initialEntries={['/cameras/new']}><AuthProvider><App /></AuthProvider></MemoryRouter>);
+
+  expect(await screen.findByLabelText(/^site/i)).toBeDisabled();
+  const siteStatus = await screen.findByText(/no sites are available/i);
+  expect(siteStatus.closest('[role="status"]')).toHaveAttribute('aria-live', 'polite');
+  expect(siteStatus).toHaveTextContent(/ask an administrator to create a site/i);
+});
+
+it('loads map context only with a bounded bbox after coordinates are valid', async () => {
+  saveSession(sessionFixture('registrar', ['camera.create']));
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    if (String(input).includes('/gis/cameras')) return Response.json({ type: 'FeatureCollection', features: [] });
+    return Response.json([]);
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  render(<MemoryRouter initialEntries={['/cameras/new']}><AuthProvider><App /></AuthProvider></MemoryRouter>);
+
+  const latitude = await screen.findByLabelText(/^Latitude/i);
+  expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/gis/cameras'))).toBe(false);
+
+  await userEvent.type(latitude, '19.076');
+  expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/gis/cameras'))).toBe(false);
+  await userEvent.type(screen.getByLabelText(/^Longitude/i), '72.8777');
+
+  await waitFor(() => expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/gis/cameras'))).toBe(true));
+  const gisUrls = fetchMock.mock.calls.map(([input]) => String(input)).filter((url) => url.includes('/gis/cameras'));
+  for (const url of gisUrls) {
+    const bbox = new URL(url, 'http://localhost').searchParams.get('bbox')?.split(',').map(Number);
+    expect(bbox).toHaveLength(4);
+    expect(bbox![2] - bbox![0]).toBeLessThanOrEqual(0.02);
+    expect(bbox![3] - bbox![1]).toBeLessThanOrEqual(0.02);
+  }
+});
