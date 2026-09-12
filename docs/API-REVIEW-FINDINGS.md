@@ -484,6 +484,59 @@ uncommitted 2026-09-11):**
   is closer than before, but not independently measured) — accepted as a residual, unmeasured,
   low-practical-severity gap, not blocking.
 
+**PR13d — bulk-import savepoints (branch `pr13d-bulk-import-savepoints`, based off `pr13b`, not
+`pr13c` — the two touch overlapping code and will need a straightforward merge/rebase when both
+are committed; uncommitted 2026-09-12):**
+- **10-M4** ✅ — see the finding entry above. Owner explicitly chose savepoints over a background
+  job (three options were presented: savepoints, background job + status endpoint, or lower the
+  row cap + timeout guard — background job and lower-cap were both rejected as either too much
+  new infrastructure for what this is, or not fixing the root cause).
+- `CameraEndpoints.BulkImportAsync` made `internal` (same pattern as PR13c) to test directly.
+  Route doc (`.WithDescription`) updated to state the new commit-together-at-the-end semantics
+  explicitly, including the mid-batch-connection-loss trade-off.
+- New `BulkImportSavepointTests` (2 initially, 4 after review — see below):
+  `Insert_OneDuplicateCodeMidBatch_OthersStillCommit` seeds a live camera, then submits a batch
+  with a good row / a row colliding on that seeded code (a real `UniqueViolation`, not just a
+  validation error — the actual case that used to abort a shared Postgres transaction until
+  rolled back) / another good row, and asserts both good rows are actually on disk after the
+  batch commits, not just reported "created" before a hypothetical rollback discarded them.
+  `Insert_OneValidationFailureMidBatch_OthersStillCommit` covers the same claim for a row that
+  never reaches a savepoint at all (fails `TryBuild` before any DB call). Sabotage-checked: with
+  the post-`UniqueViolation` `RollbackAsync(savepoint, ct)` call removed, the very next row's
+  query in the same test run throws `25P02 current transaction is aborted, commands ignored
+  until end of transaction block` — a stronger confirmation than a value-mismatch failure would
+  have been, since it demonstrates *why* the rollback is structurally required, not just that
+  the test happens to check for it. Restored, reverified both tests pass.
+- **BA + dotnet-expert reviewed PR13d, 2026-09-12.** dotnet-expert found a **blocker**, fixed
+  before handoff: `CameraRepository.FindLiveIdByCodeAsync` read on its own connection, outside
+  the batch's now-shared transaction — at READ COMMITTED, invisible to an earlier row's still-
+  uncommitted insert in the SAME batch. Two rows sharing a `cameraCode` in one `upsert` request
+  both took the "no existing row" branch; the second then hit a live `UniqueViolation` instead of
+  correctly replacing the first — a genuine behavior change from the pre-fix per-row-transaction
+  design, where each row committed independently and was visible to the next row's own fresh
+  connection. Fixed with a new `FindLiveIdByCodeAsync(string, CallerContext, UnitOfWork, ...)`
+  overload that reads through `work`'s own connection/transaction instead of opening a separate
+  one, so a later row correctly sees an earlier row's uncommitted write in the same batch — same
+  observable behavior as before, on the new cheaper mechanism. New
+  `Upsert_TwoRowsSameCodeInOneBatch_SecondReplacesTheFirst` test; sabotage-checked (reverted to
+  the old connection-per-call form, reproduced the exact `duplicate camera_code` misbehavior the
+  reviewer predicted; restored, reverified).
+  Also flagged by BA, both applied: (1) row isolation was only tested for `UniqueViolation` and a
+  pre-DB validation failure, not the `ForbiddenException` (out-of-scope) path the findings doc
+  itself calls out as the realistic 500-row multi-department scenario — added
+  `Insert_OneOutOfScopeRowMidBatch_OthersStillCommit` (a real scoped caller + `RequirePlacementAsync`-
+  backed org-scope refusal, not a simulated one); (2) the route doc explained the mechanism but
+  not the actionable retry contract — added explicit guidance ("only a completed 200 means the
+  batch landed... retry the whole batch on any error/timeout/disconnect").
+  Two BA points intentionally left as-is, not applied: `MaxBulkRows` staying at 500 despite the
+  larger now-all-or-nothing blast radius, and the "background job" rationale being weaker than
+  stated (this fix cuts per-row overhead, it does not bound wall-clock duration or add a timeout
+  guard for a legitimate 500-row batch) — both are real observations about the *durability/latency
+  trade-off itself*, which the owner already weighed and decided on (savepoints, 500 unchanged)
+  when presented all three options up front; re-litigating the choice isn't this review's call,
+  so both are recorded here for the record rather than acted on.
+- Build clean; 139 unit / 264 integration + 18 pre-existing (unchanged baseline).
+
 ### Scope additions (agreed)
 
 - Guarded DELETE for sites/units/areas/orgs (`5-L3`) — reference-checked, 409 + blocker list.
@@ -532,6 +585,7 @@ rule does not bite — still prefer new `v1.7+` files over editing `v1.sql`. Bra
 | PR12 | **Must-change-password enforcement**: 4-M1 / 5-L5 — ✅ implemented, BA/dotnet-expert reviewed, no blockers, 3 unit tests | — (code-only) |
 | PR13a | **Lockout-guard TOCTOU fix**: 6-M4 — ✅ implemented, BA/dotnet-expert reviewed, no blockers, 3 integration tests | — (code-only) |
 | PR13b | **Detection camera-resolution existence-oracle fix**: 15-M3 — ✅ implemented, BA/dotnet-expert review pending, 1 new + 3 updated integration tests | — (code-only) |
+| PR13d | **Bulk-import savepoints**: 10-M4 — ✅ implemented, BA/dotnet-expert reviewed, 1 blocker found + fixed, 4 integration tests | — (code-only) |
 | F7   | separate feature branch, **after** the design decision | approval tables |
 
 Status: **not started.**
@@ -1458,9 +1512,15 @@ Findings are mostly M/L.
 - ✅ **10-M3** `NullableString` (CameraEndpoints.cs:712-721) silently **truncates** over-length
   values (`s[..max]`) instead of erroring — a 60-char `ipAddress` PATCH becomes a corrupt 45-char
   string. `RequireString` errors on over-length; the nullable variant corrupts. Make it error too.
-- **10-M4** `BulkImportAsync` — up to 500 rows, each its own `BeginAsync`/`CommitAsync` executed
-  sequentially inside one synchronous HTTP request → many seconds holding the request open, no
-  timeout guard. Consider a background job above some row threshold.
+- **10-M4** ✅ PR13d — `BulkImportAsync` used to open and commit a full separate transaction per
+  row (up to 500, sequential, synchronous inside one HTTP request) — the dominant cost at scale.
+  Owner decision (2026-09-12): savepoints over a background job. Now one connection/transaction
+  for the whole batch; each row gets a `SAVEPOINT` instead of its own `BEGIN`/`COMMIT` — same
+  per-row isolation (one bad row never rolls back the good ones), far fewer round trips. Trade-off
+  accepted and documented on the route: rows now commit together at the end, not independently —
+  a connection lost mid-batch takes the whole batch with it, where a genuinely separate
+  transaction per row would have kept whatever had already committed. `MaxBulkRows` (500)
+  unchanged — not part of this fix.
 - **10-M5** `BulkImportAsync` upsert-replace path audits `before: null` (line 242) — prior state
   not captured, unlike the single `ReplaceAsync` which does `Redact(before)`. Audit fidelity gap
   on the bulk path.

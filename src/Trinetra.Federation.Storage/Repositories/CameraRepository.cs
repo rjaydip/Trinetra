@@ -128,14 +128,45 @@ public sealed class CameraRepository
 
         await using var c = await _dataSource.OpenConnectionAsync(ct);
 
+        return await FindLiveIdByCodeAsync(code, caller, c, null, ct);
+    }
+
+    /// <summary>
+    /// The transaction-scoped form of <see cref="FindLiveIdByCodeAsync(string, CallerContext, CancellationToken)"/>.
+    /// </summary>
+    /// <remarks>
+    /// Bulk import (finding 10-M4) shares one transaction across up to 500 rows now, instead of
+    /// committing each row's write independently before the next row runs. The connection-per-call
+    /// form above reads on its own connection at READ COMMITTED, so it cannot see an earlier
+    /// row's still-uncommitted insert in the SAME batch — two rows in one `upsert` request
+    /// sharing a `cameraCode` would both take the "no existing row" branch and the second would
+    /// hit a live `UniqueViolation` instead of correctly replacing the first. Reading through the
+    /// batch's own connection/transaction instead means row 2 sees row 1's uncommitted insert,
+    /// exactly as it would have seen row 1's already-committed insert under the old per-row-
+    /// transaction design — same observable behaviour, cheaper underlying mechanism.
+    /// </remarks>
+    public async Task<Guid?> FindLiveIdByCodeAsync(
+        string code, CallerContext caller, UnitOfWork work, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(caller);
+        ArgumentNullException.ThrowIfNull(work);
+        caller.Require("camera.read");
+
+        return await FindLiveIdByCodeAsync(code, caller, work.Connection, work.Transaction, ct);
+    }
+
+    private async Task<Guid?> FindLiveIdByCodeAsync(
+        string code, CallerContext caller, NpgsqlConnection connection, NpgsqlTransaction? transaction,
+        CancellationToken ct)
+    {
         var args = ScopeArgs(Guid.Empty, caller, "camera.read");
         args.Add("code", code);
 
-        return await c.ExecuteScalarAsync<Guid?>(new CommandDefinition($"""
+        return await connection.ExecuteScalarAsync<Guid?>(new CommandDefinition($"""
             SELECT c.id FROM federation.cameras c
             WHERE c.camera_code = @code AND c.deleted_at IS NULL
               AND ({Scope("camera.read")});
-            """, args, cancellationToken: ct));
+            """, args, transaction, cancellationToken: ct));
     }
 
     // -------------------------------------------------------------------
