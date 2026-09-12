@@ -263,6 +263,28 @@ export interface OrganizationUnitResponse {
   status: string;
 }
 
+/** `POST /api/v1/organization-units/{id}/move` — re-parents a unit into a different organization. */
+export interface MoveUnitRequest {
+  newParentUnitId: string;
+  confirmScopeImpact?: boolean;
+}
+
+/** One access group whose organization scope points into a subtree being moved. */
+export interface AffectedGroupResponse {
+  id: string;
+  code: string;
+  memberCount: number;
+}
+
+export interface MoveUnitResponse {
+  fromOrganizationId: string;
+  toOrganizationId: string;
+  subtreeSize: number;
+  camerasFollowing: number;
+  targetsFollowing: number;
+  affectedGroups: AffectedGroupResponse[];
+}
+
 export interface GeographicAreaRequest {
   code: string;
   name: string;

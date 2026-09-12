@@ -40,6 +40,8 @@ import type {
   MaintenanceCreateRequest,
   MaintenanceRecordResponse,
   MaintenanceUpdateRequest,
+  MoveUnitRequest,
+  MoveUnitResponse,
   OrganizationResponse,
   OrganizationRequest,
   OrganizationUnitResponse,
@@ -149,6 +151,7 @@ export const api = {
       updateUnit: (id: string, body: OrganizationUnitRequest) => request<OrganizationUnitResponse>(`/api/v1/organization-units/${id}`, { body: JSON.stringify(body), method: 'PUT' }),
       activateUnit: (id: string) => request<void>(`/api/v1/organization-units/${id}/activate`, { method: 'POST' }),
       deactivateUnit: (id: string, body: DeactivateRequest = {}) => request<void>(`/api/v1/organization-units/${id}/deactivate`, json(body)),
+      moveUnit: (id: string, body: MoveUnitRequest) => request<MoveUnitResponse>(`/api/v1/organization-units/${id}/move`, json(body)),
     },
     geography: {
       listAreas: (query: { rootsOnly?: boolean; parentId?: string } = {}) => request<GeographicAreaResponse[]>(withQuery('/api/v1/geographic-areas', query)),

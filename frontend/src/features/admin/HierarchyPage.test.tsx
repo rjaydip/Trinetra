@@ -14,12 +14,19 @@ const organizationId = '10000000-0000-4000-8000-000000000001';
 const unitId = '10000000-0000-4000-8000-000000000002';
 const areaId = '10000000-0000-4000-8000-000000000003';
 const newParentId = '10000000-0000-4000-8000-000000000004';
+const secondOrganizationId = '10000000-0000-4000-8000-000000000005';
+const secondOrganizationUnitId = '10000000-0000-4000-8000-000000000006';
 
 const organizations = [{
   id: organizationId, code: 'POLICE', name: 'State Police', organizationType: 'AGENCY', description: null, status: 'ACTIVE',
+}, {
+  id: secondOrganizationId, code: 'FIRE', name: 'Fire Department', organizationType: 'AGENCY', description: null, status: 'ACTIVE',
 }];
 const units = [{
   id: unitId, organizationId, parentUnitId: null, code: 'HQ', name: 'Headquarters', unitType: 'DEPARTMENT', status: 'ACTIVE',
+}];
+const secondOrganizationUnits = [{
+  id: secondOrganizationUnitId, organizationId: secondOrganizationId, parentUnitId: null, code: 'FHQ', name: 'Fire Headquarters', unitType: 'DEPARTMENT', status: 'ACTIVE',
 }];
 const areas = [
   { id: areaId, parentAreaId: null, code: 'NORTH', name: 'North zone', areaType: 'ZONE', status: 'ACTIVE' },
@@ -45,16 +52,32 @@ function renderHierarchy(permissions: string[]) {
   );
 }
 
-function hierarchyFetch(options: { areaConflict?: boolean } = {}) {
+function hierarchyFetch(options: { areaConflict?: boolean; moveConflict?: boolean } = {}) {
   let deactivationAttempts = 0;
+  let moveAttempts = 0;
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input));
     if (url.pathname === '/api/v1/organizations' && init?.method === 'PUT') return Response.json(organizations[0]);
     if (url.pathname === `/api/v1/organizations/${organizationId}` && init?.method === 'PUT') return Response.json(organizations[0]);
     if (url.pathname === `/api/v1/organization-units/${unitId}` && init?.method === 'PUT') return Response.json(units[0]);
+    if (url.pathname === `/api/v1/organization-units/${unitId}/move` && init?.method === 'POST') {
+      moveAttempts += 1;
+      const confirmed = (JSON.parse(String(init.body)) as { confirmScopeImpact?: boolean }).confirmScopeImpact;
+      if (options.moveConflict && !confirmed) {
+        return Response.json({
+          title: 'Move affects existing access-group scopes',
+          detail: 'Access groups have an organization scope pointing into this subtree.',
+        }, { status: 409 });
+      }
+      return Response.json({
+        fromOrganizationId: organizationId, toOrganizationId: secondOrganizationId, subtreeSize: 1,
+        camerasFollowing: 0, targetsFollowing: 0, affectedGroups: [],
+      });
+    }
     if (url.pathname === `/api/v1/geographic-areas/${areaId}` && init?.method === 'PUT') return Response.json(areas[0]);
     if (url.pathname === '/api/v1/organizations') return Response.json(organizations);
     if (url.pathname === `/api/v1/organizations/${organizationId}/units`) return Response.json(units);
+    if (url.pathname === `/api/v1/organizations/${secondOrganizationId}/units`) return Response.json(secondOrganizationUnits);
     if (url.pathname === '/api/v1/geographic-areas/types') return Response.json([{ code: 'ZONE', name: 'Zone', levelOrder: 1 }]);
     if (url.pathname === '/api/v1/geographic-areas') return Response.json(areas);
     if (url.pathname === `/api/v1/geographic-areas/${areaId}/deactivate` && init?.method === 'POST') {
@@ -221,6 +244,59 @@ describe('HierarchyPage editing and tree navigation', () => {
       expect(putCalls.length).toBeGreaterThan(0);
       const sent = JSON.parse(String((putCalls[0][1] as RequestInit).body));
       expect(sent.name).toBe('Main HQ');
+    });
+  });
+});
+
+describe('HierarchyPage cross-organization move', () => {
+  it('moves a unit into another organization once a destination and parent are chosen', async () => {
+    const fetch = hierarchyFetch();
+    vi.stubGlobal('fetch', fetch);
+    const user = userEvent.setup();
+    renderHierarchy(['organization.read', 'organization.manage']);
+
+    await user.click(await screen.findByRole('button', { name: /move headquarters to another organization/i }));
+    await user.selectOptions(screen.getByLabelText(/destination organization/i), secondOrganizationId);
+    await user.selectOptions(await screen.findByLabelText(/new parent unit/i), secondOrganizationUnitId);
+    await user.click(screen.getByRole('button', { name: /^move unit$/i }));
+
+    await waitFor(() => {
+      const moveCall = fetch.mock.calls.find(([input, init]) => (
+        String(input).includes(`/organization-units/${unitId}/move`) && (init as RequestInit | undefined)?.method === 'POST'
+      ));
+      expect(moveCall).toBeDefined();
+      expect(JSON.parse(String((moveCall![1] as RequestInit).body))).toEqual({
+        newParentUnitId: secondOrganizationUnitId, confirmScopeImpact: false,
+      });
+    });
+  });
+
+  it('requires explicit confirmation after a scope-impact conflict before retrying the move', async () => {
+    const fetch = hierarchyFetch({ moveConflict: true });
+    vi.stubGlobal('fetch', fetch);
+    const user = userEvent.setup();
+    renderHierarchy(['organization.read', 'organization.manage']);
+
+    await user.click(await screen.findByRole('button', { name: /move headquarters to another organization/i }));
+    await user.selectOptions(screen.getByLabelText(/destination organization/i), secondOrganizationId);
+    await user.selectOptions(await screen.findByLabelText(/new parent unit/i), secondOrganizationUnitId);
+    await user.click(screen.getByRole('button', { name: /^move unit$/i }));
+
+    expect(await screen.findByText(/access groups have an organization scope/i)).toBeVisible();
+    const confirmButton = screen.getByRole('button', { name: /confirm move/i });
+    expect(confirmButton).toBeDisabled();
+
+    await user.click(screen.getByRole('checkbox', { name: /understand.*move anyway/i }));
+    await user.click(confirmButton);
+
+    await waitFor(() => {
+      const moveCalls = fetch.mock.calls.filter(([input, init]) => (
+        String(input).includes(`/organization-units/${unitId}/move`) && (init as RequestInit | undefined)?.method === 'POST'
+      ));
+      expect(moveCalls).toHaveLength(2);
+      expect(JSON.parse(String((moveCalls[1][1] as RequestInit).body))).toEqual({
+        newParentUnitId: secondOrganizationUnitId, confirmScopeImpact: true,
+      });
     });
   });
 });
