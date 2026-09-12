@@ -539,6 +539,63 @@ are committed; uncommitted 2026-09-12):**
   so both are recorded here for the record rather than acted on.
 - Build clean; 139 unit / 264 integration + 18 pre-existing (unchanged baseline).
 
+**PR14 — camera cursor tiebreaker (branch `pr14-camera-cursor-tiebreaker`, off `main` — PR13c and
+PR13d both merged by this point; uncommitted 2026-09-12):**
+- **10-M6** ✅ — see the finding entry above for the fix itself. `CameraQuery` gained `Guid?
+  CursorId`; `CameraEndpoints.TryDecodeCursor`/`EncodeCursor` now carry the id alongside the code.
+- New `CameraCursorTiebreakerTests` (integration, 3): `ListAsync_TwoRowsSharingACode_PagedOneAtATime_BothReturnedExactlyOnce`
+  creates a camera, retires it, creates a second one reusing the freed code, then pages through
+  with `pageSize=1` and `includeRetired=true` — the exact condition the bug needed — asserting
+  both rows appear exactly once. `ListAsync_ThreeRowsSharingACode_PagedOneAtATime_AllReturnedExactlyOnce`
+  (added on BA review) proves `(code, id)` stays total at three-way ties, not just two.
+  `ListAsync_IncludeRetiredFalse_RetiredDuplicateNeverAppears` (added on BA review) confirms the
+  tiebreaker didn't loosen the existing retired-filter predicate. `CameraCursorTests` (unit)
+  extended: `ValidCursor_RoundTrips` updated for the new two-part payload, plus new
+  `CodeContainingPipe_StillRoundTrips` (proves the id-first ordering choice) and
+  `CursorMissingId_FailsRatherThanRestartingSilently` (the old, code-only cursor shape must not
+  be silently accepted as valid post-change). Sabotage-checked: reverting the tiebreaker (`ORDER
+  BY c.camera_code` alone, cursor on code alone) reproduced the exact bug — the second tied row
+  silently disappeared from the paged listing; restored, reverified.
+- Docs: `docs/API-CHANGES-FOR-REGISTRY-UI.md` new §1.4h (added on BA review) — the cursor's own
+  payload shape changed, and a pre-deploy cursor now fails `400 Invalid cursor` after this ships
+  (graceful, not silent misbehavior, but a real client-visible change worth calling out next to
+  10-L6's existing malformed-cursor note).
+- **Also fixed, found while testing — not part of 10-M6 but a genuine live bug**: PR13c
+  (10-M5, bulk-import audit fidelity) and PR13d (10-M4, bulk-import savepoints) were developed on
+  separate branches off the same `pr13b` tip and both touched `BulkImportAsync`'s upsert branch;
+  merging them (visible as `1aeff9f Merge branch 'main' into pr13c-bulk-import-audit` in the
+  history) kept PR13c's `var before = await repo.GetAsync(eid, caller, ct);` fetch but the
+  `work.AuditAsync(...)` call right below it still passed the literal `before: null` — silently
+  reintroducing the exact bug PR13c fixed, on `main`, right now. Caught because
+  `BulkImportAuditFidelityTests.BulkUpsert_ExistingCamera_AuditsPriorState_NotNull` — PR13c's own
+  regression test — started failing on a plain `dotnet test tests/Trinetra.IntegrationTests` run
+  of unmodified `main` (verified: checked out `main` directly, ran the test in isolation, same
+  failure, confirming it wasn't caused by this branch's own changes). One-line fix: pass
+  `before is null ? null : Redact(before)` instead of the literal `null`. Same test now passes on
+  this branch; full suite is back to exactly the known 18-failure baseline (was 19 before this
+  fix).
+  **BA review, 2026-09-12: bundling this into an unrelated cursor-pagination PR was the wrong
+  call** — it's an already-shipped, already-reviewed guarantee silently regressing on `main`
+  today, independent of whether PR14 ever ships; folding it into PR14's diff means `git log`
+  alone (without this findings doc) gives no signal that a live audit-fidelity bug was fixed, and
+  attributes the fix to the wrong PR. **Actioned: commit this fix separately** — when committing
+  this branch, split it into two commits (the one-line `before: null` fix first, with its own
+  message naming it as a hotfix for the PR13c/PR13d merge regression; the 10-M6 cursor-tiebreaker
+  work second) rather than one combined commit, even though both live in this branch/diff.
+  **Lesson for next time stacking PRs on overlapping code**: after a merge that touches a method
+  with near-identical-looking edits from two branches, re-run that method's own regression tests
+  before considering the merge done — a clean build gave no signal here, only the test did. BA
+  additionally recommended this needs an enforced gate, not just a documented lesson, given this
+  is the second time in this session overlapping branches have needed untangling (see the
+  PR13c/PR13d stash handling earlier) — **flagged to Jaydip as a process question, not something
+  this session can add unilaterally**: should CI run the full suite against `main` itself after
+  every merge (not just per-branch before merge), and should the PR review checklist add "full
+  suite against the merge target" as an explicit step alongside the existing BA/dotnet-expert
+  review?
+- Build clean; 141 unit / 268 integration + 18 pre-existing (unchanged baseline, confirmed
+  matches `main`'s own baseline pre-this-branch, i.e. 18 not 19 — the merge regression above is
+  fixed, not folded into a new "baseline").
+
 ### Scope additions (agreed)
 
 - Guarded DELETE for sites/units/areas/orgs (`5-L3`) — reference-checked, 409 + blocker list.
@@ -597,6 +654,7 @@ rule does not bite — still prefer new `v1.7+` files over editing `v1.sql`. Bra
 | PR13a | **Lockout-guard TOCTOU fix**: 6-M4 — ✅ implemented, BA/dotnet-expert reviewed, no blockers, 3 integration tests | — (code-only) |
 | PR13b | **Detection camera-resolution existence-oracle fix**: 15-M3 — ✅ implemented, BA/dotnet-expert review pending, 1 new + 3 updated integration tests | — (code-only) |
 | PR13d | **Bulk-import savepoints**: 10-M4 — ✅ implemented, BA/dotnet-expert reviewed, 1 blocker found + fixed, 4 integration tests | — (code-only) |
+| PR14 | **Camera cursor tiebreaker**: 10-M6 — ✅ implemented; also fixed a live regression in already-merged PR13c/PR13d code found while testing, review pending, 1 new integration test + 2 new/updated unit tests | — (code-only) |
 | F7   | separate feature branch, **after** the design decision | approval tables |
 
 Status: **not started.**
@@ -1535,9 +1593,15 @@ Findings are mostly M/L.
 - **10-M5** `BulkImportAsync` upsert-replace path audits `before: null` (line 242) — prior state
   not captured, unlike the single `ReplaceAsync` which does `Redact(before)`. Audit fidelity gap
   on the bulk path.
-- **10-M6** Pagination anomaly with reused codes. `ListAsync` keyset cursor = base64(`cameraCode`).
-  Retiring a camera frees its code for reuse (documented), so with `includeRetired=true` two rows
-  can share a code → keyset on code alone can skip or loop. Add a tiebreaker (id) to the cursor.
+- **10-M6** ✅ PR14 — Pagination anomaly with reused codes. `ListAsync`'s keyset cursor was
+  `base64(cameraCode)` alone; retiring a camera frees its code for reuse (v1.6.sql), so with
+  `includeRetired=true` two rows can share a code — a code-only `>` comparison excludes both
+  tied rows once the first is returned as a page boundary, silently dropping the other. Now
+  orders and pages on `(camera_code, id)` together (`ORDER BY c.camera_code, c.id`, cursor
+  `(code, id) > (@Cursor, @CursorId)`) — a total, stable order regardless of how many rows share
+  a code. Cursor payload changed from `base64(code)` to `base64("{id}|{code}")` — id first,
+  deliberately, since `camera_code` has no charset restriction and could itself contain `|`;
+  putting the fixed-format GUID first makes the split unambiguous either way.
 - **10-M7** `ReconcileAsync` doesn't check the registry camera and the VMS-reported camera are
   geographically/organizationally consistent — you can link registry camera A (unit X, district
   D1) to a VMS camera physically in district D2. Caller-reachability of both is checked; mutual

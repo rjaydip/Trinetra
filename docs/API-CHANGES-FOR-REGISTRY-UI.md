@@ -181,6 +181,22 @@ different user-facing copy), that code must be updated to treat both as "this ca
 usable by you" — do not try to recover the old distinction from response wording, it is gone on
 purpose.
 
+### 1.4h `GET /api/v1/cameras?cursor=…` — the cursor's own payload shape changed (`PR14`)
+
+The opaque `cursor` string itself now encodes `(id, code)` instead of `code` alone (finding
+10-M6: a retired camera's code is freed for reuse, so two rows could share one once
+`includeRetired=true` widened the result set — pure code-based paging could then silently skip
+one of the tied rows). This has always been treated as an opaque token — nothing to change if
+the frontend was already just round-tripping `nextCursor` verbatim — but it means:
+
+- **A cursor issued before this deploy is rejected after it, with `400 "Invalid cursor"`** (the
+  same graceful failure the 10-L6 fix above already established for a corrupted cursor) — not a
+  500, not silent misbehavior with wrong data. If a user has an in-flight paged session spanning
+  a deploy, their next-page click gets a `400`; the fix is the same as any other invalid cursor —
+  restart the listing from page 1, don't retry the same cursor.
+- No client code should ever have depended on the cursor's internal shape, but if anything parsed
+  or logged it as a bare camera code, that assumption breaks now.
+
 ### 1.4c `GET /api/v1/vms/{id}/capabilities` — 404 body no longer distinguishes the reason
 
 A `404` is now returned with **no body detail** whether the target is outside your scope or
