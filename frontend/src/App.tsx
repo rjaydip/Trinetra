@@ -15,7 +15,10 @@ import { RolesPage } from './features/admin/RolesPage';
 import { CameraDetailPage } from './features/cameras/CameraDetailPage';
 import { BulkImportPage } from './features/cameras/BulkImportPage';
 import { NewCameraPage } from './features/cameras/NewCameraPage';
+import { ReconciliationPage } from './features/cameras/ReconciliationPage';
 import { RegistryPage } from './features/cameras/RegistryPage';
+import { DetectionsPage } from './features/detections/DetectionsPage';
+import { EventsPage } from './features/events/EventsPage';
 import { MapPage } from './features/map/MapPage';
 import { ReportsPage } from './features/reports/ReportsPage';
 import { DiscoveryPage } from './features/vms/DiscoveryPage';
@@ -49,6 +52,9 @@ function SessionApplication() {
           <Route path="/cameras" element={<RegistryPage />} />
           <Route path="/cameras/new" element={<RequirePermission permission="camera.create"><NewCameraPage /></RequirePermission>} />
           <Route path="/cameras/import" element={<RequirePermission permission="camera.import"><BulkImportPage /></RequirePermission>} />
+          <Route path="/cameras/reconciliation" element={<RequirePermission permission="camera.reconcile"><ReconciliationPage /></RequirePermission>} />
+          <Route path="/detections" element={<RequirePermission permission="observation.read"><DetectionsPage /></RequirePermission>} />
+          <Route path="/events" element={<RequirePermission permission="event.read"><EventsPage /></RequirePermission>} />
           <Route path="/cameras/:cameraId" element={<CameraDetailPage />} />
           <Route path="/vms" element={<RequirePermission permission="vms.read"><VmsPage /></RequirePermission>} />
           <Route path="/vms/:vmsId" element={<RequirePermission permission="vms.read"><VmsPage /></RequirePermission>} />

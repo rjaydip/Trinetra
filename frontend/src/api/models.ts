@@ -227,6 +227,101 @@ export interface CoverageSummaryResponse {
   buckets: Record<string, Record<string, number>>;
 }
 
+// ---- VMS management (state, health, capabilities) ----------------------
+
+export interface TargetStateRequest {
+  state: 'Active' | 'Disabled' | 'Quarantined';
+}
+
+export interface ConnectorHealthResponse {
+  checkedAt: string;
+  status: string;
+  latencyMs: number | null;
+  cameraCount: number | null;
+  consecutiveFailures: number;
+  circuitOpen: boolean;
+  lastError: string | null;
+  eventsSinceCheck: number;
+  cursorLagSeconds: number | null;
+}
+
+/** `supported` is a bitmask (see `Capability` in Federation.Core) — decode client-side to names. */
+export interface CapabilityResponse {
+  supported: number;
+  adapterVersion: string;
+  probedAt: string;
+  notes: Record<string, string>;
+}
+
+export interface CameraStatusChangeResponse {
+  changedAt: string;
+  previousHealth: string | null;
+  health: string;
+  previousEnabled: boolean | null;
+  isEnabled: boolean;
+  previousRecording: boolean | null;
+  isRecording: boolean | null;
+}
+
+export interface CameraStatusHistoryResponse {
+  nativeCameraId: string;
+  from: string;
+  to: string;
+  changes: CameraStatusChangeResponse[];
+}
+
+// ---- Camera reconciliation -----------------------------------------
+
+export interface UnreconciledCameraResponse {
+  targetId: string;
+  nativeCameraId: string;
+  name: string | null;
+  vendorModel: string | null;
+  firmware: string | null;
+  organizationUnitId: string;
+  geographicAreaId: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  lastSeen: string | null;
+  streamReferences: string[];
+}
+
+export interface UnreconciledPage {
+  items: UnreconciledCameraResponse[];
+  nextCursor: string | null;
+}
+
+export interface ReconcileRequest {
+  targetId: string;
+  nativeCameraId: string;
+  adoptStreamReference?: boolean;
+  adoptVmsId?: boolean;
+}
+
+export interface ReconcileResponse {
+  cameraId: string;
+  targetId: string;
+  nativeCameraId: string;
+  vmsId: string | null;
+}
+
+export interface CreateFromFederatedRequest {
+  targetId: string;
+  nativeCameraId: string;
+  cameraCode: string;
+  cameraType: string;
+  name?: string | null;
+  organizationUnitId?: string | null;
+  geographicAreaId?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  azimuth?: number | null;
+  horizontalFov?: number | null;
+  effectiveRange?: number | null;
+  adoptStreamReference?: boolean;
+  adoptVmsId?: boolean;
+}
+
 export interface OrganizationRequest {
   code: string;
   name: string;
@@ -551,6 +646,39 @@ export interface ApiKeyResponse {
   expiresAt: string | null;
   lastUsedAt: string | null;
   revokedAt: string | null;
+}
+
+// ---- Detections (read side; ingest is the AI worker's, not a UI action) ----
+
+export interface DetectionResponse {
+  id: string;
+  cameraId: string;
+  registeredCameraId: string | null;
+  eventType: string;
+  timestamp: string;
+  confidence: number | null;
+  vehicleType: string | null;
+  plateNumber: string | null;
+  snapshotReference: string | null;
+}
+
+// ---- Events (hot-window query) -------------------------------------
+
+export interface EventSummary {
+  eventId: string;
+  sourceVmsId: string;
+  cameraId: string;
+  eventType: string;
+  vendorEventType: string | null;
+  occurredAt: string;
+  severity: string;
+  objectReference: string | null;
+  confidence: number | null;
+}
+
+export interface EventPage {
+  events: EventSummary[];
+  nextCursor: string | null;
 }
 
 export interface OverviewResponse {

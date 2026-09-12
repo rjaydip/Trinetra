@@ -7,9 +7,10 @@ import { api } from '../../api/endpoints';
 import type { ConnectorTargetRequest } from '../../api/models';
 import { useAuth } from '../../auth/AuthProvider';
 import { hasPermission } from '../../auth/permissions';
-import { PageState, StatusBadge } from '../../components/ui';
+import { Button, PageState, StatusBadge } from '../../components/ui';
 import type { SelectorState } from '../cameras/CameraForm';
 import { CredentialPanel } from './CredentialPanel';
+import { VmsCapabilitiesPanel, VmsDeleteControl, VmsEditForm, VmsHealthPanel, VmsStateControl } from './VmsManagement';
 import { VmsForm } from './VmsForm';
 
 function errorDetail(error: unknown, fallback: string) {
@@ -34,6 +35,9 @@ function VmsDetail({ vmsId }: { vmsId: string }) {
   const target = useQuery({ queryKey: ['vms', vmsId], queryFn: () => api.vms.get(vmsId) });
   const permissions = ['vms.read', 'credential.write', 'integration.manage'].filter((permission) => hasPermission(session, permission));
   const canImportCameras = hasPermission(session, 'camera.import');
+  const canUpdate = hasPermission(session, 'vms.update');
+  const canDelete = hasPermission(session, 'vms.delete');
+  const [editing, setEditing] = useState(false);
 
   if (target.isPending) return <PageState title="Loading VMS">Retrieving the selected integration…</PageState>;
   if (target.isError) return <><PageState title="Couldn&apos;t load VMS">{errorDetail(target.error, 'The selected VMS could not be loaded.')}</PageState><button className="button" type="button" onClick={() => target.refetch()}>Try again</button></>;
@@ -43,16 +47,37 @@ function VmsDetail({ vmsId }: { vmsId: string }) {
     <header><div><p className="eyebrow">VMS integration</p><h1 id="vms-detail-title">{target.data.displayName}</h1><p>{target.data.code}</p></div><StatusBadge tone={target.data.state.toLowerCase() === 'active' ? 'success' : 'warning'}>{target.data.state}</StatusBadge></header>
     <section className="detail-panel" aria-labelledby="configuration-title">
       <h2 id="configuration-title">Configuration</h2>
-      <dl>
-        <div><dt>Vendor</dt><dd>{target.data.vendor}</dd></div>
-        <div><dt>Endpoint</dt><dd>{target.data.endpoint}</dd></div>
-        <div><dt>Runtime</dt><dd>{target.data.runtimeClass}</dd></div>
-        <div><dt>TLS verification</dt><dd>{target.data.verifyTls ? 'Required' : 'Disabled'}</dd></div>
-        <div><dt>Expected cameras</dt><dd>{target.data.expectedCameraCount ?? 'Not set'}</dd></div>
-      </dl>
+      {editing ? (
+        <VmsEditForm target={target.data} onSuccess={async () => { setEditing(false); await target.refetch(); }} />
+      ) : (
+        <dl>
+          <div><dt>Vendor</dt><dd>{target.data.vendor}</dd></div>
+          <div><dt>Endpoint</dt><dd>{target.data.endpoint}</dd></div>
+          <div><dt>Runtime</dt><dd>{target.data.runtimeClass}</dd></div>
+          <div><dt>TLS verification</dt><dd>{target.data.verifyTls ? 'Required' : 'Disabled'}</dd></div>
+          <div><dt>Expected cameras</dt><dd>{target.data.expectedCameraCount ?? 'Not set'}</dd></div>
+        </dl>
+      )}
+      {canUpdate && <Button type="button" onClick={() => setEditing((open) => !open)}>{editing ? 'Cancel edit' : 'Edit configuration'}</Button>}
       {canImportCameras && <p><Link className="button button--secondary" to={`/vms/${vmsId}/discovery`}>Discover cameras</Link></p>}
     </section>
+    {canUpdate && <section className="detail-panel" aria-labelledby="state-title">
+      <h2 id="state-title">Polling state</h2>
+      <VmsStateControl target={target.data} onSuccess={() => target.refetch()} />
+    </section>}
+    <section className="detail-panel" aria-labelledby="health-title">
+      <h2 id="health-title">Connector health</h2>
+      <VmsHealthPanel vmsId={vmsId} />
+    </section>
+    <section className="detail-panel" aria-labelledby="capabilities-title">
+      <h2 id="capabilities-title">Capabilities</h2>
+      <VmsCapabilitiesPanel vmsId={vmsId} />
+    </section>
     <CredentialPanel key={vmsId} permissions={permissions} vmsId={vmsId} />
+    {canDelete && <section className="detail-panel" aria-labelledby="danger-title">
+      <h2 id="danger-title">Remove this target</h2>
+      <VmsDeleteControl target={target.data} />
+    </section>}
   </section>;
 }
 

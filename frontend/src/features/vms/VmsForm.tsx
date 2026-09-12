@@ -8,8 +8,8 @@ import type { ConnectorTargetRequest, GeographicAreaResponse, OrganizationRespon
 import { Button } from '../../components/ui';
 import type { SelectorState } from '../cameras/CameraForm';
 
-const vendors = ['Onvif', 'HikvisionIsapi', 'DahuaCgi', 'MilestoneGateway', 'GenetecWebSdk', 'Simulator'] as const;
-const runtimeClasses = ['Managed', 'Native'] as const;
+export const vendors = ['Onvif', 'HikvisionIsapi', 'DahuaCgi', 'MilestoneGateway', 'GenetecWebSdk', 'Simulator'] as const;
+export const runtimeClasses = ['Managed', 'Native'] as const;
 
 type OptionalNumericField = 'rateLimitPerSecond' | 'rateLimitBurst' | 'inventoryPollSeconds' | 'statusPollSeconds' | 'eventPollSeconds' | 'maxConcurrentRequests' | 'expectedCameraCount';
 

@@ -107,6 +107,68 @@ describe('VMS API client', () => {
     expect(init?.method).toBeUndefined();
   });
 
+  it('replaces a VMS target with a full configuration PUT', async () => {
+    respondWithJson();
+
+    await api.vms.replace(vmsId, {
+      code: 'north-nvr',
+      organizationUnitId: '33333333-3333-4333-8333-333333333333',
+      displayName: 'North NVR',
+      vendor: 'DahuaCgi',
+      endpoint: 'https://nvr.example.test',
+      credentialReference: 'vms/north-nvr',
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      expect.stringContaining(`/api/v1/vms/${vmsId}`),
+      expect.objectContaining({ method: 'PUT' }),
+    );
+  });
+
+  it('changes a target state at the state endpoint', async () => {
+    respondWithJson();
+
+    await api.vms.setState(vmsId, { state: 'Quarantined' });
+
+    expect(fetch).toHaveBeenCalledWith(
+      expect.stringContaining(`/api/v1/vms/${vmsId}/state`),
+      expect.objectContaining({ method: 'POST', body: JSON.stringify({ state: 'Quarantined' }) }),
+    );
+  });
+
+  it('removes a VMS target with a DELETE', async () => {
+    respondWithJson();
+
+    await api.vms.remove(vmsId);
+
+    expect(fetch).toHaveBeenCalledWith(
+      expect.stringContaining(`/api/v1/vms/${vmsId}`),
+      expect.objectContaining({ method: 'DELETE' }),
+    );
+  });
+
+  it('reads a target health history', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json([])));
+
+    await api.vms.health(vmsId);
+
+    expect(fetch).toHaveBeenCalledWith(
+      expect.stringContaining(`/api/v1/vms/${vmsId}/health`),
+      expect.anything(),
+    );
+  });
+
+  it('reads a target capability matrix', async () => {
+    respondWithJson();
+
+    await api.vms.capabilities(vmsId);
+
+    expect(fetch).toHaveBeenCalledWith(
+      expect.stringContaining(`/api/v1/vms/${vmsId}/capabilities`),
+      expect.anything(),
+    );
+  });
+
   it('applies the existing bearer authorization to VMS requests', async () => {
     respondWithJson();
     const session = sessionFixture('vms-operator');
