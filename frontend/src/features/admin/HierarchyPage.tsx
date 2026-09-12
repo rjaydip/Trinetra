@@ -143,6 +143,98 @@ function DeactivationControl({
   </div>;
 }
 
+/**
+ * Cross-organization move (v1.12 `POST /organization-units/{id}/move`) — re-parents a unit under
+ * a different organization and rewrites the whole subtree's organization to match. Limited to
+ * organization.manage held unscoped (403 otherwise, surfaced as the request's own error). A scope
+ * conflict (409) lists which access-group scopes would follow the moved units into the new
+ * organization; the admin re-confirms explicitly rather than that happening silently.
+ */
+function MoveUnitControl({
+  unit, organizations, onSuccess,
+}: {
+  unit: OrganizationUnitResponse;
+  organizations: OrganizationResponse[];
+  onSuccess(): Promise<unknown> | void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [targetOrganizationId, setTargetOrganizationId] = useState('');
+  const [newParentUnitId, setNewParentUnitId] = useState('');
+  const [conflict, setConflict] = useState('');
+  const [confirmScopeImpact, setConfirmScopeImpact] = useState(false);
+
+  const targetUnits = useQuery({
+    queryKey: ['admin', 'organization-units', targetOrganizationId],
+    queryFn: () => api.admin.organizations.listUnits(targetOrganizationId),
+    enabled: Boolean(targetOrganizationId),
+  });
+
+  const mutation = useMutation({
+    mutationFn: (confirm: boolean) => api.admin.organizations.moveUnit(unit.id, { newParentUnitId, confirmScopeImpact: confirm }),
+    onSuccess: async () => {
+      reset();
+      await onSuccess();
+    },
+    onError: (error) => {
+      setConflict(isApiProblem(error) && error.status === 409 ? error.detail : '');
+    },
+  });
+
+  function reset() {
+    setOpen(false);
+    setTargetOrganizationId('');
+    setNewParentUnitId('');
+    setConflict('');
+    setConfirmScopeImpact(false);
+  }
+
+  if (!open) {
+    return <button className="admin-action-link" type="button" onClick={() => setOpen(true)}>
+      Move {unit.name} to another organization
+    </button>;
+  }
+
+  const otherOrganizations = organizations.filter((organization) => organization.id !== unit.organizationId);
+  const confirmDisabled = mutation.isPending || !newParentUnitId || (Boolean(conflict) && !confirmScopeImpact);
+
+  return <fieldset className="move-unit-control">
+    <legend>Move {unit.name} to another organization</legend>
+    <label>Destination organization
+      <select value={targetOrganizationId} onChange={(event) => {
+        setTargetOrganizationId(event.target.value);
+        setNewParentUnitId('');
+        setConflict('');
+      }}>
+        <option value="">Select an organization</option>
+        {otherOrganizations.map((organization) => <option key={organization.id} value={organization.id}>{organization.name} ({organization.code})</option>)}
+      </select>
+    </label>
+    {targetOrganizationId && <label>New parent unit
+      <select disabled={targetUnits.isPending} value={newParentUnitId} onChange={(event) => {
+        setNewParentUnitId(event.target.value);
+        setConflict('');
+      }}>
+        <option value="">{targetUnits.isPending ? 'Loading units…' : 'Select a parent unit'}</option>
+        {(targetUnits.data ?? []).map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name} ({candidate.code})</option>)}
+      </select>
+    </label>}
+    {mutation.isError && !conflict && <p className="form-error" role="alert">{errorDetail(mutation.error, 'The unit could not be moved.')}</p>}
+    {conflict && <div className="deactivation-strategy">
+      <p role="alert">{conflict}</p>
+      <label className="strategy-option">
+        <input checked={confirmScopeImpact} onChange={(event) => setConfirmScopeImpact(event.target.checked)} type="checkbox" />
+        I understand — move anyway
+      </label>
+    </div>}
+    <div className="form-actions">
+      <Button disabled={confirmDisabled} type="button" onClick={() => mutation.mutate(Boolean(conflict) && confirmScopeImpact)}>
+        {conflict ? 'Confirm move' : 'Move unit'}
+      </Button>
+      <button className="button button--secondary" type="button" onClick={reset}>Cancel</button>
+    </div>
+  </fieldset>;
+}
+
 export function HierarchyPage() {
   const { session } = useAuth();
   const queryClient = useQueryClient();
@@ -620,6 +712,16 @@ export function HierarchyPage() {
                             parentOptions={unitList.map(({ id, name }) => ({ id, name }))}
                             deactivate={(request) => api.admin.organizations.deactivateUnit(currentUnit.id, request)}
                             onSuccess={() => queryClient.invalidateQueries({ queryKey: ['admin', 'organization-units'] })}
+                          />
+                        )}
+                        {currentUnit.status === 'ACTIVE' && (
+                          <MoveUnitControl
+                            unit={currentUnit}
+                            organizations={organizations.data ?? []}
+                            onSuccess={() => {
+                              setSelectedUnitId('');
+                              return queryClient.invalidateQueries({ queryKey: ['admin', 'organization-units'] });
+                            }}
                           />
                         )}
                       </div>
