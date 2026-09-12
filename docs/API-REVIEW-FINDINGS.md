@@ -214,14 +214,16 @@ validation, `9-M1` VerifyTls non-nullable (TLS downgrade), `9-M2` org/site ACTIV
 `6-M1` geography asymmetry in group scope add/remove, `5-M1` org read perm mismatch
 (`geography.read` vs `organization.read`) ✅ PR6.
 
-**OTHER MEDIUM (`4-M1` ✅ PR12, `6-M4` ✅ PR13a, `15-M3` ✅ PR13b, `17-M1..M3` ✅ v1.13 — all
-corrected here 2026-09-11, was stale):**
+**OTHER MEDIUM (`4-M1` ✅ PR12, `6-M4` ✅ PR13a, `15-M3` ✅ PR13b, `10-M5` ✅ PR13c, `17-M1..M3`
+✅ v1.13 — all corrected here 2026-09-11, was stale):**
 `4-M5` email unvalidated/non-unique (blocks F2/F3), `4-M6` no breached-password screen, `4-M7`
-CORS, `4-M8` bootstrap password lingers, `6-M5` email, `10-M4` bulk import 500 sync txns, `10-M5`
-bulk audit, `10-M6` cursor code-reuse anomaly, `10-M7` reconcile location consistency, `10-M8`
-GIS feed per-prop JsonElement alloc, `14-M2` `event.acknowledge` seeded w/ no endpoint.
+CORS, `4-M8` bootstrap password lingers, `6-M5` email, `10-M4` bulk import 500 sync txns,
+`10-M6` cursor code-reuse anomaly, `10-M7` reconcile location consistency, `10-M8`
+GIS feed per-prop JsonElement alloc.
 **Parked (2026-09-11, see the PR13b block below for why):** `4-M3` login rate-limit per-IP only,
 `8-M1` no key max lifetime, `8-M2` no key rotation endpoint.
+**Moved to the design track (2026-09-11, see below):** `14-M2` `event.acknowledge` seeded w/ no
+endpoint — a decision point, not a routine fix.
 
 ### P3 · LOW — polish / hygiene
 
@@ -551,6 +553,15 @@ are committed; uncommitted 2026-09-12):**
 - **F11** Registry/GIS is NVR-unaware — decide if per-channel manual onboarding is acceptable for
   phase 1 or an NVR needs bulk-adopt + `targetId` filter + federated→registry health.
 - **F12** API-key strength & GET non-disclosure — VERIFIED OK, no action (kept for the record).
+- **14-M2** (moved here 2026-09-11) `event.acknowledge` is seeded (v1.sql) and granted to
+  `VMS_OPERATOR`/`CAMERA_OPERATOR`, but no endpoint uses it — `federation_event` has no
+  `acknowledged_at`/`acknowledged_by` columns at all (unlike `watchlist_alert`, which has both
+  and a working `POST /watchlist/alerts/{id}/acknowledge`). Genuinely orphaned, not partially
+  built. Two ways to close it, both real work: (a) build `POST /events/{id}/acknowledge` —
+  needs a schema migration adding the two columns to a **partitioned** table (`ensure_event_partitions`
+  fan-out to consider) plus the endpoint/repo/audit/tests, or (b) remove the dead permission —
+  needs its own version file (`v1.sql` can't be edited once applied) deleting the permission and
+  every role grant referencing it. Not attempted unilaterally; needs your call on (a) vs (b).
 
 **Suggested build order:** P0 (#1, #2) → geography-scope wave (#3–7) → #8–12 → 4-C1 + auth audit
 (#10, #19) → F7 design decision → audit-fidelity + pagination + validation waves → P3 sweep.
