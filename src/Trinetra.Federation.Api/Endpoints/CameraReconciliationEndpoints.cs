@@ -43,7 +43,10 @@ public static class CameraReconciliationEndpoints
               "Sets `federated_camera.camera_id` for `(targetId, nativeCameraId)`. Optionally "
               + "copies the VMS id and first stream reference onto the registry record when "
               + "those are still blank. Linking the same pair again is a no-op; linking a VMS "
-              + "camera that is already tied to a different registry record is 409.");
+              + "camera that is already tied to a different registry record is 409. The registry "
+              + "camera's own organization must match what the VMS reports (and its geography "
+              + "must match too, when the VMS row has one) — a mismatch is 409, not a silent "
+              + "cross-department link.");
 
         group.MapPost("/from-federated", FromFederatedAsync)
           .RequirePermission("camera.reconcile")
@@ -52,7 +55,12 @@ public static class CameraReconciliationEndpoints
               "Creates a registry record using the VMS row for what it can supply (owner, area, "
               + "coordinates, name) and the body for what it cannot (`cameraCode`, `cameraType`, "
               + "optics), then links the two — one call. Needs `camera.create` as well. "
-              + "`geographicAreaId` must be supplied if the VMS row has no area.");
+              + "`geographicAreaId` must be supplied if the VMS row has no area. "
+              + "`organizationUnitId` defaults to the VMS-reported value; supplying one that "
+              + "**disagrees** with it is now 409 (not silently accepted) — the same "
+              + "estate-integrity check `POST /{id}/reconcile` applies to an existing camera. A "
+              + "camera genuinely belonging to a different unit than its VMS needs re-siting on "
+              + "the VMS side, not an override here.");
     }
 
     private static async Task<Ok<UnreconciledPage>> UnreconciledAsync(
@@ -84,7 +92,7 @@ public static class CameraReconciliationEndpoints
             next));
     }
 
-    private static async Task<Results<Ok<ReconcileResponse>, NotFound, ProblemHttpResult>> ReconcileAsync(
+    internal static async Task<Results<Ok<ReconcileResponse>, NotFound, ProblemHttpResult>> ReconcileAsync(
         Guid id, [FromBody] ReconcileRequest request, ReconciliationRepository repo,
         NpgsqlDataSource db, HttpContext http, CancellationToken ct)
     {
@@ -113,6 +121,13 @@ public static class CameraReconciliationEndpoints
                     title: "Already reconciled",
                     detail: "That VMS camera is linked to a different registry record.",
                     statusCode: StatusCodes.Status409Conflict);
+            case ReconcileStatus.Inconsistent:
+                return TypedResults.Problem(
+                    title: "Placement mismatch",
+                    detail: "The registry camera's organization/geography does not match what "
+                          + "the VMS reports for this camera. Move the registry camera to agree "
+                          + "first, or reconcile against the correct one.",
+                    statusCode: StatusCodes.Status409Conflict);
         }
 
         await work.AuditAsync(caller, "reconcile", "camera", id.ToString(),
@@ -125,7 +140,7 @@ public static class CameraReconciliationEndpoints
             result.CameraId, result.TargetId, result.NativeCameraId, result.VmsId));
     }
 
-    private static async Task<Results<Created<CreatedResponse>, NotFound, ProblemHttpResult>> FromFederatedAsync(
+    internal static async Task<Results<Created<CreatedResponse>, NotFound, ProblemHttpResult>> FromFederatedAsync(
         [FromBody] CreateFromFederatedRequest request,
         ReconciliationRepository reconcile, CameraRepository cameras,
         NpgsqlDataSource db, HttpContext http, CancellationToken ct)
@@ -208,6 +223,21 @@ public static class CameraReconciliationEndpoints
             return TypedResults.Problem(
                 title: "Already reconciled",
                 detail: "That VMS camera was linked to another record between read and write.",
+                statusCode: StatusCodes.Status409Conflict);
+        }
+
+        // Finding 10-M7: the same mutual-consistency check ReconcileAsync applies to an existing
+        // camera also applies here — an explicit organizationUnitId override that disagrees with
+        // what the VMS reports would otherwise create the same estate-integrity problem at
+        // creation time instead of at reconcile time. The camera this call already created is
+        // simply left unlinked; nothing to roll back (the transaction hasn't committed).
+        if (linked.Status == ReconcileStatus.Inconsistent)
+        {
+            return TypedResults.Problem(
+                title: "Placement mismatch",
+                detail: "organizationUnitId does not match what the VMS reports for this camera. "
+                      + "Omit the override to use the VMS-reported value, or pass one that agrees "
+                      + "with it.",
                 statusCode: StatusCodes.Status409Conflict);
         }
 

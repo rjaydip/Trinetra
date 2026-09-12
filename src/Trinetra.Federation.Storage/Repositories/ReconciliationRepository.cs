@@ -31,6 +31,13 @@ public enum ReconcileStatus
     /// <summary>That VMS camera is already linked to a different registry record.</summary>
     Conflict,
 
+    /// <summary>
+    /// The registry camera's own organization/geography disagrees with what the VMS reports for
+    /// this camera (finding 10-M7) — linking would leave the estate with a camera whose registry
+    /// placement and federation placement contradict each other.
+    /// </summary>
+    Inconsistent,
+
     /// <summary>Linked (or already linked to this same camera — idempotent).</summary>
     Linked,
 }
@@ -147,13 +154,14 @@ public sealed class ReconciliationRepository
         var c = work.Connection;
         var tx = work.Transaction;
 
-        var cameraReachable = await c.ExecuteScalarAsync<bool>(new CommandDefinition($"""
-            SELECT EXISTS (SELECT 1 FROM federation.cameras c
-                           WHERE c.id = @id AND c.deleted_at IS NULL
-                             AND ({CameraScope.PredicateForC}));
+        var registryCamera = await c.QuerySingleOrDefaultAsync<RegistryPlacementRow>(new CommandDefinition($"""
+            SELECT c.organization_unit_id AS OrganizationUnitId, c.geographic_area_id AS GeographicAreaId
+            FROM federation.cameras c
+            WHERE c.id = @id AND c.deleted_at IS NULL
+              AND ({CameraScope.PredicateForC});
             """, CameraScope.Args(cameraId, caller, "camera.reconcile"), tx, cancellationToken: ct));
 
-        if (!cameraReachable)
+        if (registryCamera is null)
         {
             return new ReconcileResult(ReconcileStatus.CameraNotFound, cameraId, targetId, nativeCameraId, null);
         }
@@ -188,6 +196,28 @@ public sealed class ReconciliationRepository
             return new ReconcileResult(ReconcileStatus.Conflict, cameraId, targetId, nativeCameraId, null);
         }
 
+        // Finding 10-M7: each side's own reachability was checked, but never whether they agree
+        // with EACH OTHER — a caller reachable into two departments (or unscoped) could link
+        // registry camera A (unit X, district D1) to a VMS camera the federation layer places in
+        // unit Y / district D2, leaving the estate with a camera whose two placements
+        // contradict. Organization is required to match exactly. Geography is checked only when
+        // the federated row has one — not a scope-resolution shortcut (CLAUDE.md #12 is about
+        // never conflating org/geo unscoped answers, not at stake here), just a data-completeness
+        // fact: a registry Camera always has both fields (`required` on the model), but a
+        // federated_camera row can genuinely have no geography yet (the VMS hasn't sited it) —
+        // there is nothing to disagree with. Skipped when the link already exists (fed.CameraId
+        // == cameraId): an established, previously-accepted link is not re-litigated by a later
+        // idempotent reconcile call — a pre-existing inconsistent link (from before this fix
+        // shipped) is not retroactively caught here; auditing production data for one is a
+        // separate, follow-up concern, not this check's job.
+        if (fed.CameraId != cameraId
+            && (registryCamera.OrganizationUnitId != fed.OrganizationUnitId
+                || (fed.GeographicAreaId is { } fedArea
+                    && registryCamera.GeographicAreaId != fedArea)))
+        {
+            return new ReconcileResult(ReconcileStatus.Inconsistent, cameraId, targetId, nativeCameraId, null);
+        }
+
         if (fed.CameraId != cameraId)
         {
             await c.ExecuteAsync(new CommandDefinition("""
@@ -216,6 +246,12 @@ public sealed class ReconciliationRepository
         return new ReconcileResult(
             ReconcileStatus.Linked, cameraId, targetId, nativeCameraId,
             linked.VmsId, linked.OrganizationUnitId);
+    }
+
+    private sealed record RegistryPlacementRow
+    {
+        public Guid OrganizationUnitId { get; init; }
+        public Guid? GeographicAreaId { get; init; }
     }
 
     private sealed record FederatedLinkRow

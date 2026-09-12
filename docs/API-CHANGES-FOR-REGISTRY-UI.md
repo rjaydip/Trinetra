@@ -197,6 +197,21 @@ the frontend was already just round-tripping `nextCursor` verbatim — but it me
 - No client code should ever have depended on the cursor's internal shape, but if anything parsed
   or logged it as a bare camera code, that assumption breaks now.
 
+### 1.4i Reconciliation now rejects a placement mismatch (`PR15`)
+
+- **`POST /api/v1/cameras/{id}/reconcile`** — linking a registry camera to a VMS-reported camera
+  is now `409 "Placement mismatch"` if the registry camera's own organization doesn't match what
+  the VMS reports (or its geography doesn't, when the VMS row has one). Previously this silently
+  succeeded, leaving a camera whose two placements permanently disagreed (finding 10-M7).
+- **`POST /api/v1/cameras/from-federated`** — **behavior narrowing**: `organizationUnitId` could
+  previously be set to any value, deliberately overriding the VMS-reported organization in one
+  step at creation time. It must now **agree** with the VMS-reported value, or the call is the
+  same `409 "Placement mismatch"` — the camera is not created. If the frontend (or any operator
+  workflow) relied on this override to re-site a newly-discovered camera into a different
+  department in one call, that flow no longer works here; create the camera normally (letting
+  `organizationUnitId` default to the VMS-reported value) and use a separate move/transfer path
+  for a genuine cross-department placement.
+
 ### 1.4c `GET /api/v1/vms/{id}/capabilities` — 404 body no longer distinguishes the reason
 
 A `404` is now returned with **no body detail** whether the target is outside your scope or
