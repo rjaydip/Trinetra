@@ -39,7 +39,7 @@ describe('MapPage', () => {
   function liveCamera() {
     return {
       id: 'c0a80101-0000-4000-8000-000000000001', cameraCode: 'CAM-001', name: 'Gate',
-      organizationUnitId: 'c0a80101-0000-4000-8000-000000000010', siteId: 'c0a80101-0000-4000-8000-000000000020',
+      organizationUnitId: 'c0a80101-0000-4000-8000-000000000010', geographicAreaId: 'c0a80101-0000-4000-8000-000000000020',
       cameraType: 'Fixed', latitude: 12.9716, longitude: 77.5946, operationalStatus: 'ACTIVE',
       connectivityStatus: 'ONLINE', maintenanceStatus: 'CURRENT', hasCoverage: false,
       lastSeenAt: null, lastHealthCheckAt: null, retiredAt: null,

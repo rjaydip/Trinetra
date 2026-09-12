@@ -48,8 +48,6 @@ import type {
   PermissionResponse,
   RoleResponse,
   RoleWriteRequest,
-  SiteRequest,
-  SiteResponse,
   UpdateGroupRequest,
   VmsResponse,
   WatchlistAlertResponse,
@@ -98,6 +96,8 @@ export const api = {
   auth: {
     login: async (body: LoginRequest) => normalizeAuthResponse(await request<Record<string, unknown>>('/api/v1/auth/login', json(body))),
     changePassword: async (body: ChangePasswordRequest) => normalizeAuthResponse(await request<Record<string, unknown>>('/api/v1/auth/password', json(body))),
+    refresh: async (refreshToken: string) => normalizeAuthResponse(await request<Record<string, unknown>>('/api/v1/auth/refresh', json({ refreshToken }))),
+    logout: () => request<void>('/api/v1/auth/logout', { method: 'POST' }),
   },
   cameras: {
     list: (query: CameraListQuery) => request<CameraPage>(withQuery('/api/v1/cameras', query)),
@@ -122,7 +122,6 @@ export const api = {
   reference: {
     organizations: () => request<OrganizationResponse[]>('/api/v1/organizations'),
     organizationUnits: (organizationId: string) => request<OrganizationUnitResponse[]>(`/api/v1/organizations/${organizationId}/units`),
-    sites: (areaId?: string) => request<SiteResponse[]>(withQuery('/api/v1/sites', { areaId })),
     geographicAreas: (query: { rootsOnly?: boolean; parentId?: string } = {}) => request<GeographicAreaResponse[]>(withQuery('/api/v1/geographic-areas', query)),
   },
   vms: {
@@ -161,8 +160,6 @@ export const api = {
       updateArea: (id: string, body: GeographicAreaRequest) => request<GeographicAreaResponse>(`/api/v1/geographic-areas/${id}`, { body: JSON.stringify(body), method: 'PUT' }),
       activateArea: (id: string) => request<void>(`/api/v1/geographic-areas/${id}/activate`, { method: 'POST' }),
       deactivateArea: (id: string, body: DeactivateRequest = {}) => request<void>(`/api/v1/geographic-areas/${id}/deactivate`, json(body)),
-      listSites: (areaId?: string) => request<SiteResponse[]>(withQuery('/api/v1/sites', { areaId })),
-      createSite: (body: SiteRequest) => request<CreatedResponse>('/api/v1/sites', json(body)),
     },
     groups: {
       list: () => request<AccessGroupResponse[]>('/api/v1/access-groups'),

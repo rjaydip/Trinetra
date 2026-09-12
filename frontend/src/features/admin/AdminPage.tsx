@@ -22,7 +22,7 @@ const adminDestinations = [
   {
     to: '/admin/hierarchy',
     label: 'Hierarchy',
-    description: 'Organizations, units, geographic areas, and sites.',
+    description: 'Organizations, units, and geographic areas.',
     permissions: ['organization.read', 'geography.read'],
   },
   {

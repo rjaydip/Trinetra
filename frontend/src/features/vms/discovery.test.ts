@@ -28,7 +28,7 @@ const enrichment: DiscoveredCameraEnrichment = {
   cameraCode: 'NVR-001-CAM-07',
   name: 'Gate 7',
   organizationUnitId: '22222222-2222-4222-8222-222222222222',
-  siteId: '33333333-3333-4333-8333-333333333333',
+  geographicAreaId: '33333333-3333-4333-8333-333333333333',
   cameraType: 'FIXED',
   latitude: '19.076012345',
   longitude: '72.877700049',
@@ -52,7 +52,7 @@ describe('toDiscoveredCameraWriteRequest', () => {
       cameraCode: 'NVR-001-CAM-07',
       name: 'Gate 7',
       organizationUnitId: '22222222-2222-4222-8222-222222222222',
-      siteId: '33333333-3333-4333-8333-333333333333',
+      geographicAreaId: '33333333-3333-4333-8333-333333333333',
       cameraType: 'FIXED',
       latitude: 19.0760123,
       longitude: 72.8777,
@@ -81,7 +81,7 @@ describe('toDiscoveredCameraWriteRequest', () => {
 
   it('rejects an overlong generated camera code before mapping', () => {
     const generated = createDiscoveredCameraEnrichment(discovered, enrichment.vmsId, 'N'.repeat(94));
-    const completed = { ...generated, organizationUnitId: enrichment.organizationUnitId, siteId: enrichment.siteId, cameraType: 'FIXED', latitude: '19', longitude: '72' };
+    const completed = { ...generated, organizationUnitId: enrichment.organizationUnitId, geographicAreaId: enrichment.geographicAreaId, cameraType: 'FIXED', latitude: '19', longitude: '72' };
 
     expect(() => toDiscoveredCameraWriteRequest(discovered, completed)).toThrow('Camera code must be at most 100 characters.');
   });

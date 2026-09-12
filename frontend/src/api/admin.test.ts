@@ -7,7 +7,6 @@ import type { ApiKeyResponse } from './models';
 const organizationId = '10000000-0000-4000-8000-000000000001';
 const unitId = '10000000-0000-4000-8000-000000000002';
 const areaId = '10000000-0000-4000-8000-000000000003';
-const siteId = '10000000-0000-4000-8000-000000000004';
 const groupId = '10000000-0000-4000-8000-000000000005';
 const roleId = '10000000-0000-4000-8000-000000000006';
 const scopeId = '10000000-0000-4000-8000-000000000007';
@@ -72,12 +71,8 @@ describe('admin organization endpoints', () => {
 });
 
 describe('admin geography endpoints', () => {
-  it('maps area traversal, area mutation, and site operations to hierarchy routes', async () => {
+  it('maps area traversal and area mutation to hierarchy routes', async () => {
     const area = { code: 'AMD', name: 'Ahmedabad', areaType: 'DISTRICT', parentAreaId: null };
-    const site = {
-      code: 'SITE-1', name: 'Control room', geographicAreaId: areaId,
-      latitude: 23.0225, longitude: 72.5714,
-    };
     const deactivation = { childStrategy: 'reparent' as const, newParentId: '10000000-0000-4000-8000-000000000011' };
 
     await api.admin.geography.listAreas({ rootsOnly: true, parentId: areaId });
@@ -89,8 +84,6 @@ describe('admin geography endpoints', () => {
     await api.admin.geography.updateArea(areaId, area);
     await api.admin.geography.activateArea(areaId);
     await api.admin.geography.deactivateArea(areaId, deactivation);
-    await api.admin.geography.listSites(areaId);
-    await api.admin.geography.createSite(site);
 
     expect(fetch).toHaveBeenNthCalledWith(1, ...fetchCall(`/api/v1/geographic-areas?rootsOnly=true&parentId=${areaId}`));
     expect(fetch).toHaveBeenNthCalledWith(2, ...fetchCall(`/api/v1/geographic-areas/${areaId}`));
@@ -108,10 +101,6 @@ describe('admin geography endpoints', () => {
     }));
     expect(fetch).toHaveBeenNthCalledWith(9, ...fetchCall(`/api/v1/geographic-areas/${areaId}/deactivate`, {
       method: 'POST', body: JSON.stringify(deactivation),
-    }));
-    expect(fetch).toHaveBeenNthCalledWith(10, ...fetchCall(`/api/v1/sites?areaId=${areaId}`));
-    expect(fetch).toHaveBeenNthCalledWith(11, ...fetchCall('/api/v1/sites', {
-      method: 'POST', body: JSON.stringify(site),
     }));
   });
 });

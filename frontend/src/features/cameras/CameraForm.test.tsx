@@ -14,7 +14,7 @@ function validForm(overrides: Partial<CameraFormValues> = {}): CameraFormValues 
     name: 'North Gate',
     organizationId: 'c0a80101-0000-4000-8000-000000000001',
     organizationUnitId: 'c0a80101-0000-4000-8000-000000000010',
-    siteId: 'c0a80101-0000-4000-8000-000000000020',
+    geographicAreaId: 'c0a80101-0000-4000-8000-000000000020',
     cameraType: 'FIXED',
     latitude: '12.9716',
     longitude: '77.5946',
@@ -40,7 +40,7 @@ describe('CameraForm', () => {
 
   it('updates the coordinate fields when a map location is selected', async () => {
     const user = userEvent.setup();
-    render(<CameraForm {...emptySelectors} onSubmit={vi.fn()} organizationUnits={[]} sites={[]} initialValues={validForm()} />);
+    render(<CameraForm {...emptySelectors} onSubmit={vi.fn()} organizationUnits={[]} geographicAreas={[]} initialValues={validForm()} />);
 
     await user.click(screen.getByRole('button', { name: /additional details/i }));
     await user.click(screen.getByRole('button', { name: /set location to 19.076012345/i }));
@@ -52,7 +52,7 @@ describe('CameraForm', () => {
   it('uses the accessible picker input as the form azimuth value', async () => {
     const user = userEvent.setup();
     const submit = vi.fn().mockResolvedValue(undefined);
-    render(<CameraForm {...emptySelectors} onSubmit={submit} organizationUnits={[]} sites={[]} initialValues={validForm()} />);
+    render(<CameraForm {...emptySelectors} onSubmit={submit} organizationUnits={[]} geographicAreas={[]} initialValues={validForm()} />);
 
     await user.click(screen.getByRole('button', { name: /additional details/i }));
     const azimuth = screen.getByLabelText(/^Azimuth/i);
@@ -65,7 +65,7 @@ describe('CameraForm', () => {
 
   it('keeps optional fields hidden until Additional details is expanded', async () => {
     const user = userEvent.setup();
-    render(<CameraForm {...emptySelectors} onSubmit={vi.fn()} organizationUnits={[]} sites={[]} />);
+    render(<CameraForm {...emptySelectors} onSubmit={vi.fn()} organizationUnits={[]} geographicAreas={[]} />);
 
     expect(screen.queryByLabelText(/mounting height/i)).not.toBeInTheDocument();
     const details = screen.getByRole('button', { name: /additional details/i });
@@ -79,7 +79,7 @@ describe('CameraForm', () => {
   it('blocks submission until required camera identity and coordinates are supplied', async () => {
     const user = userEvent.setup();
     const submit = vi.fn();
-    render(<CameraForm {...emptySelectors} onSubmit={submit} organizationUnits={[]} sites={[]} />);
+    render(<CameraForm {...emptySelectors} onSubmit={submit} organizationUnits={[]} geographicAreas={[]} />);
 
     await user.click(screen.getByRole('button', { name: /register camera/i }));
 
@@ -91,7 +91,7 @@ describe('CameraForm', () => {
   it('requires network details for a manual registration', async () => {
     const user = userEvent.setup();
     const submit = vi.fn();
-    render(<CameraForm {...emptySelectors} onSubmit={submit} organizationUnits={[]} sites={[]} initialValues={validForm({ manufacturer: '', ipAddress: '', port: '', protocol: '' })} />);
+    render(<CameraForm {...emptySelectors} onSubmit={submit} organizationUnits={[]} geographicAreas={[]} initialValues={validForm({ manufacturer: '', ipAddress: '', port: '', protocol: '' })} />);
 
     await user.click(screen.getByRole('button', { name: /register camera/i }));
 
@@ -105,7 +105,7 @@ describe('CameraForm', () => {
   it('shows API validation detail as safe form feedback', async () => {
     const user = userEvent.setup();
     const submit = vi.fn().mockRejectedValue(new ApiProblem({ status: 400, title: 'Invalid camera', detail: 'cameraCode already exists.' }));
-    render(<CameraForm {...emptySelectors} onSubmit={submit} organizationUnits={[]} sites={[]} initialValues={validForm()} />);
+    render(<CameraForm {...emptySelectors} onSubmit={submit} organizationUnits={[]} geographicAreas={[]} initialValues={validForm()} />);
 
     await user.click(screen.getByRole('button', { name: /register camera/i }));
 
@@ -115,7 +115,7 @@ describe('CameraForm', () => {
   it('does not echo an unexpected error into form feedback', async () => {
     const user = userEvent.setup();
     const submit = vi.fn().mockRejectedValue(new Error('connection secret'));
-    render(<CameraForm {...emptySelectors} onSubmit={submit} organizationUnits={[]} sites={[]} initialValues={validForm()} />);
+    render(<CameraForm {...emptySelectors} onSubmit={submit} organizationUnits={[]} geographicAreas={[]} initialValues={validForm()} />);
 
     await user.click(screen.getByRole('button', { name: /register camera/i }));
 
@@ -124,7 +124,7 @@ describe('CameraForm', () => {
   });
 
   it('does not render a credential-reference input', () => {
-    render(<CameraForm {...emptySelectors} onSubmit={vi.fn()} organizationUnits={[]} sites={[]} />);
+    render(<CameraForm {...emptySelectors} onSubmit={vi.fn()} organizationUnits={[]} geographicAreas={[]} />);
 
     expect(screen.queryByLabelText(/credential reference/i)).not.toBeInTheDocument();
   });
@@ -132,7 +132,7 @@ describe('CameraForm', () => {
   it('blocks submission when a populated VMS ID is not a UUID', async () => {
     const user = userEvent.setup();
     const submit = vi.fn();
-    render(<CameraForm {...emptySelectors} onSubmit={submit} organizationUnits={[]} sites={[]} initialValues={validForm({ vmsId: 'not-a-uuid' })} />);
+    render(<CameraForm {...emptySelectors} onSubmit={submit} organizationUnits={[]} geographicAreas={[]} initialValues={validForm({ vmsId: 'not-a-uuid' })} />);
 
     await user.click(screen.getByRole('button', { name: /additional details/i }));
     await user.click(screen.getByRole('button', { name: /register camera/i }));
@@ -145,8 +145,8 @@ describe('CameraForm', () => {
     const user = userEvent.setup();
     const submit = vi.fn().mockResolvedValue(undefined);
     const vmsId = '00000000-0000-0000-0000-000000000001';
-    render(<CameraForm {...emptySelectors} onSubmit={submit} organizationUnits={[]} sites={[]} vms={[{
-      id: vmsId, code: 'VMS-001', organizationUnitId: 'c0a80101-0000-4000-8000-000000000010', siteId: null,
+    render(<CameraForm {...emptySelectors} onSubmit={submit} organizationUnits={[]} geographicAreas={[]} vms={[{
+      id: vmsId, code: 'VMS-001', organizationUnitId: 'c0a80101-0000-4000-8000-000000000010', geographicAreaId: null,
       displayName: 'North Gate NVR', vendor: 'GENERIC', runtimeClass: 'ONVIF', endpoint: 'https://nvr.example.test',
       credentialReference: 'vault://nvr', verifyTls: true, state: 'ACTIVE', expectedCameraCount: null,
     }]} initialValues={validForm({ manufacturer: '', ipAddress: '', port: '', protocol: '' })} />);
@@ -161,11 +161,11 @@ describe('CameraForm', () => {
 
   it('connects every invalid required field to its rendered error message', async () => {
     const user = userEvent.setup();
-    render(<CameraForm {...emptySelectors} onSubmit={vi.fn()} organizationUnits={[]} sites={[]} />);
+    render(<CameraForm {...emptySelectors} onSubmit={vi.fn()} organizationUnits={[]} geographicAreas={[]} />);
 
     await user.click(screen.getByRole('button', { name: /register camera/i }));
 
-    for (const label of [/^Camera code/i, /^Name/i, /^Organization unit/i, /^Site/i, /^Camera type/i, /^Latitude/i, /^Longitude/i]) {
+    for (const label of [/^Camera code/i, /^Name/i, /^Organization unit/i, /^Geographic area/i, /^Camera type/i, /^Latitude/i, /^Longitude/i]) {
       const field = screen.getByLabelText(label);
       const errorId = field.getAttribute('aria-describedby');
       expect(field).toHaveAttribute('aria-invalid', 'true');

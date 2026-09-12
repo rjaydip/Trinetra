@@ -10,7 +10,7 @@ describe('createSampleImport', () => {
         cameraCode: 'CAM-EXAMPLE-001',
         name: 'Example camera',
         organizationUnitId: '00000000-0000-0000-0000-000000000001',
-        siteId: '00000000-0000-0000-0000-000000000002',
+        geographicAreaId: '00000000-0000-0000-0000-000000000002',
         cameraType: 'FIXED',
         latitude: 19.076,
         longitude: 72.8777,

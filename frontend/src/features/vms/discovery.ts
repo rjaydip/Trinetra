@@ -6,7 +6,7 @@ export interface DiscoveredCameraEnrichment {
   cameraCode: string;
   name: string;
   organizationUnitId: string;
-  siteId: string;
+  geographicAreaId: string;
   cameraType: string;
   latitude: string;
   longitude: string;
@@ -78,7 +78,7 @@ export function validateDiscoveredCameraEnrichment(
   requiredText(enrichment.cameraCode, 'Camera code', 100, errors, 'cameraCode');
   requiredText(mappedName(row, enrichment), 'Name', 255, errors, 'name');
   required(enrichment.organizationUnitId, 'Organization unit', errors, 'organizationUnitId');
-  required(enrichment.siteId, 'Site', errors, 'siteId');
+  required(enrichment.geographicAreaId, 'Geographic area', errors, 'geographicAreaId');
   if (!cameraTypes.includes(enrichment.cameraType as (typeof cameraTypes)[number])) errors.cameraType = 'Camera type is required.';
   validateCoordinate(enrichment.latitude, 'Latitude', -90, 90, errors, 'latitude');
   validateCoordinate(enrichment.longitude, 'Longitude', -180, 180, errors, 'longitude');
@@ -102,7 +102,7 @@ export function createDiscoveredCameraEnrichment(
     cameraCode: `${vmsCode}-${row.nativeCameraId}`,
     name: row.name?.trim() || row.nativeCameraId,
     organizationUnitId: '',
-    siteId: '',
+    geographicAreaId: '',
     cameraType: '',
     latitude: '',
     longitude: '',
@@ -128,7 +128,7 @@ export function toDiscoveredCameraWriteRequest(
     cameraCode: enrichment.cameraCode.trim(),
     name: mappedName(row, enrichment),
     organizationUnitId: enrichment.organizationUnitId,
-    siteId: enrichment.siteId,
+    geographicAreaId: enrichment.geographicAreaId,
     cameraType: enrichment.cameraType,
     latitude: roundCoordinate(Number(enrichment.latitude)),
     longitude: roundCoordinate(Number(enrichment.longitude)),

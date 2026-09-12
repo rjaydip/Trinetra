@@ -57,7 +57,6 @@ function hierarchyFetch(options: { areaConflict?: boolean } = {}) {
     if (url.pathname === `/api/v1/organizations/${organizationId}/units`) return Response.json(units);
     if (url.pathname === '/api/v1/geographic-areas/types') return Response.json([{ code: 'ZONE', name: 'Zone', levelOrder: 1 }]);
     if (url.pathname === '/api/v1/geographic-areas') return Response.json(areas);
-    if (url.pathname === '/api/v1/sites') return Response.json([]);
     if (url.pathname === `/api/v1/geographic-areas/${areaId}/deactivate` && init?.method === 'POST') {
       deactivationAttempts += 1;
       if (options.areaConflict && deactivationAttempts === 1) {
@@ -161,14 +160,14 @@ describe('HierarchyPage deactivation conflicts', () => {
 });
 
 describe('HierarchyPage supported creation', () => {
-  it('uses live organizations and areas in the unit and site forms', async () => {
+  it('uses live organizations and areas in the unit and geographic area forms', async () => {
     vi.stubGlobal('fetch', hierarchyFetch());
     renderHierarchy(['organization.read', 'organization.manage', 'geography.read', 'geography.manage']);
 
     const unitForm = await screen.findByRole('form', { name: /create organization unit/i });
     expect(await within(unitForm).findByRole('option', { name: /state police/i })).toHaveValue(organizationId);
-    const siteForm = screen.getByRole('form', { name: /create site/i });
-    expect(await within(siteForm).findByRole('option', { name: /north zone/i })).toHaveValue(areaId);
+    const areaForm = screen.getByRole('form', { name: /create geographic area/i });
+    expect(await within(areaForm).findByRole('option', { name: /north zone/i })).toHaveValue(areaId);
   });
 });
 

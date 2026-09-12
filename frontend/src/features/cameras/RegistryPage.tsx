@@ -12,7 +12,7 @@ import { CameraFilters, type RegistryFilters } from './CameraFilters';
 import { CameraTable } from './CameraTable';
 
 const filterNames: Array<keyof RegistryFilters> = [
-  'q', 'cameraType', 'organizationUnitId', 'siteId', 'geographicAreaId',
+  'q', 'cameraType', 'organizationUnitId', 'geographicAreaId',
   'operationalStatus', 'connectivityStatus', 'maintenanceStatus', 'includeRetired',
 ];
 

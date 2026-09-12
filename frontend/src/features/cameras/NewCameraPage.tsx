@@ -16,7 +16,7 @@ export function NewCameraPage() {
   const [organizationId, setOrganizationId] = useState('');
   const [coordinates, setCoordinates] = useState<{ latitude: number; longitude: number } | null>(null);
   const organizations = useQuery({ queryKey: ['reference', 'organizations'], queryFn: api.reference.organizations });
-  const sites = useQuery({ queryKey: ['reference', 'sites'], queryFn: () => api.reference.sites() });
+  const geographicAreas = useQuery({ queryKey: ['reference', 'geographic-areas'], queryFn: () => api.reference.geographicAreas() });
   const vms = useQuery({ queryKey: ['vms'], queryFn: api.vms.list });
   const organizationUnits = useQuery({
     queryKey: ['reference', 'organization-units', organizationId],
@@ -69,11 +69,11 @@ export function NewCameraPage() {
         : organizationUnits.data?.length
           ? { state: 'ready' }
           : { state: 'empty' };
-  const sitesState: SelectorState = sites.isPending || (sites.isError && sites.isFetching)
+  const geographicAreasState: SelectorState = geographicAreas.isPending || (geographicAreas.isError && geographicAreas.isFetching)
     ? { state: 'loading' }
-    : sites.isError
-      ? { state: 'error', message: referenceError(sites.error, 'Sites could not be loaded. Please try again.'), retry: () => { void sites.refetch(); } }
-      : sites.data?.length
+    : geographicAreas.isError
+      ? { state: 'error', message: referenceError(geographicAreas.error, 'Geographic areas could not be loaded. Please try again.'), retry: () => { void geographicAreas.refetch(); } }
+      : geographicAreas.data?.length
         ? { state: 'ready' }
         : { state: 'empty' };
   const vmsState: SelectorState = vms.isPending || (vms.isError && vms.isFetching)
@@ -86,9 +86,9 @@ export function NewCameraPage() {
   const selectorStates: CameraSelectorStates = {
     organizations: organizationsState,
     organizationUnits: organizationUnitsState,
-    sites: sitesState,
+    geographicAreas: geographicAreasState,
     vms: vmsState,
   };
 
-  return <section className="onboarding-page" aria-labelledby="new-camera-title"><header><p className="eyebrow">Camera registry</p><h1 id="new-camera-title">Register camera</h1><p>Required fields identify the camera and its physical location.</p></header><CameraForm organizations={organizations.data ?? []} organizationUnits={organizationUnits.data ?? []} sites={sites.data ?? []} vms={vms.data ?? []} selectorStates={selectorStates} mapFeatures={mapContext.data} onCoordinatesChange={handleCoordinatesChange} onOrganizationChange={setOrganizationId} onSubmit={async (values) => { await create.mutateAsync(values); }} /></section>;
+  return <section className="onboarding-page" aria-labelledby="new-camera-title"><header><p className="eyebrow">Camera registry</p><h1 id="new-camera-title">Register camera</h1><p>Required fields identify the camera and its physical location.</p></header><CameraForm organizations={organizations.data ?? []} organizationUnits={organizationUnits.data ?? []} geographicAreas={geographicAreas.data ?? []} vms={vms.data ?? []} selectorStates={selectorStates} mapFeatures={mapContext.data} onCoordinatesChange={handleCoordinatesChange} onOrganizationChange={setOrganizationId} onSubmit={async (values) => { await create.mutateAsync(values); }} /></section>;
 }
