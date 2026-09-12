@@ -192,7 +192,7 @@ public static class CameraEndpoints
         return TypedResults.Ok(new CameraPage([.. items.Select(ToResponse)], next));
     }
 
-    private static async Task<Results<Ok<BulkImportResult>, ProblemHttpResult>> BulkImportAsync(
+    internal static async Task<Results<Ok<BulkImportResult>, ProblemHttpResult>> BulkImportAsync(
         [FromBody] BulkImportRequest request, CameraRepository repo,
         NpgsqlDataSource db, HttpContext http, CancellationToken ct)
     {
@@ -240,6 +240,17 @@ public static class CameraEndpoints
 
                 if (existingId is { } eid)
                 {
+                    // Finding 10-M5: captured before the write, same as the single-row
+                    // ReplaceAsync — an audit row that always says "before: null" for an update
+                    // is a fidelity gap, not just here but for every future reader trying to
+                    // reconstruct what changed. Read on its own connection, outside `work`'s
+                    // transaction — matching the single-row path exactly (its own `before` fetch
+                    // runs before that endpoint even opens a UnitOfWork). A concurrent writer to
+                    // this same row could in principle land in the gap and make `before_state`
+                    // reflect an intermediate value rather than the immediate predecessor; that
+                    // window already exists on the single-row path today and isn't widened here.
+                    var before = await repo.GetAsync(eid, caller, ct);
+
                     if (!await repo.ReplaceAsync(eid, camera!, caller, work, ct))
                     {
                         failed++;
@@ -248,7 +259,8 @@ public static class CameraEndpoints
                     }
 
                     await work.AuditAsync(caller, "update", "camera", eid.ToString(),
-                        before: null, after: Redact(camera!), camera!.OrganizationUnitId, ct);
+                        before: before is null ? null : Redact(before), after: Redact(camera!),
+                        camera!.OrganizationUnitId, ct);
                     await work.CommitAsync(ct);
 
                     updated++;

@@ -214,14 +214,16 @@ validation, `9-M1` VerifyTls non-nullable (TLS downgrade), `9-M2` org/site ACTIV
 `6-M1` geography asymmetry in group scope add/remove, `5-M1` org read perm mismatch
 (`geography.read` vs `organization.read`) ✅ PR6.
 
-**OTHER MEDIUM (`4-M1` ✅ PR12, `6-M4` ✅ PR13a, `15-M3` ✅ PR13b, `17-M1..M3` ✅ v1.13 — all
-corrected here 2026-09-11, was stale):**
+**OTHER MEDIUM (`4-M1` ✅ PR12, `6-M4` ✅ PR13a, `15-M3` ✅ PR13b, `10-M5` ✅ PR13c, `17-M1..M3`
+✅ v1.13 — all corrected here 2026-09-11, was stale):**
 `4-M5` email unvalidated/non-unique (blocks F2/F3), `4-M6` no breached-password screen, `4-M7`
-CORS, `4-M8` bootstrap password lingers, `6-M5` email, `10-M4` bulk import 500 sync txns, `10-M5`
-bulk audit, `10-M6` cursor code-reuse anomaly, `10-M7` reconcile location consistency, `10-M8`
-GIS feed per-prop JsonElement alloc, `14-M2` `event.acknowledge` seeded w/ no endpoint.
+CORS, `4-M8` bootstrap password lingers, `6-M5` email, `10-M4` bulk import 500 sync txns,
+`10-M6` cursor code-reuse anomaly, `10-M7` reconcile location consistency, `10-M8`
+GIS feed per-prop JsonElement alloc.
 **Parked (2026-09-11, see the PR13b block below for why):** `4-M3` login rate-limit per-IP only,
 `8-M1` no key max lifetime, `8-M2` no key rotation endpoint.
+**Moved to the design track (2026-09-11, see below):** `14-M2` `event.acknowledge` seeded w/ no
+endpoint — a decision point, not a routine fix.
 
 ### P3 · LOW — polish / hygiene
 
@@ -484,6 +486,41 @@ uncommitted 2026-09-11):**
   is closer than before, but not independently measured) — accepted as a residual, unmeasured,
   low-practical-severity gap, not blocking.
 
+**PR13c — bulk-import audit fidelity (branch `pr13c-bulk-import-audit`, uncommitted 2026-09-11):**
+- **10-M5** ✅ — see the finding entry above for the fix itself.
+- **14-M2** — investigated, NOT fixed: genuinely a decision point (build the missing endpoint +
+  schema, or remove the dead permission), not a bug with one obvious fix. Moved to "Design track
+  — decide before building" rather than left mislabeled as a routine Medium.
+- New test: `BulkImportAuditFidelityTests.BulkUpsert_ExistingCamera_AuditsPriorState_NotNull`
+  (1, integration) — creates a camera via bulk-import insert, upserts a change to it, asserts the
+  resulting `config_audit` row's `before_state` is non-null and contains the pre-change name.
+  `CameraEndpoints.BulkImportAsync` made `internal` to call directly (same pattern as other
+  endpoint-level tests in this suite); the test builds real JWT-shaped claims for the
+  `HttpContext` rather than passing a `CallerContext` object directly, since the endpoint reads
+  its caller via `CallerContextFactory.From(http)`, not from any parameter — passing the object
+  directly would silently test nothing. Sabotage-checked: reverting the fix (back to
+  `before: null`) made the test fail exactly as expected; reverified the fix passes.
+- Endpoint-only fix, same accepted-gap posture as prior audit-fidelity items (8-NEW-L, 10-L3,
+  16-L3, 14-L3 in PR11b) — except this one now IS integration-tested via the `internal` +
+  real-claims pattern above, which those weren't.
+- Build clean; 139 unit / 261 integration + 18 pre-existing (unchanged baseline).
+- **BA + dotnet-expert reviewed PR13c, 2026-09-11. No blockers from either — dotnet-expert says
+  ready to commit as-is.** Both independently confirmed this is the only bulk-write path in the
+  codebase with the "audits null on an update" pattern — not a partial fix leaving a sibling bug.
+  dotnet-expert confirmed the `before`-fetch-outside-the-transaction shape exactly mirrors the
+  single-row `PUT /cameras/{id}` path (not a new or wider race), confirmed `internal` matches
+  existing precedent (`AuthEndpoints` already does this, `InternalsVisibleTo` already declared),
+  and verified the test's claim set is necessary and sufficient against
+  `CallerContextFactory.From` directly — flagged that `camera.import` in the test is inert (the
+  route-level permission filter isn't reachable via a direct handler call) — applied as a
+  doc-comment clarification, not a code change. BA confirmed the extra `GetAsync` per row is
+  noise against 10-M4's already-accepted per-row transaction cost (not its own finding), the
+  `internal` visibility trade-off doesn't weaken the public API surface, and the 14-M2 deferral
+  was the right call — a genuine product decision, not an engineering default, consistent with
+  how F7 was also parked. One BA note applied: a comment now documents that `before` is captured
+  outside `work`'s transaction (same accepted characteristic as the single-row path, not a new
+  or widened race) so a future reader doesn't mistake it for an oversight.
+
 ### Scope additions (agreed)
 
 - Guarded DELETE for sites/units/areas/orgs (`5-L3`) — reference-checked, 409 + blocker list.
@@ -498,6 +535,15 @@ uncommitted 2026-09-11):**
 - **F11** Registry/GIS is NVR-unaware — decide if per-channel manual onboarding is acceptable for
   phase 1 or an NVR needs bulk-adopt + `targetId` filter + federated→registry health.
 - **F12** API-key strength & GET non-disclosure — VERIFIED OK, no action (kept for the record).
+- **14-M2** (moved here 2026-09-11) `event.acknowledge` is seeded (v1.sql) and granted to
+  `VMS_OPERATOR`/`CAMERA_OPERATOR`, but no endpoint uses it — `federation_event` has no
+  `acknowledged_at`/`acknowledged_by` columns at all (unlike `watchlist_alert`, which has both
+  and a working `POST /watchlist/alerts/{id}/acknowledge`). Genuinely orphaned, not partially
+  built. Two ways to close it, both real work: (a) build `POST /events/{id}/acknowledge` —
+  needs a schema migration adding the two columns to a **partitioned** table (`ensure_event_partitions`
+  fan-out to consider) plus the endpoint/repo/audit/tests, or (b) remove the dead permission —
+  needs its own version file (`v1.sql` can't be edited once applied) deleting the permission and
+  every role grant referencing it. Not attempted unilaterally; needs your call on (a) vs (b).
 
 **Suggested build order:** P0 (#1, #2) → geography-scope wave (#3–7) → #8–12 → 4-C1 + auth audit
 (#10, #19) → F7 design decision → audit-fidelity + pagination + validation waves → P3 sweep.
@@ -531,7 +577,8 @@ rule does not bite — still prefer new `v1.7+` files over editing `v1.sql`. Bra
 | PR11 | **P3 sweep** incl. F1 | — |
 | PR12 | **Must-change-password enforcement**: 4-M1 / 5-L5 — ✅ implemented, BA/dotnet-expert reviewed, no blockers, 3 unit tests | — (code-only) |
 | PR13a | **Lockout-guard TOCTOU fix**: 6-M4 — ✅ implemented, BA/dotnet-expert reviewed, no blockers, 3 integration tests | — (code-only) |
-| PR13b | **Detection camera-resolution existence-oracle fix**: 15-M3 — ✅ implemented, BA/dotnet-expert review pending, 1 new + 3 updated integration tests | — (code-only) |
+| PR13b | **Detection camera-resolution existence-oracle fix**: 15-M3 — ✅ implemented, BA/dotnet-expert reviewed, no blockers, 1 new + 3 updated integration tests | — (code-only) |
+| PR13c | **Bulk-import audit fidelity**: 10-M5 — ✅ implemented, BA/dotnet-expert review pending, 1 new integration test | — (code-only) |
 | F7   | separate feature branch, **after** the design decision | approval tables |
 
 Status: **not started.**
@@ -1461,9 +1508,10 @@ Findings are mostly M/L.
 - **10-M4** `BulkImportAsync` — up to 500 rows, each its own `BeginAsync`/`CommitAsync` executed
   sequentially inside one synchronous HTTP request → many seconds holding the request open, no
   timeout guard. Consider a background job above some row threshold.
-- **10-M5** `BulkImportAsync` upsert-replace path audits `before: null` (line 242) — prior state
-  not captured, unlike the single `ReplaceAsync` which does `Redact(before)`. Audit fidelity gap
-  on the bulk path.
+- **10-M5** ✅ PR13c — `BulkImportAsync` upsert-replace path used to audit `before: null` — prior
+  state not captured, unlike the single-row `ReplaceAsync` (`PUT /cameras/{id}`), which does
+  `Redact(before)`. Now fetches the camera via `repo.GetAsync` before `ReplaceAsync` runs, same
+  as the single-row path, and audits `Redact(before)` instead of `null`.
 - **10-M6** Pagination anomaly with reused codes. `ListAsync` keyset cursor = base64(`cameraCode`).
   Retiring a camera frees its code for reuse (documented), so with `includeRetired=true` two rows
   can share a code → keyset on code alone can skip or loop. Add a tiebreaker (id) to the cursor.
