@@ -214,12 +214,11 @@ validation, `9-M1` VerifyTls non-nullable (TLS downgrade), `9-M2` org/site ACTIV
 `6-M1` geography asymmetry in group scope add/remove, `5-M1` org read perm mismatch
 (`geography.read` vs `organization.read`) ✅ PR6.
 
-**OTHER MEDIUM (`4-M1` ✅ PR12, `6-M4` ✅ PR13a, `15-M3` ✅ PR13b, `10-M5` ✅ PR13c, `17-M1..M3`
-✅ v1.13 — all corrected here 2026-09-11, was stale):**
+**OTHER MEDIUM (`4-M1` ✅ PR12, `6-M4` ✅ PR13a, `15-M3` ✅ PR13b, `10-M5` ✅ PR13c, `10-M4` ✅
+PR13d, `10-M6` ✅ PR14, `17-M1..M3` ✅ v1.13 — all corrected here 2026-09-12, was stale):**
 `4-M5` email unvalidated/non-unique (blocks F2/F3), `4-M6` no breached-password screen, `4-M7`
-CORS, `4-M8` bootstrap password lingers, `6-M5` email, `10-M4` bulk import 500 sync txns,
-`10-M6` cursor code-reuse anomaly, `10-M7` reconcile location consistency, `10-M8`
-GIS feed per-prop JsonElement alloc.
+CORS, `4-M8` bootstrap password lingers, `6-M5` email (same underlying gap as 4-M5), `10-M7`
+reconcile location consistency, `10-M8` GIS feed per-prop JsonElement alloc.
 **Parked (2026-09-11, see the PR13b block below for why):** `4-M3` login rate-limit per-IP only,
 `8-M1` no key max lifetime, `8-M2` no key rotation endpoint.
 **Moved to the design track (2026-09-11, see below):** `14-M2` `event.acknowledge` seeded w/ no
@@ -596,6 +595,64 @@ PR13d both merged by this point; uncommitted 2026-09-12):**
   matches `main`'s own baseline pre-this-branch, i.e. 18 not 19 — the merge regression above is
   fixed, not folded into a new "baseline").
 
+**PR15 — reconciliation mutual-consistency check (branch `pr15-reconcile-consistency`, off
+`main`; uncommitted 2026-09-12):**
+- **10-M7** ✅ — see the finding entry above for the fix itself.
+  `ReconciliationRepository.ReconcileAsync`'s existence check (`EXISTS(...)`) was replaced with a
+  row fetch (`RegistryPlacementRow`: `OrganizationUnitId`, `GeographicAreaId`) so the registry
+  camera's own placement is available to compare against `fed`'s. New `ReconcileStatus.Inconsistent`
+  enum member; both call sites (`POST /{id}/reconcile` and the internal `ReconcileAsync` call
+  inside `POST /from-federated`) now map it to `409 "Placement mismatch"` — `from-federated`
+  needed its own explicit case, since falling through its switch would otherwise have silently
+  treated a rejected (unlinked) reconcile as a successful `201 Created`.
+- The check is skipped when the link already exists (`fed.CameraId == cameraId`) — an
+  already-accepted link from before this fix is not retroactively broken by a later idempotent
+  reconcile call on the same pair.
+- New `ReconcileConsistencyTests` (5, integration — 4 at repo level + 1 endpoint-level, see
+  below): matching org+geo links successfully; mismatched organization is rejected and confirmed
+  NOT linked in the database (not just a status check); mismatched geography is rejected the
+  same way; a federated row with no geography at all links on organization match alone (the
+  "nothing to disagree with" exception). Sabotage-checked: removing the consistency check made
+  both mismatch tests fail with `Linked` instead of `Inconsistent`; restored, reverified all pass.
+- Docs: both routes' `.WithDescription` updated. `from-federated`'s note is explicit that this is
+  a **narrowing of existing behavior** — an `organizationUnitId` override that disagreed with the
+  VMS-reported value used to be silently accepted; it is now `409`. Not decided unilaterally as
+  obviously correct: recorded plainly as a behavior change for review, the same posture as the
+  6-L1/14-M2 "flag, don't decide" items. `docs/API-CHANGES-FOR-REGISTRY-UI.md` new §1.4i, added
+  on BA review — both routes' new `409`, and `from-federated`'s override narrowing spelled out
+  as consumer-facing, since it was previously undocumented.
+- Build clean; 141 unit / 273 integration + 18 pre-existing (unchanged baseline).
+- **BA + dotnet-expert reviewed PR15, 2026-09-12.** dotnet-expert found **one blocker, fixed**: a
+  duplicated comment block (copy-paste artifact from an earlier sabotage-check-and-restore cycle)
+  sitting right above the new check — cleaned up, and reworded per BA's note below while at it.
+  Everything else checked out: check ordering (after `Conflict`, before the mutating `UPDATE`) is
+  correct; the `EXISTS`→row-fetch refactor is behaviorally identical for not-found/scope/deleted;
+  `FromFederatedAsync`'s early return correctly rolls back the camera row it had already inserted
+  in the same transaction (`UnitOfWork.DisposeAsync`'s existing rollback-on-no-commit, not a
+  special case); the org-always/geo-only-if-present asymmetry does not violate CLAUDE.md #12 (a
+  registry `Camera` always has both fields `required`, but a `federated_camera` row can genuinely
+  have no geography yet — "no claim, no contradiction", not a scope-resolution shortcut). BA made
+  the same point about the #12 citation from a different angle — comment reworded to make the
+  actual justification (federated-row data completeness, not invariant #12 itself) explicit
+  rather than citing #12 for a claim it doesn't quite make. Both reviewers asked for a direct
+  test of `FromFederatedAsync`'s own new code (not just the shared repository method) —
+  added `FromFederatedAsync_OrganizationOverrideDisagreesWithVms_Returns409_NoOrphanCameraRow`,
+  which sabotage-confirmed the exact bug both had flagged as the risk: without the endpoint's own
+  `Inconsistent` handling, the call falls through to a **successful `201 Created`** for a camera
+  that was never actually linked (and, before this test, would have left the just-inserted
+  camera row as an orphan — the test also asserts it does not).
+  **Not applied, flagged instead — the same "don't decide unilaterally" posture as 6-L1/14-M2**:
+  BA's core objection that `from-federated`'s override removal is a *product workflow decision*
+  (does one-step re-siting-at-creation stay supported some other way?), not a pure security fix,
+  and arguably deserved its own PR/sign-off rather than being bundled with the primary 10-M7 fix
+  for the existing-camera path. Recorded here rather than split, since the two fixes share one
+  line of code (`ReconcileAsync`'s check) and leaving `from-federated` unfixed would itself be a
+  live, exploitable inconsistency between two routes doing the same thing — **but this is
+  Jaydip's call to make, not something to treat as settled by writing it down.** dotnet-expert
+  separately flagged (not blocking): no migration/audit query exists to find production
+  `federated_camera` rows that are ALREADY inconsistent from before this fix shipped — worth a
+  follow-up ticket, this PR only stops new ones.
+
 ### Scope additions (agreed)
 
 - Guarded DELETE for sites/units/areas/orgs (`5-L3`) — reference-checked, 409 + blocker list.
@@ -654,7 +711,8 @@ rule does not bite — still prefer new `v1.7+` files over editing `v1.sql`. Bra
 | PR13a | **Lockout-guard TOCTOU fix**: 6-M4 — ✅ implemented, BA/dotnet-expert reviewed, no blockers, 3 integration tests | — (code-only) |
 | PR13b | **Detection camera-resolution existence-oracle fix**: 15-M3 — ✅ implemented, BA/dotnet-expert review pending, 1 new + 3 updated integration tests | — (code-only) |
 | PR13d | **Bulk-import savepoints**: 10-M4 — ✅ implemented, BA/dotnet-expert reviewed, 1 blocker found + fixed, 4 integration tests | — (code-only) |
-| PR14 | **Camera cursor tiebreaker**: 10-M6 — ✅ implemented; also fixed a live regression in already-merged PR13c/PR13d code found while testing, review pending, 1 new integration test + 2 new/updated unit tests | — (code-only) |
+| PR14 | **Camera cursor tiebreaker**: 10-M6 — ✅ implemented; also fixed a live regression in already-merged PR13c/PR13d code found while testing, BA/dotnet-expert reviewed, no blockers | — (code-only) |
+| PR15 | **Reconciliation mutual-consistency check**: 10-M7 — ✅ implemented, BA/dotnet-expert reviewed, 1 blocker found + fixed, `from-federated` override narrowing flagged for Jaydip's decision (not unilaterally settled), 5 integration tests | — (code-only) |
 | F7   | separate feature branch, **after** the design decision | approval tables |
 
 Status: **not started.**
@@ -1602,10 +1660,18 @@ Findings are mostly M/L.
   a code. Cursor payload changed from `base64(code)` to `base64("{id}|{code}")` — id first,
   deliberately, since `camera_code` has no charset restriction and could itself contain `|`;
   putting the fixed-format GUID first makes the split unambiguous either way.
-- **10-M7** `ReconcileAsync` doesn't check the registry camera and the VMS-reported camera are
-  geographically/organizationally consistent — you can link registry camera A (unit X, district
-  D1) to a VMS camera physically in district D2. Caller-reachability of both is checked; mutual
-  consistency isn't. Reconciliation-correctness issue.
+- **10-M7** ✅ PR15 — `ReconcileAsync` didn't check the registry camera and the VMS-reported
+  camera are geographically/organizationally consistent — a caller reachable into two
+  departments (or unscoped) could link registry camera A (unit X, district D1) to a VMS camera
+  the federation layer places in unit Y / district D2. Now compares `registryCamera` against
+  `fed`'s own org/geo before linking: organization must match exactly; geography is checked only
+  when the federated row has one (a camera the VMS hasn't sited yet has nothing to disagree
+  with). A mismatch is `ReconcileStatus.Inconsistent` → `409 "Placement mismatch"`, on both
+  `POST /{id}/reconcile` and `POST /from-federated` (the latter's `organizationUnitId` override
+  is now also required to agree with the VMS-reported value — previously it could silently
+  diverge; a genuine cross-department placement now needs re-siting on the VMS side, not an
+  override here — **flagged as a real, if narrow, behavior change**, not something decided
+  unilaterally as obviously desirable).
 - **10-M8** `FeedAsync` builds properties via `JsonSerializer.SerializeToElement` per-property
   per-camera — 5000 cameras × 13 props = ~65k JsonElement allocations on a map-render hot path.
   Project to a typed shape or serialise once.
