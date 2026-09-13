@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { AuthProvider } from '../../auth/AuthProvider';
 import { saveSession } from '../../auth/session';
-import { sessionFixture } from '../../test/fixtures';
+import { pageEnvelope, sessionFixture } from '../../test/fixtures';
 import { AccessGroupsPage } from './AccessGroupsPage';
 
 const groupId = '20000000-0000-4000-8000-000000000001';
@@ -45,18 +45,18 @@ function groupsFetch() {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input));
     if (url.pathname === '/api/v1/access-groups' && init?.method === 'POST') return Response.json({ id: groupId }, { status: 201 });
-    if (url.pathname === '/api/v1/access-groups') return Response.json([group]);
+    if (url.pathname === '/api/v1/access-groups') return Response.json({ items: [group], page: 1, pageSize: 20, total: 1, totalPages: 1 });
     if (url.pathname === `/api/v1/access-groups/${groupId}` && init?.method === 'PUT') return Response.json({ ...group, name: 'Senior Operators' });
     if (url.pathname === `/api/v1/access-groups/${groupId}/disable` && init?.method === 'POST') return new Response(null, { status: 204 });
     if (url.pathname === `/api/v1/access-groups/${groupId}/activate` && init?.method === 'POST') return new Response(null, { status: 204 });
     if (url.pathname === `/api/v1/access-groups/${groupId}`) return Response.json(group);
-    if (url.pathname === `/api/v1/access-groups/${groupId}/members`) return Response.json([{ userId: 'u1', username: 'ravi', expiresAt: null }]);
+    if (url.pathname === `/api/v1/access-groups/${groupId}/members`) return Response.json({ items: [{ userId: 'u1', username: 'ravi', expiresAt: null }], page: 1, pageSize: 20, total: 1, totalPages: 1 });
     if (url.pathname === `/api/v1/access-groups/${groupId}/scopes` && init?.method === 'POST') return Response.json({ id: 'new-scope' }, { status: 201 });
     if (url.pathname === `/api/v1/access-groups/${groupId}/scopes/${scopeId}` && init?.method === 'DELETE') return new Response(null, { status: 204 });
     if (url.pathname === '/api/v1/roles') return Response.json([{ id: roleId, code: 'VIEWER', name: 'Viewer', description: null, isSystem: true }]);
-    if (url.pathname === '/api/v1/organizations') return Response.json([{ id: 'org-1', code: 'OPS', name: 'Operations', organizationType: 'AGENCY', description: null, status: 'ACTIVE' }]);
-    if (url.pathname === '/api/v1/organizations/org-1/units') return Response.json([{ id: unitId, organizationId: 'org-1', parentUnitId: null, code: 'HQ', name: 'Headquarters', unitType: 'DEPARTMENT', status: 'ACTIVE' }]);
-    if (url.pathname === '/api/v1/geographic-areas') return Response.json([{ id: areaId, parentAreaId: null, code: 'NORTH', name: 'North zone', areaType: 'ZONE', status: 'ACTIVE' }]);
+    if (url.pathname === '/api/v1/organizations') return Response.json(pageEnvelope([{ id: 'org-1', code: 'OPS', name: 'Operations', organizationType: 'AGENCY', description: null, status: 'ACTIVE' }]));
+    if (url.pathname === '/api/v1/organizations/org-1/units') return Response.json(pageEnvelope([{ id: unitId, organizationId: 'org-1', parentUnitId: null, code: 'HQ', name: 'Headquarters', unitType: 'DEPARTMENT', status: 'ACTIVE' }]));
+    if (url.pathname === '/api/v1/geographic-areas') return Response.json(pageEnvelope([{ id: areaId, parentAreaId: null, code: 'NORTH', name: 'North zone', areaType: 'ZONE', status: 'ACTIVE' }]));
     return new Response(null, { status: 404 });
   });
 }

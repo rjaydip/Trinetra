@@ -101,6 +101,16 @@ export interface CameraPage {
   nextCursor: string | null;
 }
 
+/** The `{ items, page, pageSize, total, totalPages }` envelope returned by any list endpoint that
+ * opts into page/pageSize pagination (see `Paginate.Render` on the API side). */
+export interface PageResult<T> {
+  items: T[];
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+}
+
 export interface CameraListQuery {
   limit?: number;
   cursor?: string;
@@ -646,6 +656,62 @@ export interface ApiKeyResponse {
   expiresAt: string | null;
   lastUsedAt: string | null;
   revokedAt: string | null;
+}
+
+export interface AiWorkerHealthResponse {
+  id: string;
+  apiKeyId: string;
+  apiKeyName: string;
+  workerId: string;
+  hostname: string;
+  firstSeenAt: string;
+  lastHeartbeatAt: string;
+  reportedAt: string | null;
+  clockDriftSeconds: number | null;
+}
+
+// ---- Users and group membership -------------------------------------------
+
+/** A platform user account. Never carries password material. */
+export interface UserResponse {
+  id: string;
+  username: string;
+  displayName: string;
+  email: string | null;
+  mustChangePassword: boolean;
+  status: string;
+  lastLoginAt: string | null;
+  isSystem: boolean;
+}
+
+/** A group a user belongs to, with any expiry on that membership. */
+export interface UserGroupResponse {
+  groupId: string;
+  code: string;
+  name: string;
+  expiresAt: string | null;
+}
+
+export interface CreateUserRequest {
+  username: string;
+  displayName: string;
+  password: string;
+  email?: string | null;
+}
+
+export interface UpdateUserRequest {
+  displayName: string;
+  email?: string | null;
+  status?: string | null;
+}
+
+export interface ResetPasswordRequest {
+  newPassword: string;
+}
+
+export interface AssignGroupRequest {
+  groupId: string;
+  expiresAt?: string | null;
 }
 
 // ---- Detections (read side; ingest is the AI worker's, not a UI action) ----

@@ -7,21 +7,29 @@ import { AuthProvider } from '../../auth/AuthProvider';
 import { saveSession } from '../../auth/session';
 import { cameraFixture, sessionFixture } from '../../test/fixtures';
 
-// WebGL is unavailable in jsdom. Only the external renderer is replaced; the
-// production CameraMap, move debounce, MapPage, API and query cache all run.
+// WebGL is unavailable in jsdom. Only the external renderer is replaced; the production
+// CameraMap, move debounce, MapPage, API and query cache all run.
 const renderer = vi.hoisted(() => ({ move: () => {}, bounds: [-120, 35, -119.99, 35.01] }));
-vi.mock('maplibre-gl', () => ({ default: {
-  NavigationControl: class {},
-  Map: class {
-    addControl() {}
-    on(event: string, callback: () => void) { if (event === 'moveend') renderer.move = callback; }
-    getBounds() { return { getWest: () => renderer.bounds[0], getSouth: () => renderer.bounds[1], getEast: () => renderer.bounds[2], getNorth: () => renderer.bounds[3] }; }
-    getSource() { return undefined; }
-    remove() {}
-  },
-} }));
 
-afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); sessionStorage.clear(); });
+vi.mock('maplibre-gl', () => ({
+  default: {
+    NavigationControl: class {},
+    Map: class {
+      addControl() {}
+      fitBounds() {}
+      on(event: string, callback: () => void) { if (event === 'moveend') renderer.move = callback; }
+      getBounds() { return { getWest: () => renderer.bounds[0], getSouth: () => renderer.bounds[1], getEast: () => renderer.bounds[2], getNorth: () => renderer.bounds[3] }; }
+      getSource() { return undefined; }
+      remove() {}
+    },
+  },
+}));
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  sessionStorage.clear();
+});
 
 it('explains suppressed wide bounds instead of reporting an empty loaded camera set', async () => {
   saveSession(sessionFixture());

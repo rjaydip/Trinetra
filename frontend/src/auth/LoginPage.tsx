@@ -3,15 +3,14 @@ import { useNavigate } from 'react-router-dom';
 
 import { isApiProblem } from '../api/client';
 import { Button } from '../components/ui';
+import { devCredentials } from '../config/env';
 import { useAuth } from './AuthProvider';
 
 export function LoginPage() {
   const { login } = useAuth();
   const navigate = useNavigate();
-  const configuredUsername = import.meta.env.VITE_USERNAME ?? '';
-  const configuredPassword = import.meta.env.VITE_PASSWORD ?? '';
-  const [username, setUsername] = useState(() => configuredUsername);
-  const [password, setPassword] = useState(() => configuredPassword);
+  const [username, setUsername] = useState(() => devCredentials().username);
+  const [password, setPassword] = useState(() => devCredentials().password);
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -22,8 +21,8 @@ export function LoginPage() {
 
     try {
       const session = await login({
-        username: username.trim() || configuredUsername,
-        password: password || configuredPassword,
+        username: username.trim() || devCredentials().username,
+        password: password || devCredentials().password,
       });
       navigate(session.mustChangePassword ? '/password' : '/dashboard', { replace: true });
     } catch (reason) {

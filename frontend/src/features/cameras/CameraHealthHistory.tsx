@@ -1,13 +1,14 @@
 import { useQuery } from '@tanstack/react-query';
 import { isApiProblem } from '../../api/client';
 import { api } from '../../api/endpoints';
+import { queryKeys } from '../../api/queryKeys';
 import { useAuth } from '../../auth/AuthProvider';
 import { hasPermission } from '../../auth/permissions';
 
 export function CameraHealthHistory({ cameraId }: { cameraId: string }) {
   const { session } = useAuth();
   const permitted = hasPermission(session, 'camera.health.read');
-  const history = useQuery({ queryKey: ['camera', cameraId, 'health-history'], queryFn: () => api.cameras.healthHistory(cameraId), enabled: permitted });
+  const history = useQuery({ queryKey: queryKeys.camera.healthHistory(cameraId), queryFn: () => api.cameras.healthHistory(cameraId), enabled: permitted });
   const unavailable = !permitted || (isApiProblem(history.error) && history.error.status === 403);
 
   return <section className="detail-panel" aria-labelledby="camera-health-history-heading">

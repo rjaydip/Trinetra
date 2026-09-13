@@ -4,6 +4,7 @@ import { useState, type ChangeEvent } from 'react';
 import { isApiProblem } from '../../api/client';
 import { api } from '../../api/endpoints';
 import type { BulkImportRequest, BulkImportResult } from '../../api/models';
+import { queryKeys } from '../../api/queryKeys';
 import { Button } from '../../components/ui';
 import { createSampleImport, parseBulkImport } from './import';
 
@@ -33,9 +34,9 @@ export function BulkImportPage() {
       setResult(nextResult);
       if (nextResult.created + nextResult.updated > 0) {
         await Promise.all([
-          queryClient.invalidateQueries({ queryKey: ['cameras'] }),
-          queryClient.invalidateQueries({ queryKey: ['camera'] }),
-          queryClient.invalidateQueries({ queryKey: ['gis-cameras'] }),
+          queryClient.invalidateQueries({ queryKey: queryKeys.cameras.all }),
+          queryClient.invalidateQueries({ queryKey: queryKeys.camera.all }),
+          queryClient.invalidateQueries({ queryKey: queryKeys.gisCameras.all }),
         ]);
       }
     },

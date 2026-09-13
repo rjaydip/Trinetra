@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { AuthProvider } from '../../auth/AuthProvider';
 import { saveSession } from '../../auth/session';
-import { sessionFixture } from '../../test/fixtures';
+import { sessionFixture, vmsFixture } from '../../test/fixtures';
 import { ReconciliationPage } from './ReconciliationPage';
 
 const vmsId = '11111111-1111-4111-8111-111111111111';
@@ -15,7 +15,7 @@ const organizationUnitId = '22222222-2222-4222-8222-222222222222';
 const areaId = '33333333-3333-4333-8333-333333333333';
 const existingCameraId = '55555555-5555-4555-8555-555555555555';
 
-const vms = { id: vmsId, code: 'NORTH-NVR', organizationUnitId, geographicAreaId: areaId, displayName: 'North NVR', vendor: 'DahuaCgi', runtimeClass: 'Managed', endpoint: 'https://nvr.example.test', credentialReference: 'vms/north-nvr', verifyTls: true, state: 'Active', expectedCameraCount: 24 };
+const vms = vmsFixture({ id: vmsId, organizationUnitId, geographicAreaId: areaId });
 const unreconciledRow = {
   targetId: vmsId, nativeCameraId: 'CAM-07', name: 'Gate 7', vendorModel: 'IPC-HFW1230S', firmware: '2.8',
   organizationUnitId, geographicAreaId: areaId, latitude: 19.076, longitude: 72.8777,

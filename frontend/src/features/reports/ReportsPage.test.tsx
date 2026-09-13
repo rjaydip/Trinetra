@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { App } from '../../App';
 import { AuthProvider } from '../../auth/AuthProvider';
+import { pageEnvelope } from '../../test/fixtures';
 
 function renderApp(path: string) {
   return render(
@@ -36,7 +37,7 @@ describe('ReportsPage', () => {
       if (url.pathname === '/api/v1/overview') return Response.json({
         targets: 10, activeTargets: 8, quarantinedTargets: 2, cameras: 12, unreachableCameras: 3,
       });
-      if (url.pathname === '/api/v1/organizations' || url.pathname === '/api/v1/geographic-areas') return Response.json([]);
+      if (url.pathname === '/api/v1/organizations' || url.pathname === '/api/v1/geographic-areas') return Response.json(pageEnvelope([]));
       return new Response(null, { status: 404 });
     });
 
@@ -58,9 +59,9 @@ describe('ReportsPage', () => {
         return Response.json({ buckets: { operationalStatus: { ACTIVE: 9, INACTIVE: 3 } } });
       }
       if (url.pathname === '/api/v1/geographic-areas') {
-        return Response.json([{ id: 'c0a80101-0000-4000-8000-000000000030', parentAreaId: null, code: 'MUM', name: 'Mumbai', areaType: 'CITY', status: 'ACTIVE' }]);
+        return Response.json(pageEnvelope([{ id: 'c0a80101-0000-4000-8000-000000000030', parentAreaId: null, code: 'MUM', name: 'Mumbai', areaType: 'CITY', status: 'ACTIVE' }]));
       }
-      if (url.pathname === '/api/v1/organizations') return Response.json([]);
+      if (url.pathname === '/api/v1/organizations') return Response.json(pageEnvelope([]));
       return new Response(null, { status: 404 });
     });
     vi.stubGlobal('fetch', fetch);
@@ -88,7 +89,7 @@ describe('ReportsPage', () => {
       if (url.pathname === '/api/v1/overview') return Response.json({
         targets: 10, activeTargets: 8, quarantinedTargets: 2, cameras: 12, unreachableCameras: 3,
       });
-      if (url.pathname === '/api/v1/organizations' || url.pathname === '/api/v1/geographic-areas') return Response.json([]);
+      if (url.pathname === '/api/v1/organizations' || url.pathname === '/api/v1/geographic-areas') return Response.json(pageEnvelope([]));
       return new Response(null, { status: 404 });
     });
     const user = userEvent.setup();
@@ -111,15 +112,15 @@ describe('ReportsPage', () => {
       if (url.pathname === '/api/v1/overview') return Response.json({
         targets: 10, activeTargets: 8, quarantinedTargets: 2, cameras: 12, unreachableCameras: 3,
       });
-      if (url.pathname === '/api/v1/organizations') return Response.json([
+      if (url.pathname === '/api/v1/organizations') return Response.json(pageEnvelope([
         { id: 'c0a80101-0000-4000-8000-000000000001', code: 'OPS', name: 'Operations', organizationType: 'PUBLIC', description: null, status: 'ACTIVE' },
-      ]);
-      if (url.pathname === '/api/v1/organizations/c0a80101-0000-4000-8000-000000000001/units') return Response.json([
+      ]));
+      if (url.pathname === '/api/v1/organizations/c0a80101-0000-4000-8000-000000000001/units') return Response.json(pageEnvelope([
         { id: 'c0a80101-0000-4000-8000-000000000010', organizationId: 'c0a80101-0000-4000-8000-000000000001', parentUnitId: null, code: 'NORTH', name: 'North Unit', unitType: 'REGION', status: 'ACTIVE' },
-      ]);
-      if (url.pathname === '/api/v1/geographic-areas') return Response.json([
+      ]));
+      if (url.pathname === '/api/v1/geographic-areas') return Response.json(pageEnvelope([
         { id: 'c0a80101-0000-4000-8000-000000000030', parentAreaId: null, code: 'MUM', name: 'Mumbai', areaType: 'CITY', status: 'ACTIVE' },
-      ]);
+      ]));
       return new Response(null, { status: 404 });
     });
     vi.stubGlobal('fetch', fetch);
@@ -146,15 +147,15 @@ describe('ReportsPage', () => {
       if (url.pathname === '/api/v1/overview') return Response.json({
         targets: 10, activeTargets: 8, quarantinedTargets: 2, cameras: 12, unreachableCameras: 3,
       });
-      if (url.pathname === '/api/v1/organizations') return Response.json([
+      if (url.pathname === '/api/v1/organizations') return Response.json(pageEnvelope([
         { id: 'c0a80101-0000-4000-8000-000000000001', code: 'OPS', name: 'Operations', organizationType: 'PUBLIC', description: null, status: 'ACTIVE' },
-      ]);
-      if (url.pathname === '/api/v1/organizations/c0a80101-0000-4000-8000-000000000001/units') return Response.json([
+      ]));
+      if (url.pathname === '/api/v1/organizations/c0a80101-0000-4000-8000-000000000001/units') return Response.json(pageEnvelope([
         { id: 'c0a80101-0000-4000-8000-000000000010', organizationId: 'c0a80101-0000-4000-8000-000000000001', parentUnitId: null, code: 'NORTH', name: 'North Unit', unitType: 'REGION', status: 'ACTIVE' },
-      ]);
-      if (url.pathname === '/api/v1/geographic-areas') return Response.json([
+      ]));
+      if (url.pathname === '/api/v1/geographic-areas') return Response.json(pageEnvelope([
         { id: 'c0a80101-0000-4000-8000-000000000030', parentAreaId: null, code: 'MUM', name: 'Mumbai', areaType: 'CITY', status: 'ACTIVE' },
-      ]);
+      ]));
       if (url.pathname === '/api/v1/gis/coverage') return Response.json({ buckets: {} });
       return new Response(null, { status: 404 });
     });

@@ -18,8 +18,11 @@ function fetchCall(path: string, init: RequestInit = {}): [string, RequestInit] 
   return [`${apiBaseUrl()}${path}`, expect.objectContaining(init) as RequestInit];
 }
 
+// Organizations/units/areas are fetched a page at a time (see fetchAllPages in endpoints.ts), so
+// the default stub must look like a one-page PageResult, not a bare `{}` — otherwise the first
+// paginated call throws before the URL assertions below ever get a chance to run.
 beforeEach(() => {
-  vi.stubGlobal('fetch', vi.fn(async () => Response.json({})));
+  vi.stubGlobal('fetch', vi.fn(async () => Response.json({ items: [], page: 1, pageSize: 200, total: 0, totalPages: 1 })));
 });
 
 afterEach(() => {
@@ -46,7 +49,7 @@ describe('admin organization endpoints', () => {
     await api.admin.organizations.activateUnit(unitId);
     await api.admin.organizations.deactivateUnit(unitId);
 
-    expect(fetch).toHaveBeenNthCalledWith(1, ...fetchCall('/api/v1/organizations'));
+    expect(fetch).toHaveBeenNthCalledWith(1, ...fetchCall('/api/v1/organizations?page=1&pageSize=200'));
     expect(fetch).toHaveBeenNthCalledWith(2, ...fetchCall(`/api/v1/organizations/${organizationId}`));
     expect(fetch).toHaveBeenNthCalledWith(3, ...fetchCall('/api/v1/organizations', {
       method: 'POST', body: JSON.stringify(organization),
@@ -54,7 +57,7 @@ describe('admin organization endpoints', () => {
     expect(fetch).toHaveBeenNthCalledWith(4, ...fetchCall(`/api/v1/organizations/${organizationId}`, {
       method: 'PUT', body: JSON.stringify(organization),
     }));
-    expect(fetch).toHaveBeenNthCalledWith(5, ...fetchCall(`/api/v1/organizations/${organizationId}/units`));
+    expect(fetch).toHaveBeenNthCalledWith(5, ...fetchCall(`/api/v1/organizations/${organizationId}/units?page=1&pageSize=200`));
     expect(fetch).toHaveBeenNthCalledWith(6, ...fetchCall(`/api/v1/organizations/${organizationId}/units`, {
       method: 'POST', body: JSON.stringify(unit),
     }));
@@ -85,9 +88,9 @@ describe('admin geography endpoints', () => {
     await api.admin.geography.activateArea(areaId);
     await api.admin.geography.deactivateArea(areaId, deactivation);
 
-    expect(fetch).toHaveBeenNthCalledWith(1, ...fetchCall(`/api/v1/geographic-areas?rootsOnly=true&parentId=${areaId}`));
+    expect(fetch).toHaveBeenNthCalledWith(1, ...fetchCall(`/api/v1/geographic-areas?rootsOnly=true&parentId=${areaId}&page=1&pageSize=200`));
     expect(fetch).toHaveBeenNthCalledWith(2, ...fetchCall(`/api/v1/geographic-areas/${areaId}`));
-    expect(fetch).toHaveBeenNthCalledWith(3, ...fetchCall(`/api/v1/geographic-areas/${areaId}/children`));
+    expect(fetch).toHaveBeenNthCalledWith(3, ...fetchCall(`/api/v1/geographic-areas/${areaId}/children?page=1&pageSize=200`));
     expect(fetch).toHaveBeenNthCalledWith(4, ...fetchCall(`/api/v1/geographic-areas/${areaId}/ancestors`));
     expect(fetch).toHaveBeenNthCalledWith(5, ...fetchCall('/api/v1/geographic-areas/types'));
     expect(fetch).toHaveBeenNthCalledWith(6, ...fetchCall('/api/v1/geographic-areas', {

@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useMemo, useState, type ReactNode
 
 import { api } from '../api/endpoints';
 import type { ChangePasswordRequest, LoginRequest } from '../api/models';
+import { devCredentials } from '../config/env';
 import { clearSession, readSession, saveSession, subscribeToSession, type AuthSession } from './session';
 
 interface AuthContextValue {
@@ -62,8 +63,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     session,
     async login(credentials) {
       const payload: LoginRequest = {
-        username: credentials.username || (import.meta.env.VITE_USERNAME ?? ''),
-        password: credentials.password || (import.meta.env.VITE_PASSWORD ?? ''),
+        username: credentials.username || devCredentials().username,
+        password: credentials.password || devCredentials().password,
       };
       const nextSession = await api.auth.login(payload);
       saveSession(nextSession);

@@ -4,6 +4,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 
 import { api } from '../../api/endpoints';
 import { isApiProblem } from '../../api/client';
+import { queryKeys } from '../../api/queryKeys';
 import { useAuth } from '../../auth/AuthProvider';
 import { hasPermission } from '../../auth/permissions';
 import { PageState } from '../../components/ui';
@@ -61,7 +62,7 @@ export function RegistryPage() {
   }, [committedSignature, draftFilters, draftSignature, search, setSearch]);
 
   const request = { ...committedFilters, cursor: search.get('cursor') || undefined, limit: 50 };
-  const registry = useQuery({ queryKey: ['cameras', 'registry', search.toString()], queryFn: () => api.cameras.list(request) });
+  const registry = useQuery({ queryKey: queryKeys.cameras.registry(search.toString()), queryFn: () => api.cameras.list(request) });
   const filtersPending = draftSignature !== committedSignature;
 
   function setFilter(name: keyof RegistryFilters, value: string | boolean | undefined) {

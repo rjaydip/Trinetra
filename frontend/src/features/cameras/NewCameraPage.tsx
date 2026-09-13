@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 
 import { isApiProblem } from '../../api/client';
 import { api } from '../../api/endpoints';
+import { queryKeys } from '../../api/queryKeys';
 import { CameraForm, type CameraSelectorStates, type SelectorState } from './CameraForm';
 
 function referenceError(error: unknown, fallback: string): string {
@@ -15,11 +16,11 @@ export function NewCameraPage() {
   const queryClient = useQueryClient();
   const [organizationId, setOrganizationId] = useState('');
   const [coordinates, setCoordinates] = useState<{ latitude: number; longitude: number } | null>(null);
-  const organizations = useQuery({ queryKey: ['reference', 'organizations'], queryFn: api.reference.organizations });
-  const geographicAreas = useQuery({ queryKey: ['reference', 'geographic-areas'], queryFn: () => api.reference.geographicAreas() });
-  const vms = useQuery({ queryKey: ['vms'], queryFn: api.vms.list });
+  const organizations = useQuery({ queryKey: queryKeys.reference.organizations, queryFn: api.reference.organizations });
+  const geographicAreas = useQuery({ queryKey: queryKeys.reference.geographicAreas, queryFn: () => api.reference.geographicAreas() });
+  const vms = useQuery({ queryKey: queryKeys.vms.all, queryFn: api.vms.list });
   const organizationUnits = useQuery({
-    queryKey: ['reference', 'organization-units', organizationId],
+    queryKey: queryKeys.reference.organizationUnits(organizationId),
     enabled: Boolean(organizationId),
     queryFn: () => api.reference.organizationUnits(organizationId),
   });
@@ -31,7 +32,7 @@ export function NewCameraPage() {
     return `${west},${south},${west + span},${south + span}`;
   }, [coordinates]);
   const mapContext = useQuery({
-    queryKey: ['gis-cameras', 'camera-picker', mapBbox],
+    queryKey: queryKeys.gisCameras.cameraPicker(mapBbox),
     queryFn: () => api.gis.cameras({ bbox: mapBbox! }),
     enabled: mapBbox !== null,
   });
@@ -46,9 +47,9 @@ export function NewCameraPage() {
     mutationFn: api.cameras.create,
     onSuccess: async () => {
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['cameras'] }),
-        queryClient.invalidateQueries({ queryKey: ['camera'] }),
-        queryClient.invalidateQueries({ queryKey: ['gis-cameras'] }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.cameras.all }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.camera.all }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.gisCameras.all }),
       ]);
       navigate('/cameras');
     },

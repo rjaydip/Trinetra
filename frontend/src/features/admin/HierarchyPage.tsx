@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { type FormEvent, useState } from 'react';
 
-import { isApiProblem } from '../../api/client';
+import { errorDetail, isApiProblem } from '../../api/client';
 import { api } from '../../api/endpoints';
 import type {
   DeactivateRequest,
@@ -12,13 +12,10 @@ import type {
   OrganizationUnitRequest,
   OrganizationUnitResponse,
 } from '../../api/models';
+import { queryKeys } from '../../api/queryKeys';
 import { useAuth } from '../../auth/AuthProvider';
 import { hasPermission } from '../../auth/permissions';
 import { Button, PageState, StatusBadge } from '../../components/ui';
-
-function errorDetail(error: unknown, fallback: string) {
-  return isApiProblem(error) ? error.detail : fallback;
-}
 
 function value(form: FormData, name: string) {
   return String(form.get(name) ?? '').trim();
@@ -164,7 +161,7 @@ function MoveUnitControl({
   const [confirmScopeImpact, setConfirmScopeImpact] = useState(false);
 
   const targetUnits = useQuery({
-    queryKey: ['admin', 'organization-units', targetOrganizationId],
+    queryKey: queryKeys.admin.organizationUnits(targetOrganizationId),
     queryFn: () => api.admin.organizations.listUnits(targetOrganizationId),
     enabled: Boolean(targetOrganizationId),
   });
@@ -254,13 +251,13 @@ export function HierarchyPage() {
   const [editingAreaId, setEditingAreaId] = useState('');
 
   const organizations = useQuery({
-    queryKey: ['admin', 'organizations'], queryFn: api.admin.organizations.list, enabled: showOrganizationDomain,
+    queryKey: queryKeys.admin.organizations, queryFn: api.admin.organizations.list, enabled: showOrganizationDomain,
   });
   const effectiveOrganizationId = organizationId || organizations.data?.[0]?.id || '';
   const currentOrg = organizations.data?.find((o) => o.id === effectiveOrganizationId);
 
   const units = useQuery({
-    queryKey: ['admin', 'organization-units', effectiveOrganizationId],
+    queryKey: queryKeys.admin.organizationUnits(effectiveOrganizationId),
     queryFn: () => api.admin.organizations.listUnits(effectiveOrganizationId),
     enabled: showOrganizationDomain && Boolean(effectiveOrganizationId),
   });
@@ -269,28 +266,28 @@ export function HierarchyPage() {
   const currentUnit = unitList.find((u) => u.id === effectiveUnitId);
 
   const areas = useQuery({
-    queryKey: ['admin', 'geographic-areas'], queryFn: () => api.admin.geography.listAreas(), enabled: showGeographyDomain,
+    queryKey: queryKeys.admin.geographicAreas, queryFn: () => api.admin.geography.listAreas(), enabled: showGeographyDomain,
   });
   const areaList = areas.data ?? [];
   const effectiveAreaId = selectedAreaId || areaList[0]?.id || '';
   const currentArea = areaList.find((a) => a.id === effectiveAreaId);
 
   const areaTypes = useQuery({
-    queryKey: ['admin', 'geographic-area-types'], queryFn: api.admin.geography.listAreaTypes, enabled: showGeographyDomain && canManageGeography,
+    queryKey: queryKeys.admin.geographicAreaTypes, queryFn: api.admin.geography.listAreaTypes, enabled: showGeographyDomain && canManageGeography,
   });
 
   // Mutations for creation
   const createOrganization = useMutation({
     mutationFn: api.admin.organizations.create,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin', 'organizations'] }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.admin.organizations }),
   });
   const createUnit = useMutation({
     mutationFn: ({ id, body }: { id: string; body: Parameters<typeof api.admin.organizations.createUnit>[1] }) => api.admin.organizations.createUnit(id, body),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin', 'organization-units'] }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.admin.organizationUnitsAll }),
   });
   const createArea = useMutation({
     mutationFn: api.admin.geography.createArea,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin', 'geographic-areas'] }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.admin.geographicAreas }),
   });
 
   // Mutations for updates & activation
@@ -298,30 +295,30 @@ export function HierarchyPage() {
     mutationFn: ({ id, body }: { id: string; body: OrganizationRequest }) => api.admin.organizations.update(id, body),
     onSuccess: () => {
       setEditingOrg(false);
-      return queryClient.invalidateQueries({ queryKey: ['admin', 'organizations'] });
+      return queryClient.invalidateQueries({ queryKey: queryKeys.admin.organizations });
     },
   });
   const updateUnit = useMutation({
     mutationFn: ({ id, body }: { id: string; body: OrganizationUnitRequest }) => api.admin.organizations.updateUnit(id, body),
     onSuccess: () => {
       setEditingUnitId('');
-      return queryClient.invalidateQueries({ queryKey: ['admin', 'organization-units'] });
+      return queryClient.invalidateQueries({ queryKey: queryKeys.admin.organizationUnitsAll });
     },
   });
   const activateUnit = useMutation({
     mutationFn: (id: string) => api.admin.organizations.activateUnit(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin', 'organization-units'] }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.admin.organizationUnitsAll }),
   });
   const updateArea = useMutation({
     mutationFn: ({ id, body }: { id: string; body: GeographicAreaRequest }) => api.admin.geography.updateArea(id, body),
     onSuccess: () => {
       setEditingAreaId('');
-      return queryClient.invalidateQueries({ queryKey: ['admin', 'geographic-areas'] });
+      return queryClient.invalidateQueries({ queryKey: queryKeys.admin.geographicAreas });
     },
   });
   const activateArea = useMutation({
     mutationFn: (id: string) => api.admin.geography.activateArea(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin', 'geographic-areas'] }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.admin.geographicAreas }),
   });
 
   function submitOrganization(event: FormEvent<HTMLFormElement>) {
@@ -600,15 +597,21 @@ export function HierarchyPage() {
                     <li
                       key={organization.id}
                       className={organization.id === effectiveOrganizationId ? 'admin-record--active' : ''}
-                      onClick={() => {
-                        setOrganizationId(organization.id);
-                        setSelectedUnitId('');
-                        setEditingOrg(false);
-                      }}
                     >
                       <div>
                         <strong>{organization.name}</strong>
                         <span>{organization.code} · {organization.organizationType}</span>
+                        <button
+                          className="admin-action-link"
+                          type="button"
+                          onClick={() => {
+                            setOrganizationId(organization.id);
+                            setSelectedUnitId('');
+                            setEditingOrg(false);
+                          }}
+                        >
+                          Select {organization.name}
+                        </button>
                       </div>
                       <StatusBadge tone={organization.status === 'ACTIVE' ? 'success' : 'warning'}>
                         {organization.status}
@@ -711,7 +714,7 @@ export function HierarchyPage() {
                             parentLabel="New parent unit"
                             parentOptions={unitList.map(({ id, name }) => ({ id, name }))}
                             deactivate={(request) => api.admin.organizations.deactivateUnit(currentUnit.id, request)}
-                            onSuccess={() => queryClient.invalidateQueries({ queryKey: ['admin', 'organization-units'] })}
+                            onSuccess={() => queryClient.invalidateQueries({ queryKey: queryKeys.admin.organizationUnitsAll })}
                           />
                         )}
                         {currentUnit.status === 'ACTIVE' && (
@@ -720,7 +723,7 @@ export function HierarchyPage() {
                             organizations={organizations.data ?? []}
                             onSuccess={() => {
                               setSelectedUnitId('');
-                              return queryClient.invalidateQueries({ queryKey: ['admin', 'organization-units'] });
+                              return queryClient.invalidateQueries({ queryKey: queryKeys.admin.organizationUnitsAll });
                             }}
                           />
                         )}
@@ -973,7 +976,7 @@ export function HierarchyPage() {
                             parentLabel="New parent area"
                             parentOptions={areaList.map(({ id, name }) => ({ id, name }))}
                             deactivate={(request) => api.admin.geography.deactivateArea(currentArea.id, request)}
-                            onSuccess={() => queryClient.invalidateQueries({ queryKey: ['admin', 'geographic-areas'] })}
+                            onSuccess={() => queryClient.invalidateQueries({ queryKey: queryKeys.admin.geographicAreas })}
                           />
                         )}
                       </div>

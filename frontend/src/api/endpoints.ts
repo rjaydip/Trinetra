@@ -3,9 +3,11 @@ import type {
   AccessGroupResponse,
   ActivateGroupRequest,
   AddScopeRequest,
+  AiWorkerHealthResponse,
   ApiKeyCreatedResponse,
   ApiKeyResponse,
   AreaTypeResponse,
+  AssignGroupRequest,
   AuthResponse,
   BulkImportRequest,
   BulkImportResult,
@@ -27,6 +29,7 @@ import type {
   CreateApiKeyRequest,
   CreateFromFederatedRequest,
   CreateGroupRequest,
+  CreateUserRequest,
   CreateWatchlistEntryRequest,
   CredentialExistsResponse,
   CredentialRequest,
@@ -53,14 +56,19 @@ import type {
   OrganizationUnitResponse,
   OrganizationUnitRequest,
   OverviewResponse,
+  PageResult,
   PermissionResponse,
   ReconcileRequest,
   ReconcileResponse,
+  ResetPasswordRequest,
   RoleResponse,
   RoleWriteRequest,
   TargetStateRequest,
   UnreconciledPage,
   UpdateGroupRequest,
+  UpdateUserRequest,
+  UserGroupResponse,
+  UserResponse,
   VmsResponse,
   WatchlistAlertResponse,
   WatchlistEntryResponse,
@@ -79,6 +87,28 @@ function withQuery(path: string, query: object): string {
 
 function json(body: unknown): RequestInit {
   return { body: JSON.stringify(body), method: 'POST' };
+}
+
+/**
+ * Walks every page of a `page`/`pageSize`-paginated endpoint and concatenates the results.
+ *
+ * Some lists (the organization/unit/area hierarchy) are consumed as a *complete* set — to build
+ * a client-side tree, or to populate every "select a parent" dropdown — so truncating them to
+ * one page would silently hide nodes. The unpaginated form of these same endpoints already caps
+ * out at a hard limit (1000 rows) with no way to see past it; walking pages instead removes that
+ * cap while keeping the "give me everything" contract these callers actually need.
+ */
+async function fetchAllPages<T>(
+  fetchPage: (page: number, pageSize: number) => Promise<PageResult<T>>,
+  pageSize = 200,
+): Promise<T[]> {
+  const first = await fetchPage(1, pageSize);
+  const items = [...first.items];
+  for (let page = 2; page <= first.totalPages; page += 1) {
+    const next = await fetchPage(page, pageSize);
+    items.push(...next.items);
+  }
+  return items;
 }
 
 export function normalizeAuthResponse(raw: {
@@ -132,12 +162,17 @@ export const api = {
     coverage: (query: { geographicAreaId?: string; bbox?: string; organizationUnitId?: string }) => request<CoverageSummaryResponse>(withQuery('/api/v1/gis/coverage', query)),
   },
   reference: {
-    organizations: () => request<OrganizationResponse[]>('/api/v1/organizations'),
-    organizationUnits: (organizationId: string) => request<OrganizationUnitResponse[]>(`/api/v1/organizations/${organizationId}/units`),
-    geographicAreas: (query: { rootsOnly?: boolean; parentId?: string } = {}) => request<GeographicAreaResponse[]>(withQuery('/api/v1/geographic-areas', query)),
+    organizations: () => fetchAllPages((page, pageSize) =>
+      request<PageResult<OrganizationResponse>>(withQuery('/api/v1/organizations', { page, pageSize }))),
+    organizationUnits: (organizationId: string) => fetchAllPages((page, pageSize) =>
+      request<PageResult<OrganizationUnitResponse>>(withQuery(`/api/v1/organizations/${organizationId}/units`, { page, pageSize }))),
+    geographicAreas: (query: { rootsOnly?: boolean; parentId?: string } = {}) => fetchAllPages((page, pageSize) =>
+      request<PageResult<GeographicAreaResponse>>(withQuery('/api/v1/geographic-areas', { ...query, page, pageSize }))),
   },
   vms: {
     list: () => request<VmsResponse[]>('/api/v1/vms'),
+    listPage: (query: { page: number; pageSize?: number }) =>
+      request<PageResult<VmsResponse>>(withQuery('/api/v1/vms', query)),
     create: (body: ConnectorTargetRequest) => request<CreatedResponse>('/api/v1/vms', json(body)),
     get: (id: string) => request<VmsResponse>(`/api/v1/vms/${id}`),
     replace: (id: string, body: ConnectorTargetRequest) => request<void>(`/api/v1/vms/${id}`, { body: JSON.stringify(body), method: 'PUT' }),
@@ -171,11 +206,13 @@ export const api = {
   },
   admin: {
     organizations: {
-      list: () => request<OrganizationResponse[]>('/api/v1/organizations'),
+      list: () => fetchAllPages((page, pageSize) =>
+        request<PageResult<OrganizationResponse>>(withQuery('/api/v1/organizations', { page, pageSize }))),
       get: (id: string) => request<OrganizationResponse>(`/api/v1/organizations/${id}`),
       create: (body: OrganizationRequest) => request<CreatedResponse>('/api/v1/organizations', json(body)),
       update: (id: string, body: OrganizationRequest) => request<OrganizationResponse>(`/api/v1/organizations/${id}`, { body: JSON.stringify(body), method: 'PUT' }),
-      listUnits: (id: string) => request<OrganizationUnitResponse[]>(`/api/v1/organizations/${id}/units`),
+      listUnits: (id: string) => fetchAllPages((page, pageSize) =>
+        request<PageResult<OrganizationUnitResponse>>(withQuery(`/api/v1/organizations/${id}/units`, { page, pageSize }))),
       createUnit: (id: string, body: OrganizationUnitRequest) => request<CreatedResponse>(`/api/v1/organizations/${id}/units`, json(body)),
       updateUnit: (id: string, body: OrganizationUnitRequest) => request<OrganizationUnitResponse>(`/api/v1/organization-units/${id}`, { body: JSON.stringify(body), method: 'PUT' }),
       activateUnit: (id: string) => request<void>(`/api/v1/organization-units/${id}/activate`, { method: 'POST' }),
@@ -183,9 +220,11 @@ export const api = {
       moveUnit: (id: string, body: MoveUnitRequest) => request<MoveUnitResponse>(`/api/v1/organization-units/${id}/move`, json(body)),
     },
     geography: {
-      listAreas: (query: { rootsOnly?: boolean; parentId?: string } = {}) => request<GeographicAreaResponse[]>(withQuery('/api/v1/geographic-areas', query)),
+      listAreas: (query: { rootsOnly?: boolean; parentId?: string } = {}) => fetchAllPages((page, pageSize) =>
+        request<PageResult<GeographicAreaResponse>>(withQuery('/api/v1/geographic-areas', { ...query, page, pageSize }))),
       getArea: (id: string) => request<GeographicAreaResponse>(`/api/v1/geographic-areas/${id}`),
-      listAreaChildren: (id: string) => request<GeographicAreaResponse[]>(`/api/v1/geographic-areas/${id}/children`),
+      listAreaChildren: (id: string) => fetchAllPages((page, pageSize) =>
+        request<PageResult<GeographicAreaResponse>>(withQuery(`/api/v1/geographic-areas/${id}/children`, { page, pageSize }))),
       listAreaAncestors: (id: string) => request<GeographicAreaResponse[]>(`/api/v1/geographic-areas/${id}/ancestors`),
       listAreaTypes: () => request<AreaTypeResponse[]>('/api/v1/geographic-areas/types'),
       createArea: (body: GeographicAreaRequest) => request<CreatedResponse>('/api/v1/geographic-areas', json(body)),
@@ -195,8 +234,12 @@ export const api = {
     },
     groups: {
       list: () => request<AccessGroupResponse[]>('/api/v1/access-groups'),
+      listPage: (query: { page: number; pageSize?: number }) =>
+        request<PageResult<AccessGroupResponse>>(withQuery('/api/v1/access-groups', query)),
       get: (id: string) => request<AccessGroupResponse>(`/api/v1/access-groups/${id}`),
       members: (id: string) => request<GroupMemberResponse[]>(`/api/v1/access-groups/${id}/members`),
+      membersPage: (id: string, query: { page: number; pageSize?: number }) =>
+        request<PageResult<GroupMemberResponse>>(withQuery(`/api/v1/access-groups/${id}/members`, query)),
       create: (body: CreateGroupRequest) => request<CreatedResponse>('/api/v1/access-groups', json(body)),
       update: (id: string, body: UpdateGroupRequest) => request<AccessGroupResponse>(`/api/v1/access-groups/${id}`, { body: JSON.stringify(body), method: 'PUT' }),
       activate: (id: string, body?: ActivateGroupRequest) => request<void>(`/api/v1/access-groups/${id}/activate`, json(body ?? {})),
@@ -214,15 +257,40 @@ export const api = {
     },
     watchlist: {
       list: () => request<WatchlistEntryResponse[]>('/api/v1/watchlist'),
+      listPage: (query: { active?: boolean; page: number; pageSize?: number }) =>
+        request<PageResult<WatchlistEntryResponse>>(withQuery('/api/v1/watchlist', query)),
       create: (body: CreateWatchlistEntryRequest) => request<CreatedResponse>('/api/v1/watchlist', json(body)),
       deactivate: (id: string) => request<void>(`/api/v1/watchlist/${id}`, { method: 'DELETE' }),
       listAlerts: (query: { limit?: number } = {}) => request<WatchlistAlertResponse[]>(withQuery('/api/v1/watchlist/alerts', query)),
+      listAlertsPage: (query: {
+        acknowledged?: boolean; plate?: string; entryId?: string; severity?: string;
+        from?: string; to?: string; page: number; pageSize?: number;
+      }) => request<PageResult<WatchlistAlertResponse>>(withQuery('/api/v1/watchlist/alerts', query)),
       acknowledgeAlert: (id: string) => request<void>(`/api/v1/watchlist/alerts/${id}/acknowledge`, { method: 'POST' }),
     },
     apiKeys: {
       list: () => request<ApiKeyResponse[]>('/api/v1/api-keys'),
+      listPage: (query: { page: number; pageSize?: number }) =>
+        request<PageResult<ApiKeyResponse>>(withQuery('/api/v1/api-keys', query)),
       create: (body: CreateApiKeyRequest) => request<ApiKeyCreatedResponse>('/api/v1/api-keys', json(body)),
       revoke: (id: string) => request<void>(`/api/v1/api-keys/${id}`, { method: 'DELETE' }),
+    },
+    workerHealth: {
+      listPage: (query: { page: number; pageSize?: number }) =>
+        request<PageResult<AiWorkerHealthResponse>>(withQuery('/api/v1/worker-health', query)),
+      retire: (id: string) => request<void>(`/api/v1/worker-health/${id}`, { method: 'DELETE' }),
+    },
+    users: {
+      listPage: (query: { page: number; pageSize?: number }) =>
+        request<PageResult<UserResponse>>(withQuery('/api/v1/users', query)),
+      get: (id: string) => request<UserResponse>(`/api/v1/users/${id}`),
+      groups: (id: string) => request<UserGroupResponse[]>(`/api/v1/users/${id}/groups`),
+      permissions: (id: string) => request<string[]>(`/api/v1/users/${id}/permissions`),
+      create: (body: CreateUserRequest) => request<CreatedResponse>('/api/v1/users', json(body)),
+      update: (id: string, body: UpdateUserRequest) => request<void>(`/api/v1/users/${id}`, { body: JSON.stringify(body), method: 'PUT' }),
+      resetPassword: (id: string, body: ResetPasswordRequest) => request<void>(`/api/v1/users/${id}/password`, { body: JSON.stringify(body), method: 'POST' }),
+      addToGroup: (id: string, body: AssignGroupRequest) => request<void>(`/api/v1/users/${id}/groups`, json(body)),
+      removeFromGroup: (id: string, groupId: string) => request<void>(`/api/v1/users/${id}/groups/${groupId}`, { method: 'DELETE' }),
     },
   },
   overview: () => request<OverviewResponse>('/api/v1/overview'),

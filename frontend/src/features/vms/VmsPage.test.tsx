@@ -9,7 +9,7 @@ import { App } from '../../App';
 import { AuthProvider } from '../../auth/AuthProvider';
 import { saveSession } from '../../auth/session';
 import { AppShell } from '../../components/AppShell';
-import { sessionFixture } from '../../test/fixtures';
+import { geographicAreaFixture, organizationFixture, pageEnvelope, sessionFixture, vmsFixture } from '../../test/fixtures';
 import { VmsForm } from './VmsForm';
 import { VmsPage } from './VmsPage';
 
@@ -20,23 +20,10 @@ const vmsId = '44444444-4444-4444-8444-444444444444';
 const secondVmsId = '77777777-7777-4777-8777-777777777777';
 const connectionTestId = '66666666-6666-4666-8666-666666666666';
 
-const organization = { id: organizationId, code: 'OPS', name: 'Operations', organizationType: 'PUBLIC', description: null, status: 'ACTIVE' };
+const organization = organizationFixture({ id: organizationId });
 const organizationUnit = { id: organizationUnitId, organizationId, parentUnitId: null, code: 'NORTH', name: 'North Unit', unitType: 'REGION', status: 'ACTIVE' };
-const area = { id: areaId, parentAreaId: null, code: 'HQ', name: 'Headquarters', areaType: 'DISTRICT', status: 'ACTIVE' };
-const vms = {
-  id: vmsId,
-  code: 'NORTH-NVR',
-  organizationUnitId,
-  geographicAreaId: areaId,
-  displayName: 'North NVR',
-  vendor: 'DahuaCgi',
-  runtimeClass: 'Managed',
-  endpoint: 'https://nvr.example.test',
-  credentialReference: 'vms/north-nvr',
-  verifyTls: true,
-  state: 'Active',
-  expectedCameraCount: 24,
-};
+const area = geographicAreaFixture({ id: areaId });
+const vms = vmsFixture({ id: vmsId, organizationUnitId, geographicAreaId: areaId });
 
 function RouteSwitcher() {
   const navigate = useNavigate();
@@ -206,7 +193,7 @@ describe('VmsPage', () => {
   it('lists live VMS records as selectable links without exposing credential values', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const path = new URL(String(input)).pathname;
-      if (path === '/api/v1/vms') return Response.json([vms]);
+      if (path === '/api/v1/vms') return Response.json({ items: [vms], page: 1, pageSize: 20, total: 1, totalPages: 1 });
       return new Response(null, { status: 404 });
     }));
 
@@ -226,11 +213,11 @@ describe('VmsPage', () => {
         method: init?.method ?? 'GET',
         body: typeof init?.body === 'string' ? JSON.parse(init.body) as Record<string, unknown> : undefined,
       });
-      if (path === '/api/v1/organizations') return Response.json([organization]);
-      if (path === `/api/v1/organizations/${organizationId}/units`) return Response.json([organizationUnit]);
-      if (path === '/api/v1/geographic-areas') return Response.json([area]);
+      if (path === '/api/v1/organizations') return Response.json(pageEnvelope([organization]));
+      if (path === `/api/v1/organizations/${organizationId}/units`) return Response.json(pageEnvelope([organizationUnit]));
+      if (path === '/api/v1/geographic-areas') return Response.json(pageEnvelope([area]));
       if (path === '/api/v1/vms' && init?.method === 'POST') return Response.json({ id: vmsId }, { status: 201 });
-      if (path === '/api/v1/vms') return Response.json([]);
+      if (path === '/api/v1/vms') return Response.json({ items: [], page: 1, pageSize: 20, total: 0, totalPages: 0 });
       return new Response(null, { status: 404 });
     }));
     const user = userEvent.setup();

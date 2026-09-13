@@ -1,13 +1,10 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 
-import { isApiProblem } from '../../api/client';
+import { errorDetail } from '../../api/client';
 import { api } from '../../api/endpoints';
+import { queryKeys } from '../../api/queryKeys';
 import { PageState, StatusBadge } from '../../components/ui';
-
-function errorDetail(error: unknown, fallback: string) {
-  return isApiProblem(error) ? error.detail : fallback;
-}
 
 function toDateTimeLocal(date: Date): string {
   const pad = (n: number) => String(n).padStart(2, '0');
@@ -41,7 +38,7 @@ export function EventsPage() {
   const rangeValid = Boolean(fromIso && toIso && fromIso < toIso);
 
   const events = useQuery({
-    queryKey: ['events', fromIso, toIso, cameraId, eventType, objectReference, cursor],
+    queryKey: queryKeys.events(fromIso, toIso, cameraId, eventType, objectReference, cursor),
     queryFn: () => api.events.query({
       from: fromIso!, to: toIso!,
       cameraId: cameraId.trim() || undefined,

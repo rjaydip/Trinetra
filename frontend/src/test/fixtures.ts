@@ -1,4 +1,9 @@
-import type { AuthResponse, CameraResponse } from '../api/models';
+import type { AuthResponse, CameraResponse, GeographicAreaResponse, OrganizationResponse, PageResult, VmsResponse } from '../api/models';
+
+/** Wraps a fixture list as a single-page `PageResult` envelope, for mocking a paginated endpoint. */
+export function pageEnvelope<T>(items: T[]): PageResult<T> {
+  return { items, page: 1, pageSize: Math.max(items.length, 1), total: items.length, totalPages: 1 };
+}
 
 /** Test fixtures only: production always uses backend responses. */
 export function sessionFixture(subject = 'reviewer', permissions: string[] | string = []): AuthResponse {
@@ -19,5 +24,30 @@ export function cameraFixture(overrides: Partial<CameraResponse> = {}): CameraRe
     ipAddress: null, port: null, protocol: null, vmsId: null, streamReference: null, credentialReference: null,
     installationDate: null, operationalStatus: 'ACTIVE', connectivityStatus: 'ONLINE', maintenanceStatus: 'NORMAL',
     hasCoverage: false, lastSeenAt: null, lastHealthCheckAt: null, retiredAt: null, ...overrides,
+  };
+}
+
+export function organizationFixture(overrides: Partial<OrganizationResponse> = {}): OrganizationResponse {
+  return {
+    id: '11111111-1111-4111-8111-111111111111', code: 'OPS', name: 'Operations',
+    organizationType: 'PUBLIC', description: null, status: 'ACTIVE', ...overrides,
+  };
+}
+
+export function geographicAreaFixture(overrides: Partial<GeographicAreaResponse> = {}): GeographicAreaResponse {
+  return {
+    id: '33333333-3333-4333-8333-333333333333', parentAreaId: null, code: 'HQ',
+    name: 'Headquarters', areaType: 'DISTRICT', status: 'ACTIVE', ...overrides,
+  };
+}
+
+export function vmsFixture(overrides: Partial<VmsResponse> = {}): VmsResponse {
+  return {
+    id: '44444444-4444-4444-8444-444444444444', code: 'NORTH-NVR',
+    organizationUnitId: '22222222-2222-4222-8222-222222222222',
+    geographicAreaId: '33333333-3333-4333-8333-333333333333',
+    displayName: 'North NVR', vendor: 'DahuaCgi', runtimeClass: 'Managed',
+    endpoint: 'https://nvr.example.test', credentialReference: 'vms/north-nvr',
+    verifyTls: true, state: 'Active', expectedCameraCount: 24, ...overrides,
   };
 }

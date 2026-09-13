@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useMemo, useState, type FormEvent } from 'react';
 import { Link, useParams } from 'react-router-dom';
 
-import { isApiProblem } from '../../api/client';
+import { errorDetail } from '../../api/client';
 import { api } from '../../api/endpoints';
 import type {
   BulkImportResult,
@@ -12,6 +12,7 @@ import type {
   OrganizationResponse,
   OrganizationUnitResponse,
 } from '../../api/models';
+import { queryKeys } from '../../api/queryKeys';
 import { Button, PageState, StatusBadge } from '../../components/ui';
 import { LocationPicker } from '../cameras/LocationPicker';
 import { cameraTypes } from '../cameras/cameraVocabulary';
@@ -23,10 +24,6 @@ import {
   type DiscoveredCameraEnrichment,
   type DiscoveryEnrichmentErrors,
 } from './discovery';
-
-function errorDetail(error: unknown, fallback: string) {
-  return isApiProblem(error) ? error.detail : fallback;
-}
 
 function displayName(row: FederatedCameraResponse) {
   return row.name?.trim() || row.nativeCameraId;
@@ -89,7 +86,7 @@ function DiscoveryRow({
   const name = displayName(row);
   const linked = row.cameraId !== null;
   const organizationUnits = useQuery({
-    queryKey: ['reference', 'organization-units', organizationId],
+    queryKey: queryKeys.reference.organizationUnits(organizationId),
     queryFn: () => api.reference.organizationUnits(organizationId),
     enabled: Boolean(organizationId),
   });
@@ -97,7 +94,7 @@ function DiscoveryRow({
   const longitude = validCoordinate(enrichment.longitude, -180, 180);
   const mapBbox = selected && latitude !== null && longitude !== null ? boundedBbox(latitude, longitude) : null;
   const mapContext = useQuery({
-    queryKey: ['gis-cameras', 'vms-discovery-picker', row.nativeCameraId, mapBbox],
+    queryKey: queryKeys.gisCameras.vmsDiscoveryPicker(row.nativeCameraId, mapBbox),
     queryFn: () => api.gis.cameras({ bbox: mapBbox! }),
     enabled: mapBbox !== null,
   });
@@ -157,7 +154,7 @@ function DiscoveryRow({
 }
 
 function ImportResults({ result }: { result: BulkImportResult }) {
-  return <section className="import-result" aria-labelledby="discovery-import-result-title" role="region">
+  return <section className="import-result" aria-labelledby="discovery-import-result-title">
     <h2 id="discovery-import-result-title">Import results</h2>
     <p role="status">Created: {result.created}. Updated: {result.updated}. Failed: {result.failed}.</p>
     <div className="camera-table-wrap import-preview__table"><table className="camera-table"><thead><tr><th>Row</th><th>Camera code</th><th>Status</th><th>Result</th></tr></thead><tbody>{result.rows.map((row) => <tr key={`${row.index}-${row.cameraCode}`}><td>{row.index + 1}</td><td>{row.cameraCode}</td><td>{row.status}</td><td>{row.error ?? (row.cameraId ? `Camera ID: ${row.cameraId}` : 'Completed')}</td></tr>)}</tbody></table></div>
@@ -171,10 +168,10 @@ export function DiscoveryPage() {
 
 function DiscoveryWorkspace({ vmsId }: { vmsId: string }) {
   const queryClient = useQueryClient();
-  const target = useQuery({ queryKey: ['vms', vmsId], queryFn: () => api.vms.get(vmsId), enabled: Boolean(vmsId) });
-  const cameras = useQuery({ queryKey: ['vms', vmsId, 'discovered-cameras'], queryFn: () => api.vms.discoveredCameras(vmsId), enabled: Boolean(vmsId) });
-  const organizations = useQuery({ queryKey: ['reference', 'organizations'], queryFn: api.reference.organizations });
-  const geographicAreas = useQuery({ queryKey: ['reference', 'geographic-areas'], queryFn: () => api.reference.geographicAreas() });
+  const target = useQuery({ queryKey: queryKeys.vms.detail(vmsId), queryFn: () => api.vms.get(vmsId), enabled: Boolean(vmsId) });
+  const cameras = useQuery({ queryKey: queryKeys.vms.discoveredCameras(vmsId), queryFn: () => api.vms.discoveredCameras(vmsId), enabled: Boolean(vmsId) });
+  const organizations = useQuery({ queryKey: queryKeys.reference.organizations, queryFn: api.reference.organizations });
+  const geographicAreas = useQuery({ queryKey: queryKeys.reference.geographicAreas, queryFn: () => api.reference.geographicAreas() });
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [enrichments, setEnrichments] = useState<Record<string, DiscoveredCameraEnrichment>>({});
@@ -187,9 +184,9 @@ function DiscoveryWorkspace({ vmsId }: { vmsId: string }) {
     onSuccess: async (nextResult) => {
       setResult(nextResult);
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['cameras'] }),
-        queryClient.invalidateQueries({ queryKey: ['camera'] }),
-        queryClient.invalidateQueries({ queryKey: ['gis-cameras'] }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.cameras.all }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.camera.all }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.gisCameras.all }),
       ]);
     },
   });

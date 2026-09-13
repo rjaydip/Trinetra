@@ -3,9 +3,10 @@ import { useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
 import { isApiProblem } from '../../api/client';
 import { api } from '../../api/endpoints';
+import { queryKeys } from '../../api/queryKeys';
 
 export function DashboardSummary() {
-  const overview = useQuery({ queryKey: ['overview'], queryFn: api.overview });
+  const overview = useQuery({ queryKey: queryKeys.overview, queryFn: api.overview });
   return <section aria-labelledby="dashboard-fleet-heading">
     <h2 id="dashboard-fleet-heading">Fleet summary</h2>
     <p>VMS fleet totals use your authorized overview scope, separate from registry search and map viewport filters.</p>
@@ -24,7 +25,7 @@ export function DashboardSummary() {
 export function DashboardSearch() {
   const [draft, setDraft] = useState('');
   const [query, setQuery] = useState('');
-  const results = useQuery({ queryKey: ['cameras', 'dashboard-search', query], queryFn: () => api.cameras.list({ q: query, limit: 10 }), enabled: Boolean(query) });
+  const results = useQuery({ queryKey: queryKeys.cameras.dashboardSearch(query), queryFn: () => api.cameras.list({ q: query, limit: 10 }), enabled: Boolean(query) });
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const next = draft.trim();
