@@ -4,6 +4,7 @@ import { useState, type FormEvent } from 'react';
 import { isApiProblem } from '../../api/client';
 import { api } from '../../api/endpoints';
 import type { ConnectionTestResult, CredentialRequest } from '../../api/models';
+import { queryKeys } from '../../api/queryKeys';
 import { StatusBadge } from '../../components/ui';
 
 interface SafeTestDetails {
@@ -94,11 +95,11 @@ export function CredentialPanel({ vmsId, permissions }: { vmsId: string; permiss
   const [testError, setTestError] = useState('');
 
   const credentialStatus = useQuery({
-    queryKey: ['vms', vmsId, 'credential-status'],
+    queryKey: queryKeys.vms.credentialStatus(vmsId),
     queryFn: () => api.credentials.status(vmsId),
   });
   const connectionTest = useQuery({
-    queryKey: ['vms', vmsId, 'connection-test', testId],
+    queryKey: queryKeys.vms.connectionTest(vmsId, testId),
     enabled: Boolean(testStatusUrl),
     queryFn: async () => sanitizeTestResult(await api.connectionTests.get(testStatusUrl)),
     retry: false,
@@ -126,7 +127,7 @@ export function CredentialPanel({ vmsId, permissions }: { vmsId: string; permiss
       const response = await api.credentials.save(vmsId, request);
       setConfirmedExists(true);
       setUpdatedAt(response.updatedAt);
-      await queryClient.invalidateQueries({ queryKey: ['vms', vmsId, 'credential-status'] });
+      await queryClient.invalidateQueries({ queryKey: queryKeys.vms.credentialStatus(vmsId) });
     } catch (error) {
       setSaveError(messageFrom(error, 'Unable to save the credential. Please try again.'));
     } finally {

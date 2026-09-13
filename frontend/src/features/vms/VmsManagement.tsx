@@ -2,15 +2,12 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 
-import { isApiProblem } from '../../api/client';
+import { errorDetail, isApiProblem } from '../../api/client';
 import { api } from '../../api/endpoints';
 import type { ConnectorTargetRequest, VmsResponse } from '../../api/models';
+import { queryKeys } from '../../api/queryKeys';
 import { Button, StatusBadge } from '../../components/ui';
 import { runtimeClasses, vendors } from './VmsForm';
-
-function errorDetail(error: unknown, fallback: string) {
-  return isApiProblem(error) ? error.detail : fallback;
-}
 
 const targetStates = ['Active', 'Quarantined', 'Disabled'] as const;
 
@@ -142,7 +139,7 @@ export function VmsEditForm({ target, onSuccess }: {
 
 /** `GET /vms/{id}/health` — what the workers have actually observed, newest first. */
 export function VmsHealthPanel({ vmsId }: { vmsId: string }) {
-  const health = useQuery({ queryKey: ['vms', vmsId, 'health'], queryFn: () => api.vms.health(vmsId) });
+  const health = useQuery({ queryKey: queryKeys.vms.health(vmsId), queryFn: () => api.vms.health(vmsId) });
 
   if (health.isPending) return <p>Loading health history…</p>;
   if (health.isError) return <p className="form-error">{errorDetail(health.error, 'Health history could not be loaded.')}</p>;
@@ -172,7 +169,7 @@ const capabilityBits: Array<[number, string]> = [
 
 /** `GET /vms/{id}/capabilities` — served from the stored matrix, never by probing the device. */
 export function VmsCapabilitiesPanel({ vmsId }: { vmsId: string }) {
-  const capabilities = useQuery({ queryKey: ['vms', vmsId, 'capabilities'], queryFn: () => api.vms.capabilities(vmsId) });
+  const capabilities = useQuery({ queryKey: queryKeys.vms.capabilities(vmsId), queryFn: () => api.vms.capabilities(vmsId) });
 
   if (capabilities.isPending) return <p>Loading capabilities…</p>;
   if (capabilities.isError) {

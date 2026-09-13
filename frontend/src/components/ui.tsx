@@ -18,3 +18,20 @@ export function PageState({ title, children }: { title: string; children?: React
     </section>
   );
 }
+
+export function Pager({ page, pageSize, total, onPageChange }: {
+  page: number;
+  pageSize: number;
+  total: number;
+  onPageChange(page: number): void;
+}) {
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  if (totalPages <= 1) return null;
+  return (
+    <nav className="pager" aria-label="Pagination">
+      <button className="button button--secondary" type="button" disabled={page <= 1} onClick={() => onPageChange(page - 1)}>Previous</button>
+      <span className="pager__status">Page {page} of {totalPages} ({total} total)</span>
+      <button className="button button--secondary" type="button" disabled={page >= totalPages} onClick={() => onPageChange(page + 1)}>Next</button>
+    </nav>
+  );
+}

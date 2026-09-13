@@ -1,8 +1,8 @@
+import { apiBaseUrl } from '../config/env';
 import { clearSession, readSession } from '../auth/session';
 
 import type { ApiProblemShape } from './models';
 
-const DEFAULT_BASE_URL = 'http://localhost:5261';
 const SAFE_FAILURE_DETAIL = 'The service could not complete this request. Please try again.';
 
 export class ApiProblem extends Error {
@@ -21,9 +21,7 @@ export class ApiProblem extends Error {
   }
 }
 
-export function apiBaseUrl(): string {
-  return (import.meta.env.VITE_API_BASE_URL || DEFAULT_BASE_URL).replace(/\/$/, '');
-}
+export { apiBaseUrl };
 
 function withBearerToken(init: RequestInit): RequestInit {
   const headers = new Headers(init.headers);
@@ -64,6 +62,11 @@ export async function problemFrom(response: Response): Promise<ApiProblem> {
 
 export function isApiProblem(error: unknown): error is ApiProblem {
   return error instanceof ApiProblem;
+}
+
+/** The one place every page/component turns a caught error into safe, user-facing text. */
+export function errorDetail(error: unknown, fallback: string): string {
+  return isApiProblem(error) ? error.detail : fallback;
 }
 
 export async function request<T>(path: string, init: RequestInit = {}): Promise<T> {

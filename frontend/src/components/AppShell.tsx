@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
 import { useAuth } from '../auth/AuthProvider';
 import { hasPermission } from '../auth/permissions';
+import { supportedAdminReadPermissions } from '../features/admin/AdminPage';
 
 const navigation = [
   { to: '/dashboard', label: 'Dashboard' },
@@ -12,7 +13,7 @@ const navigation = [
 export function AppShell() {
   const { session, logout } = useAuth();
   const [loggingOut, setLoggingOut] = useState(false);
-  const showAdmin = ['organization.read', 'geography.read', 'group.read'].some((permission) => hasPermission(session, permission));
+  const showAdmin = supportedAdminReadPermissions.some((permission) => hasPermission(session, permission));
 
   async function handleLogout() {
     setLoggingOut(true);

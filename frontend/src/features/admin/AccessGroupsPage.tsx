@@ -1,16 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { type FormEvent, useState } from 'react';
 
-import { isApiProblem } from '../../api/client';
+import { errorDetail, isApiProblem } from '../../api/client';
 import { api } from '../../api/endpoints';
 import type { AccessGroupResponse, AddScopeRequest, CreateGroupRequest, ScopeResponse } from '../../api/models';
+import { queryKeys } from '../../api/queryKeys';
 import { useAuth } from '../../auth/AuthProvider';
 import { hasPermission } from '../../auth/permissions';
-import { Button, PageState, StatusBadge } from '../../components/ui';
-
-function errorDetail(error: unknown, fallback: string) {
-  return isApiProblem(error) ? error.detail : fallback;
-}
+import { Button, Pager, PageState, StatusBadge } from '../../components/ui';
 
 function field(form: FormData, name: string) {
   return String(form.get(name) ?? '').trim();
@@ -59,7 +56,7 @@ function ScopeForm({ groupId, areas, organizations, onAdded }: {
   const [scopeType, setScopeType] = useState<'ORGANIZATION' | 'GEOGRAPHY' | 'RESOURCE'>('ORGANIZATION');
   const [organizationId, setOrganizationId] = useState('');
   const units = useQuery({
-    queryKey: ['admin', 'scope-organization-units', organizationId],
+    queryKey: queryKeys.admin.scopeOrganizationUnits(organizationId),
     queryFn: () => api.admin.organizations.listUnits(organizationId),
     enabled: scopeType === 'ORGANIZATION' && Boolean(organizationId),
   });
@@ -163,19 +160,31 @@ export function AccessGroupsPage() {
   const [editing, setEditing] = useState(false);
   const [confirmUnscoped, setConfirmUnscoped] = useState(false);
   const [activationConflict, setActivationConflict] = useState('');
+  const [page, setPage] = useState(1);
+  const pageSize = 20;
 
-  const groups = useQuery({ queryKey: ['admin', 'access-groups'], queryFn: api.admin.groups.list });
-  const detail = useQuery({ queryKey: ['admin', 'access-groups', selectedId], queryFn: () => api.admin.groups.get(selectedId), enabled: Boolean(selectedId) });
-  const members = useQuery({ queryKey: ['admin', 'access-groups', selectedId, 'members'], queryFn: () => api.admin.groups.members(selectedId), enabled: Boolean(selectedId) });
-  const roles = useQuery({ queryKey: ['admin', 'roles'], queryFn: () => api.admin.roles.list(), enabled: canManage });
-  const organizations = useQuery({ queryKey: ['admin', 'scope-organizations'], queryFn: api.admin.organizations.list, enabled: canManage });
-  const areas = useQuery({ queryKey: ['admin', 'scope-areas'], queryFn: () => api.admin.geography.listAreas(), enabled: canManage });
+  const groups = useQuery({
+    queryKey: queryKeys.admin.accessGroupsPage(page, pageSize),
+    queryFn: () => api.admin.groups.listPage({ page, pageSize }),
+  });
+  const detail = useQuery({ queryKey: queryKeys.admin.accessGroup(selectedId), queryFn: () => api.admin.groups.get(selectedId), enabled: Boolean(selectedId) });
+  const [membersPage, setMembersPage] = useState(1);
+  const membersPageSize = 20;
+  const members = useQuery({
+    queryKey: queryKeys.admin.accessGroupMembersPage(selectedId, membersPage, membersPageSize),
+    queryFn: () => api.admin.groups.membersPage(selectedId, { page: membersPage, pageSize: membersPageSize }),
+    enabled: Boolean(selectedId),
+  });
+  const roles = useQuery({ queryKey: queryKeys.admin.roles(), queryFn: () => api.admin.roles.list(), enabled: canManage });
+  const organizations = useQuery({ queryKey: queryKeys.admin.scopeOrganizations, queryFn: api.admin.organizations.list, enabled: canManage });
+  const areas = useQuery({ queryKey: queryKeys.admin.scopeAreas, queryFn: () => api.admin.geography.listAreas(), enabled: canManage });
 
   const create = useMutation({
     mutationFn: api.admin.groups.create,
     onSuccess: (created) => {
       setSelectedId(created.id);
-      return queryClient.invalidateQueries({ queryKey: ['admin', 'access-groups'] });
+      setMembersPage(1);
+      return queryClient.invalidateQueries({ queryKey: queryKeys.admin.accessGroups });
     },
   });
 
@@ -218,8 +227,8 @@ export function AccessGroupsPage() {
 
   async function refreshSelected() {
     await Promise.all([
-      queryClient.invalidateQueries({ queryKey: ['admin', 'access-groups'] }),
-      queryClient.invalidateQueries({ queryKey: ['admin', 'access-groups', selectedId] }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.admin.accessGroups }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.admin.accessGroup(selectedId) }),
     ]);
   }
 
@@ -229,8 +238,11 @@ export function AccessGroupsPage() {
       <section className="admin-panel" aria-labelledby="group-list-title"><h3 id="group-list-title">Groups</h3>
         {groups.isPending ? <PageState title="Loading access groups">Retrieving authorized groups…</PageState>
           : groups.isError ? <PageState title="Couldn’t load access groups">{errorDetail(groups.error, 'Access groups could not be loaded.')}</PageState>
-            : groups.data.length === 0 ? <p className="admin-empty">No access groups are available.</p>
-              : <ul className="admin-record-list">{groups.data.map((group) => <li key={group.id} className={group.id === selectedId ? 'admin-record--active' : ''}><div><strong>{group.name}</strong><span>{group.code} · {group.roleCode}</span><button className="admin-action-link" type="button" onClick={() => { setSelectedId(group.id); setEditing(false); }}>View {group.name}</button></div><StatusBadge tone={group.status === 'ACTIVE' ? 'success' : 'warning'}>{group.status}</StatusBadge></li>)}</ul>}
+            : groups.data.items.length === 0 ? <p className="admin-empty">No access groups are available.</p>
+              : <>
+                <ul className="admin-record-list">{groups.data.items.map((group) => <li key={group.id} className={group.id === selectedId ? 'admin-record--active' : ''}><div><strong>{group.name}</strong><span>{group.code} · {group.roleCode}</span><button className="admin-action-link" type="button" onClick={() => { setSelectedId(group.id); setEditing(false); setMembersPage(1); }}>View {group.name}</button></div><StatusBadge tone={group.status === 'ACTIVE' ? 'success' : 'warning'}>{group.status}</StatusBadge></li>)}</ul>
+                <Pager page={groups.data.page} pageSize={groups.data.pageSize} total={groups.data.total} onPageChange={setPage} />
+              </>}
       </section>
       {canManage && <CreateGroupForm error={create.error} onCreate={(request) => create.mutate(request)} pending={create.isPending} roles={roles.data ?? []} />}
     </div>
@@ -328,15 +340,18 @@ export function AccessGroupsPage() {
                   <p>Loading members…</p>
                 ) : members.isError ? (
                   <p className="form-error">{errorDetail(members.error, 'Members could not be loaded.')}</p>
-                ) : members.data?.length ? (
-                  <ul className="plain-list">
-                    {members.data.map((member) => (
-                      <li key={member.userId}>
-                        <strong>{member.username}</strong>
-                        {member.expiresAt ? <span>Expires {new Date(member.expiresAt).toLocaleDateString()}</span> : <span>No expiry</span>}
-                      </li>
-                    ))}
-                  </ul>
+                ) : members.data?.items.length ? (
+                  <>
+                    <ul className="plain-list">
+                      {members.data.items.map((member) => (
+                        <li key={member.userId}>
+                          <strong>{member.username}</strong>
+                          {member.expiresAt ? <span>Expires {new Date(member.expiresAt).toLocaleDateString()}</span> : <span>No expiry</span>}
+                        </li>
+                      ))}
+                    </ul>
+                    <Pager page={members.data.page} pageSize={members.data.pageSize} total={members.data.total} onPageChange={setMembersPage} />
+                  </>
                 ) : (
                   <p className="admin-empty">This group has no members.</p>
                 )}

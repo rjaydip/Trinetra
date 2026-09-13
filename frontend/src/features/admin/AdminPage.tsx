@@ -5,7 +5,9 @@ import { useAuth } from '../../auth/AuthProvider';
 import { hasPermission } from '../../auth/permissions';
 import { PageState } from '../../components/ui';
 
-export const supportedAdminReadPermissions = ['organization.read', 'geography.read', 'group.read'] as const;
+export const supportedAdminReadPermissions = [
+  'organization.read', 'geography.read', 'group.read', 'user.read', 'apikey.read', 'worker.read', 'alert.read',
+] as const;
 
 export function RequireAnyAdminPermission({ permissions, children }: { permissions: readonly string[]; children: ReactNode }) {
   const { session } = useAuth();
@@ -36,6 +38,30 @@ const adminDestinations = [
     label: 'Access groups',
     description: 'Review role grants, members, and access scopes.',
     permissions: ['group.read'],
+  },
+  {
+    to: '/admin/users',
+    label: 'Users',
+    description: 'Accounts, group membership, and effective permissions.',
+    permissions: ['user.read'],
+  },
+  {
+    to: '/admin/api-keys',
+    label: 'API keys',
+    description: 'Provision and revoke machine-to-machine access keys.',
+    permissions: ['apikey.read'],
+  },
+  {
+    to: '/admin/worker-health',
+    label: 'Worker health',
+    description: 'Liveness of the AI-worker fleet.',
+    permissions: ['worker.read'],
+  },
+  {
+    to: '/admin/watchlist',
+    label: 'Watchlist',
+    description: 'Flagged plates and the alerts they raise.',
+    permissions: ['alert.read'],
   },
 ];
 

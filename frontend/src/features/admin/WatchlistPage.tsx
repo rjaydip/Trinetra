@@ -1,0 +1,121 @@
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { type FormEvent, useState } from 'react';
+
+import { errorDetail } from '../../api/client';
+import { api } from '../../api/endpoints';
+import type { CreateWatchlistEntryRequest } from '../../api/models';
+import { queryKeys } from '../../api/queryKeys';
+import { useAuth } from '../../auth/AuthProvider';
+import { hasPermission } from '../../auth/permissions';
+import { Button, Pager, PageState, StatusBadge } from '../../components/ui';
+
+function field(form: FormData, name: string) {
+  return String(form.get(name) ?? '').trim();
+}
+
+function EntriesSection({ canManage }: { canManage: boolean }) {
+  const queryClient = useQueryClient();
+  const [page, setPage] = useState(1);
+  const pageSize = 20;
+
+  const entries = useQuery({
+    queryKey: queryKeys.watchlist.entriesPage(true, page, pageSize),
+    queryFn: () => api.admin.watchlist.listPage({ active: true, page, pageSize }),
+  });
+
+  const create = useMutation({
+    mutationFn: (body: CreateWatchlistEntryRequest) => api.admin.watchlist.create(body),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.watchlist.allEntries }),
+  });
+
+  const deactivate = useMutation({
+    mutationFn: (id: string) => api.admin.watchlist.deactivate(id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.watchlist.allEntries }),
+  });
+
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    const reason = field(data, 'reason');
+    create.mutate({
+      organizationUnitId: field(data, 'organizationUnitId'),
+      plateNumber: field(data, 'plateNumber'),
+      severity: field(data, 'severity'),
+      ...(reason ? { reason } : {}),
+    });
+    form.reset();
+  }
+
+  return <section aria-labelledby="watchlist-entries-title">
+    <h3 id="watchlist-entries-title">Watchlist entries</h3>
+    {entries.isPending ? <PageState title="Loading watchlist entries">Retrieving active entries…</PageState>
+      : entries.isError ? <><PageState title="Couldn&apos;t load watchlist entries">{errorDetail(entries.error, 'Watchlist entries could not be loaded.')}</PageState><button className="button" type="button" onClick={() => entries.refetch()}>Try again</button></>
+        : entries.data.items.length === 0 ? <p className="admin-empty">No active watchlist entries.</p>
+          : <>
+            <ul className="admin-record-list">{entries.data.items.map((entry) => <li key={entry.id}>
+              <div><strong>{entry.plateNumberNormalized}</strong><span>{entry.reason ?? 'No reason recorded'}</span></div>
+              <StatusBadge tone={entry.severity === 'Critical' || entry.severity === 'High' ? 'danger' : 'warning'}>{entry.severity}</StatusBadge>
+              {canManage && <button className="admin-action-link" type="button" disabled={deactivate.isPending} onClick={() => deactivate.mutate(entry.id)}>Remove</button>}
+            </li>)}</ul>
+            <Pager page={entries.data.page} pageSize={entries.data.pageSize} total={entries.data.total} onPageChange={setPage} />
+          </>}
+    {canManage && <form aria-label="Add watchlist entry" className="admin-form" onSubmit={submit}>
+      <h4>Add a plate to the watchlist</h4>
+      <label>Organization unit ID<input name="organizationUnitId" required /></label>
+      <label>Plate number<input name="plateNumber" required /></label>
+      <label>Severity<select name="severity" required defaultValue="Medium">
+        <option value="Low">Low</option>
+        <option value="Medium">Medium</option>
+        <option value="High">High</option>
+        <option value="Critical">Critical</option>
+      </select></label>
+      <label>Reason<textarea name="reason" /></label>
+      {create.isError && <p className="form-error" role="alert">{errorDetail(create.error, 'The watchlist entry could not be created.')}</p>}
+      <Button disabled={create.isPending} type="submit">Add entry</Button>
+    </form>}
+  </section>;
+}
+
+function AlertsSection({ canAcknowledge }: { canAcknowledge: boolean }) {
+  const queryClient = useQueryClient();
+  const [page, setPage] = useState(1);
+  const pageSize = 20;
+
+  const alerts = useQuery({
+    queryKey: queryKeys.watchlist.alertsPage(false, page, pageSize),
+    queryFn: () => api.admin.watchlist.listAlertsPage({ acknowledged: false, page, pageSize }),
+  });
+
+  const acknowledge = useMutation({
+    mutationFn: (id: string) => api.admin.watchlist.acknowledgeAlert(id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.watchlist.allAlerts }),
+  });
+
+  return <section aria-labelledby="watchlist-alerts-title">
+    <h3 id="watchlist-alerts-title">Unacknowledged alerts</h3>
+    {alerts.isPending ? <PageState title="Loading alerts">Retrieving raised alerts…</PageState>
+      : alerts.isError ? <><PageState title="Couldn&apos;t load alerts">{errorDetail(alerts.error, 'Watchlist alerts could not be loaded.')}</PageState><button className="button" type="button" onClick={() => alerts.refetch()}>Try again</button></>
+        : alerts.data.items.length === 0 ? <p className="admin-empty">No unacknowledged alerts.</p>
+          : <>
+            <ul className="admin-record-list">{alerts.data.items.map((alert) => <li key={alert.id}>
+              <div><strong>{alert.plateNumberNormalized}</strong><span>Raised {new Date(alert.raisedAt).toLocaleString()}</span><span>{alert.reason ?? 'No reason recorded'}</span></div>
+              <StatusBadge tone={alert.severity === 'Critical' || alert.severity === 'High' ? 'danger' : 'warning'}>{alert.severity}</StatusBadge>
+              {canAcknowledge && <button className="admin-action-link" type="button" disabled={acknowledge.isPending} onClick={() => acknowledge.mutate(alert.id)}>Acknowledge</button>}
+            </li>)}</ul>
+            <Pager page={alerts.data.page} pageSize={alerts.data.pageSize} total={alerts.data.total} onPageChange={setPage} />
+          </>}
+  </section>;
+}
+
+export function WatchlistPage() {
+  const { session } = useAuth();
+  const canManage = hasPermission(session, 'watchlist.manage');
+  const canAcknowledge = hasPermission(session, 'alert.acknowledge');
+
+  return <section className="admin-workspace watchlist-page" aria-labelledby="watchlist-title">
+    <header><div><p className="eyebrow">Plate alerts</p><h2 id="watchlist-title">Watchlist</h2></div><p>Flagged plates and the alerts raised when a fresh detection matches one.</p></header>
+    <EntriesSection canManage={canManage} />
+    <AlertsSection canAcknowledge={canAcknowledge} />
+  </section>;
+}

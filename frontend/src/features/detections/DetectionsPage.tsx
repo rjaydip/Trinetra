@@ -1,13 +1,10 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 
-import { isApiProblem } from '../../api/client';
+import { errorDetail } from '../../api/client';
 import { api } from '../../api/endpoints';
+import { queryKeys } from '../../api/queryKeys';
 import { PageState } from '../../components/ui';
-
-function errorDetail(error: unknown, fallback: string) {
-  return isApiProblem(error) ? error.detail : fallback;
-}
 
 function isoOrUndefined(value: string): string | undefined {
   if (!value) return undefined;
@@ -25,9 +22,9 @@ export function DetectionsPage() {
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
 
-  const targets = useQuery({ queryKey: ['vms'], queryFn: api.vms.list });
+  const targets = useQuery({ queryKey: queryKeys.vms.all, queryFn: api.vms.list });
   const detections = useQuery({
-    queryKey: ['detections', plateNumber, targetId, from, to],
+    queryKey: queryKeys.detections(plateNumber, targetId, from, to),
     queryFn: () => api.detections.search({
       plateNumber: plateNumber.trim() || undefined,
       targetId: targetId || undefined,

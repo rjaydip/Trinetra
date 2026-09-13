@@ -10,8 +10,12 @@ import { RequirePermission } from './auth/RequirePermission';
 import { AppShell } from './components/AppShell';
 import { AccessGroupsPage } from './features/admin/AccessGroupsPage';
 import { AdminPage, RequireAnyAdminPermission, supportedAdminReadPermissions } from './features/admin/AdminPage';
+import { ApiKeysPage } from './features/admin/ApiKeysPage';
 import { HierarchyPage } from './features/admin/HierarchyPage';
 import { RolesPage } from './features/admin/RolesPage';
+import { UsersPage } from './features/admin/UsersPage';
+import { WatchlistPage } from './features/admin/WatchlistPage';
+import { WorkerHealthPage } from './features/admin/WorkerHealthPage';
 import { CameraDetailPage } from './features/cameras/CameraDetailPage';
 import { BulkImportPage } from './features/cameras/BulkImportPage';
 import { NewCameraPage } from './features/cameras/NewCameraPage';
@@ -63,6 +67,10 @@ function SessionApplication() {
             <Route path="hierarchy" element={<RequireAnyAdminPermission permissions={['organization.read', 'geography.read']}><HierarchyPage /></RequireAnyAdminPermission>} />
             <Route path="roles" element={<RequirePermission permission="group.read"><RolesPage /></RequirePermission>} />
             <Route path="access-groups" element={<RequirePermission permission="group.read"><AccessGroupsPage /></RequirePermission>} />
+            <Route path="users" element={<RequirePermission permission="user.read"><UsersPage /></RequirePermission>} />
+            <Route path="api-keys" element={<RequirePermission permission="apikey.read"><ApiKeysPage /></RequirePermission>} />
+            <Route path="worker-health" element={<RequirePermission permission="worker.read"><WorkerHealthPage /></RequirePermission>} />
+            <Route path="watchlist" element={<RequirePermission permission="alert.read"><WatchlistPage /></RequirePermission>} />
           </Route>
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Route>

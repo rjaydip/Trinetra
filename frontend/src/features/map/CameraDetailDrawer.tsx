@@ -3,13 +3,14 @@ import { useEffect, useRef, type KeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
 
 import { api } from '../../api/endpoints';
+import { queryKeys } from '../../api/queryKeys';
 import { CameraDetailSections } from '../cameras/CameraDetailSections';
 
 export function CameraDetailDrawer({ cameraId, onClose }: { cameraId: string | null; onClose(): void }) {
   const drawer = useRef<HTMLElement>(null);
   const closeButton = useRef<HTMLButtonElement>(null);
   const previousFocus = useRef<HTMLElement | null>(null);
-  const camera = useQuery({ queryKey: ['camera', cameraId], queryFn: () => api.cameras.get(cameraId!), enabled: cameraId !== null });
+  const camera = useQuery({ queryKey: queryKeys.camera.detail(cameraId!), queryFn: () => api.cameras.get(cameraId!), enabled: cameraId !== null });
 
   useEffect(() => {
     if (!cameraId) return undefined;
@@ -51,7 +52,18 @@ export function CameraDetailDrawer({ cameraId, onClose }: { cameraId: string | n
   }
 
   return createPortal(
-    <aside aria-label="Camera details" aria-modal="true" className="camera-drawer" onKeyDown={onKeyDown} ref={drawer} role="dialog">
+    // The onKeyDown below implements the dialog's own focus trap (Tab/Shift+Tab wrapping), the
+    // standard accessible-modal pattern; jsx-a11y doesn't treat role="dialog" as "interactive"
+    // itself, hence the disable.
+    // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions
+    <aside
+      aria-label="Camera details"
+      aria-modal="true"
+      className="camera-drawer"
+      onKeyDown={onKeyDown}
+      ref={drawer}
+      role="dialog"
+    >
       <div className="camera-drawer__header">
         <h2 tabIndex={-1}>{camera.data?.name ?? 'Camera details'}</h2>
         <button className="button" ref={closeButton} type="button" onClick={onClose}>Close details</button>

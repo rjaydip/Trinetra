@@ -1,16 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { type FormEvent, useState } from 'react';
 
-import { isApiProblem } from '../../api/client';
+import { errorDetail } from '../../api/client';
 import { api } from '../../api/endpoints';
 import type { PermissionResponse, RoleResponse, RoleWriteRequest } from '../../api/models';
+import { queryKeys } from '../../api/queryKeys';
 import { useAuth } from '../../auth/AuthProvider';
 import { hasPermission } from '../../auth/permissions';
 import { Button, PageState, StatusBadge } from '../../components/ui';
-
-function errorDetail(error: unknown, fallback: string) {
-  return isApiProblem(error) ? error.detail : fallback;
-}
 
 function field(form: FormData, name: string) {
   return String(form.get(name) ?? '').trim();
@@ -93,8 +90,9 @@ function PermissionSelector({
               </legend>
               <div className="permission-checkbox-grid">
                 {perms.map((perm) => (
-                  <label key={perm.code} className="permission-checkbox-label">
+                  <label key={perm.code} className="permission-checkbox-label" htmlFor={`permission-${perm.code}`}>
                     <input
+                      id={`permission-${perm.code}`}
                       type="checkbox"
                       checked={selectedPermissions.has(perm.code)}
                       onChange={() => togglePermission(perm.code)}
@@ -127,19 +125,19 @@ export function RolesPage() {
   const [searchQuery, setSearchQuery] = useState('');
 
   const roles = useQuery({
-    queryKey: ['admin', 'roles', { includeInactive }],
+    queryKey: queryKeys.admin.roles(includeInactive),
     queryFn: () => api.admin.roles.list(includeInactive),
   });
 
   const permissions = useQuery({
-    queryKey: ['admin', 'permissions'],
+    queryKey: queryKeys.admin.permissions,
     queryFn: api.admin.roles.permissions,
   });
 
   const effectiveRoleId = selectedRoleId || roles.data?.[0]?.id || '';
 
   const roleDetail = useQuery({
-    queryKey: ['admin', 'roles', effectiveRoleId],
+    queryKey: queryKeys.admin.role(effectiveRoleId),
     queryFn: () => api.admin.roles.get(effectiveRoleId),
     enabled: Boolean(effectiveRoleId),
   });
@@ -153,8 +151,8 @@ export function RolesPage() {
       setSelectedRoleId(created.id);
       setSelectedPermissions(new Set());
       return Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['admin', 'roles'] }),
-        queryClient.invalidateQueries({ queryKey: ['admin', 'roles', created.id] }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.admin.roles() }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.admin.role(created.id) }),
       ]);
     },
   });
@@ -164,8 +162,8 @@ export function RolesPage() {
     onSuccess: (_, { id }) => {
       setEditingRoleId('');
       return Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['admin', 'roles'] }),
-        queryClient.invalidateQueries({ queryKey: ['admin', 'roles', id] }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.admin.roles() }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.admin.role(id) }),
       ]);
     },
   });
@@ -173,8 +171,8 @@ export function RolesPage() {
   const deleteRole = useMutation({
     mutationFn: (id: string) => api.admin.roles.delete(id),
     onSuccess: (_, id) => Promise.all([
-      queryClient.invalidateQueries({ queryKey: ['admin', 'roles'] }),
-      queryClient.invalidateQueries({ queryKey: ['admin', 'roles', id] }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.admin.roles() }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.admin.role(id) }),
     ]),
   });
 

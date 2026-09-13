@@ -52,7 +52,7 @@ describe('admin navigation', () => {
     expect(screen.queryByRole('link', { name: /^admin$/i })).not.toBeInTheDocument();
   });
 
-  it.each(['organization.read', 'geography.read', 'group.read'])('shows Admin to a user with %s', (permission) => {
+  it.each(['organization.read', 'geography.read', 'group.read', 'user.read', 'apikey.read', 'worker.read', 'alert.read'])('shows Admin to a user with %s', (permission) => {
     renderShell([permission]);
 
     expect(screen.getByRole('link', { name: /^admin$/i })).toHaveAttribute('href', '/admin');
@@ -81,6 +81,38 @@ describe('admin route guards', () => {
 
     expect(await screen.findByRole('heading', { name: /action unavailable/i })).toBeVisible();
     expect(screen.queryByRole('heading', { name: /^access groups$/i })).not.toBeInTheDocument();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('guards users with user.read', async () => {
+    renderApp('/admin/users', ['geography.read']);
+
+    expect(await screen.findByRole('heading', { name: /action unavailable/i })).toBeVisible();
+    expect(screen.queryByRole('heading', { name: /^users$/i })).not.toBeInTheDocument();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('guards API keys with apikey.read', async () => {
+    renderApp('/admin/api-keys', ['geography.read']);
+
+    expect(await screen.findByRole('heading', { name: /action unavailable/i })).toBeVisible();
+    expect(screen.queryByRole('heading', { name: /^api keys$/i })).not.toBeInTheDocument();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('guards worker health with worker.read', async () => {
+    renderApp('/admin/worker-health', ['geography.read']);
+
+    expect(await screen.findByRole('heading', { name: /action unavailable/i })).toBeVisible();
+    expect(screen.queryByRole('heading', { name: /ai worker health/i })).not.toBeInTheDocument();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('guards watchlist with alert.read', async () => {
+    renderApp('/admin/watchlist', ['geography.read']);
+
+    expect(await screen.findByRole('heading', { name: /action unavailable/i })).toBeVisible();
+    expect(screen.queryByRole('heading', { name: /^watchlist$/i })).not.toBeInTheDocument();
     expect(fetch).not.toHaveBeenCalled();
   });
 });

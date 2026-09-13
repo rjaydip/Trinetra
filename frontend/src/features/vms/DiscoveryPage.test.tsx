@@ -9,7 +9,7 @@ import { App } from '../../App';
 import type { FederatedCameraResponse } from '../../api/models';
 import { AuthProvider } from '../../auth/AuthProvider';
 import { saveSession } from '../../auth/session';
-import { sessionFixture } from '../../test/fixtures';
+import { geographicAreaFixture, organizationFixture, pageEnvelope, sessionFixture, vmsFixture } from '../../test/fixtures';
 import { DiscoveryPage } from './DiscoveryPage';
 
 const organizationId = '11111111-1111-4111-8111-111111111111';
@@ -18,23 +18,10 @@ const areaId = '33333333-3333-4333-8333-333333333333';
 const vmsId = '44444444-4444-4444-8444-444444444444';
 const secondVmsId = '77777777-7777-4777-8777-777777777777';
 
-const organization = { id: organizationId, code: 'OPS', name: 'Operations', organizationType: 'PUBLIC', description: null, status: 'ACTIVE' };
+const organization = organizationFixture({ id: organizationId });
 const organizationUnit = { id: organizationUnitId, organizationId, parentUnitId: null, code: 'NORTH', name: 'North Unit', unitType: 'REGION', status: 'ACTIVE' };
-const area = { id: areaId, parentAreaId: null, code: 'HQ', name: 'Headquarters', areaType: 'DISTRICT', status: 'ACTIVE' };
-const vms = {
-  id: vmsId,
-  code: 'NVR-001',
-  organizationUnitId,
-  geographicAreaId: areaId,
-  displayName: 'North NVR',
-  vendor: 'DahuaCgi',
-  runtimeClass: 'Managed',
-  endpoint: 'https://nvr.example.test',
-  credentialReference: 'vms/north-nvr',
-  verifyTls: true,
-  state: 'Active',
-  expectedCameraCount: 24,
-};
+const area = geographicAreaFixture({ id: areaId });
+const vms = vmsFixture({ id: vmsId, code: 'NVR-001', organizationUnitId, geographicAreaId: areaId });
 const cameras: FederatedCameraResponse[] = [{
   nativeCameraId: 'CAM-07', cameraId: null, name: 'Gate 7', vendorModel: 'IPC-HFW1230S', firmware: '2.8',
   isEnabled: true, isRecording: true, health: 'ONLINE', lastSeen: '2026-09-04T10:00:00Z',
@@ -62,9 +49,9 @@ function apiHandler(requests: Array<{ path: string; method: string; body?: unkno
     requests.push({ path: `${url.pathname}${url.search}`, method, body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined });
     if (url.pathname === `/api/v1/vms/${vmsId}`) return Response.json(target);
     if (url.pathname === `/api/v1/vms/${vmsId}/cameras`) return Response.json(discoveredCameras);
-    if (url.pathname === '/api/v1/organizations') return Response.json([organization]);
-    if (url.pathname === `/api/v1/organizations/${organizationId}/units`) return Response.json([organizationUnit]);
-    if (url.pathname === '/api/v1/geographic-areas') return Response.json([area]);
+    if (url.pathname === '/api/v1/organizations') return Response.json(pageEnvelope([organization]));
+    if (url.pathname === `/api/v1/organizations/${organizationId}/units`) return Response.json(pageEnvelope([organizationUnit]));
+    if (url.pathname === '/api/v1/geographic-areas') return Response.json(pageEnvelope([area]));
     if (url.pathname === '/api/v1/gis/cameras') return Response.json({ type: 'FeatureCollection', features: [] });
     if (url.pathname === '/api/v1/cameras/bulk-import' && method === 'POST') return Response.json(result, { status: bulkStatus });
     return new Response(null, { status: 404 });
@@ -288,8 +275,8 @@ describe('DiscoveryPage', () => {
       if (path === `/api/v1/vms/${vmsId}`) return Response.json(vms);
       if (path === `/api/v1/vms/${secondVmsId}`) return Response.json(secondVms);
       if (path === `/api/v1/vms/${vmsId}/cameras` || path === `/api/v1/vms/${secondVmsId}/cameras`) return Response.json(cameras);
-      if (path === '/api/v1/organizations') return Response.json([organization]);
-      if (path === '/api/v1/geographic-areas') return Response.json([area]);
+      if (path === '/api/v1/organizations') return Response.json(pageEnvelope([organization]));
+      if (path === '/api/v1/geographic-areas') return Response.json(pageEnvelope([area]));
       return new Response(null, { status: 404 });
     }));
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });

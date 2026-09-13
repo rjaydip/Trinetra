@@ -3,6 +3,7 @@ import { useState, type FormEvent } from 'react';
 
 import { isApiProblem } from '../../api/client';
 import { api } from '../../api/endpoints';
+import { queryKeys } from '../../api/queryKeys';
 import { PageState, StatusBadge } from '../../components/ui';
 import { CoverageSummary } from './CoverageSummary';
 
@@ -16,16 +17,16 @@ export function ReportsPage() {
   const [geographicAreaId, setGeographicAreaId] = useState('');
   const [submittedScope, setSubmittedScope] = useState<{ organizationUnitId?: string; geographicAreaId?: string } | null>(null);
   const [scopeError, setScopeError] = useState<string | null>(null);
-  const overview = useQuery({ queryKey: ['overview'], queryFn: api.overview });
-  const organizations = useQuery({ queryKey: ['reference', 'organizations'], queryFn: api.reference.organizations });
+  const overview = useQuery({ queryKey: queryKeys.overview, queryFn: api.overview });
+  const organizations = useQuery({ queryKey: queryKeys.reference.organizations, queryFn: api.reference.organizations });
   const organizationUnits = useQuery({
-    queryKey: ['reference', 'organization-units', organizationId],
+    queryKey: queryKeys.reference.organizationUnits(organizationId),
     queryFn: () => api.reference.organizationUnits(organizationId),
     enabled: Boolean(organizationId),
   });
-  const geographicAreas = useQuery({ queryKey: ['reference', 'geographic-areas'], queryFn: () => api.reference.geographicAreas() });
+  const geographicAreas = useQuery({ queryKey: queryKeys.reference.geographicAreas, queryFn: () => api.reference.geographicAreas() });
   const coverage = useQuery({
-    queryKey: ['coverage-summary', submittedScope],
+    queryKey: queryKeys.coverageSummary(submittedScope),
     queryFn: () => api.gis.coverage(submittedScope!),
     enabled: submittedScope !== null,
   });

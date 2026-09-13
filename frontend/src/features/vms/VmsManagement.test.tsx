@@ -5,25 +5,12 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { VmsResponse } from '../../api/models';
+import { vmsFixture } from '../../test/fixtures';
 import { VmsCapabilitiesPanel, VmsDeleteControl, VmsEditForm, VmsHealthPanel, VmsStateControl } from './VmsManagement';
 
 const vmsId = '44444444-4444-4444-8444-444444444444';
 
-const target: VmsResponse = {
-  id: vmsId,
-  code: 'NORTH-NVR',
-  organizationUnitId: '22222222-2222-4222-8222-222222222222',
-  geographicAreaId: '33333333-3333-4333-8333-333333333333',
-  displayName: 'North NVR',
-  vendor: 'DahuaCgi',
-  runtimeClass: 'Managed',
-  endpoint: 'https://nvr.example.test',
-  credentialReference: 'vms/north-nvr',
-  verifyTls: true,
-  state: 'Active',
-  expectedCameraCount: 24,
-};
+const target = vmsFixture({ id: vmsId });
 
 function renderWithProviders(node: React.ReactElement) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });

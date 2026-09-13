@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { AuthProvider } from '../../auth/AuthProvider';
 import { saveSession } from '../../auth/session';
-import { sessionFixture } from '../../test/fixtures';
+import { pageEnvelope, sessionFixture } from '../../test/fixtures';
 import { HierarchyPage } from './HierarchyPage';
 
 const organizationId = '10000000-0000-4000-8000-000000000001';
@@ -54,14 +54,12 @@ function renderHierarchy(permissions: string[]) {
 
 function hierarchyFetch(options: { areaConflict?: boolean; moveConflict?: boolean } = {}) {
   let deactivationAttempts = 0;
-  let moveAttempts = 0;
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input));
     if (url.pathname === '/api/v1/organizations' && init?.method === 'PUT') return Response.json(organizations[0]);
     if (url.pathname === `/api/v1/organizations/${organizationId}` && init?.method === 'PUT') return Response.json(organizations[0]);
     if (url.pathname === `/api/v1/organization-units/${unitId}` && init?.method === 'PUT') return Response.json(units[0]);
     if (url.pathname === `/api/v1/organization-units/${unitId}/move` && init?.method === 'POST') {
-      moveAttempts += 1;
       const confirmed = (JSON.parse(String(init.body)) as { confirmScopeImpact?: boolean }).confirmScopeImpact;
       if (options.moveConflict && !confirmed) {
         return Response.json({
@@ -75,11 +73,11 @@ function hierarchyFetch(options: { areaConflict?: boolean; moveConflict?: boolea
       });
     }
     if (url.pathname === `/api/v1/geographic-areas/${areaId}` && init?.method === 'PUT') return Response.json(areas[0]);
-    if (url.pathname === '/api/v1/organizations') return Response.json(organizations);
-    if (url.pathname === `/api/v1/organizations/${organizationId}/units`) return Response.json(units);
-    if (url.pathname === `/api/v1/organizations/${secondOrganizationId}/units`) return Response.json(secondOrganizationUnits);
+    if (url.pathname === '/api/v1/organizations') return Response.json(pageEnvelope(organizations));
+    if (url.pathname === `/api/v1/organizations/${organizationId}/units`) return Response.json(pageEnvelope(units));
+    if (url.pathname === `/api/v1/organizations/${secondOrganizationId}/units`) return Response.json(pageEnvelope(secondOrganizationUnits));
     if (url.pathname === '/api/v1/geographic-areas/types') return Response.json([{ code: 'ZONE', name: 'Zone', levelOrder: 1 }]);
-    if (url.pathname === '/api/v1/geographic-areas') return Response.json(areas);
+    if (url.pathname === '/api/v1/geographic-areas') return Response.json(pageEnvelope(areas));
     if (url.pathname === `/api/v1/geographic-areas/${areaId}/deactivate` && init?.method === 'POST') {
       deactivationAttempts += 1;
       if (options.areaConflict && deactivationAttempts === 1) {

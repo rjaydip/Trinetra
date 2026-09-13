@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useEffect, useMemo, useState } from 'react';
 
 import { api } from '../../api/endpoints';
+import { queryKeys } from '../../api/queryKeys';
 import { PageState } from '../../components/ui';
 import { CameraDetailDrawer } from './CameraDetailDrawer';
 import { CameraMap } from './CameraMap';
@@ -13,14 +14,14 @@ export function MapPage() {
   const [filters, setFilters] = useState<MapFiltersValue>({});
   const [bounds, setBounds] = useState<Bounds | null>(null);
   const [cameraId, setCameraId] = useState<string | null>(null);
-  const registry = useQuery({ queryKey: ['cameras', 'map-bootstrap'], queryFn: () => api.cameras.list({ limit: 100 }) });
+  const registry = useQuery({ queryKey: queryKeys.cameras.mapBootstrap, queryFn: () => api.cameras.list({ limit: 100 }) });
   const initialBounds = useMemo(() => registry.data && initialBoundsFromCameras(registry.data.items), [registry.data]);
 
   useEffect(() => { if (initialBounds && !bounds) setBounds(initialBounds); }, [bounds, initialBounds]);
 
   const request = bounds && buildMapRequest(bounds, filters);
   const map = useQuery({
-    queryKey: ['gis-cameras', request?.toString()],
+    queryKey: queryKeys.gisCameras.feed(request?.toString()),
     queryFn: () => api.gis.cameras({
       bbox: request!.get('bbox')!,
       includeSectors: request!.get('includeSectors') === 'true' || undefined,

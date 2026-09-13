@@ -2,20 +2,17 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 
-import { isApiProblem } from '../../api/client';
+import { errorDetail } from '../../api/client';
 import { api } from '../../api/endpoints';
 import type { ConnectorTargetRequest } from '../../api/models';
+import { queryKeys } from '../../api/queryKeys';
 import { useAuth } from '../../auth/AuthProvider';
 import { hasPermission } from '../../auth/permissions';
-import { Button, PageState, StatusBadge } from '../../components/ui';
+import { Button, Pager, PageState, StatusBadge } from '../../components/ui';
 import type { SelectorState } from '../cameras/CameraForm';
 import { CredentialPanel } from './CredentialPanel';
 import { VmsCapabilitiesPanel, VmsDeleteControl, VmsEditForm, VmsHealthPanel, VmsStateControl } from './VmsManagement';
 import { VmsForm } from './VmsForm';
-
-function errorDetail(error: unknown, fallback: string) {
-  return isApiProblem(error) ? error.detail : fallback;
-}
 
 function selectorState(query: {
   isPending: boolean;
@@ -32,7 +29,7 @@ function selectorState(query: {
 
 function VmsDetail({ vmsId }: { vmsId: string }) {
   const { session } = useAuth();
-  const target = useQuery({ queryKey: ['vms', vmsId], queryFn: () => api.vms.get(vmsId) });
+  const target = useQuery({ queryKey: queryKeys.vms.detail(vmsId), queryFn: () => api.vms.get(vmsId) });
   const permissions = ['vms.read', 'credential.write', 'integration.manage'].filter((permission) => hasPermission(session, permission));
   const canImportCameras = hasPermission(session, 'camera.import');
   const canUpdate = hasPermission(session, 'vms.update');
@@ -88,11 +85,17 @@ export function VmsPage() {
   const canCreate = hasPermission(session, 'vms.create');
   const [organizationId, setOrganizationId] = useState('');
   const [createdId, setCreatedId] = useState('');
-  const vmsList = useQuery({ queryKey: ['vms'], queryFn: api.vms.list, enabled: !vmsId });
-  const organizations = useQuery({ queryKey: ['reference', 'organizations'], queryFn: api.reference.organizations, enabled: canCreate && !vmsId });
-  const geographicAreas = useQuery({ queryKey: ['reference', 'geographic-areas'], queryFn: () => api.reference.geographicAreas(), enabled: canCreate && !vmsId });
+  const [page, setPage] = useState(1);
+  const pageSize = 20;
+  const vmsList = useQuery({
+    queryKey: queryKeys.vms.page(page, pageSize),
+    queryFn: () => api.vms.listPage({ page, pageSize }),
+    enabled: !vmsId,
+  });
+  const organizations = useQuery({ queryKey: queryKeys.reference.organizations, queryFn: api.reference.organizations, enabled: canCreate && !vmsId });
+  const geographicAreas = useQuery({ queryKey: queryKeys.reference.geographicAreas, queryFn: () => api.reference.geographicAreas(), enabled: canCreate && !vmsId });
   const organizationUnits = useQuery({
-    queryKey: ['reference', 'organization-units', organizationId],
+    queryKey: queryKeys.reference.organizationUnits(organizationId),
     queryFn: () => api.reference.organizationUnits(organizationId),
     enabled: canCreate && !vmsId && Boolean(organizationId),
   });
@@ -100,7 +103,7 @@ export function VmsPage() {
     mutationFn: (request: ConnectorTargetRequest) => api.vms.create(request),
     onSuccess: async (response) => {
       setCreatedId(response.id);
-      await queryClient.invalidateQueries({ queryKey: ['vms'] });
+      await queryClient.invalidateQueries({ queryKey: queryKeys.vms.all });
     },
   });
 
@@ -116,8 +119,11 @@ export function VmsPage() {
       <h2 id="vms-list-title">Registered targets</h2>
       {vmsList.isPending ? <PageState title="Loading VMS integrations">Retrieving authorized targets…</PageState>
         : vmsList.isError ? <><PageState title="Couldn&apos;t load VMS integrations">{errorDetail(vmsList.error, 'VMS integrations could not be loaded.')}</PageState><button className="button" type="button" onClick={() => vmsList.refetch()}>Try again</button></>
-          : vmsList.data.length === 0 ? <PageState title="No VMS integrations">Register a target to begin secure onboarding.</PageState>
-            : <ul>{vmsList.data.map((target) => <li key={target.id}><div><Link to={`/vms/${target.id}`}>{target.displayName}</Link><p>{target.code} · {target.vendor}</p></div><StatusBadge tone={target.state.toLowerCase() === 'active' ? 'success' : 'warning'}>{target.state}</StatusBadge></li>)}</ul>}
+          : vmsList.data.items.length === 0 ? <PageState title="No VMS integrations">Register a target to begin secure onboarding.</PageState>
+            : <>
+              <ul>{vmsList.data.items.map((target) => <li key={target.id}><div><Link to={`/vms/${target.id}`}>{target.displayName}</Link><p>{target.code} · {target.vendor}</p></div><StatusBadge tone={target.state.toLowerCase() === 'active' ? 'success' : 'warning'}>{target.state}</StatusBadge></li>)}</ul>
+              <Pager page={vmsList.data.page} pageSize={vmsList.data.pageSize} total={vmsList.data.total} onPageChange={setPage} />
+            </>}
     </section>
     {canCreate && <section className="vms-registration" aria-labelledby="vms-registration-title">
       <header>

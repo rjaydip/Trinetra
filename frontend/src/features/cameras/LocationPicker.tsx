@@ -71,10 +71,10 @@ export function LocationPicker({
   useEffect(() => {
     if (!container.current || map.current || import.meta.env.MODE === 'test') return undefined;
     let cancelled = false;
-    let instance: MapLibreMap | undefined;
-    let pin: MapLibreMarker | undefined;
+    let instance: MapLibreMap;
     let removeWindowListeners: (() => void) | undefined;
     let removeHandleListener: (() => void) | undefined;
+    let pin: MapLibreMarker | undefined;
 
     void import('maplibre-gl').then(({ default: maplibregl }) => {
       if (cancelled || !container.current) return;
@@ -85,7 +85,10 @@ export function LocationPicker({
         style: MAP_STYLE,
         center: hasLocation ? [initialLocation.longitude!, initialLocation.latitude!] : [0, 0],
         zoom: hasLocation ? 15 : 1,
-        maxBounds: [[-180, -90], [180, 90]],
+        // The literal world extent makes this exact MapLibre version's constraint math degenerate
+        // into a singular view-projection matrix on the map's first resize — see CameraMap.tsx for
+        // the full root-cause writeup. A hair inset from the true poles/antimeridian avoids it.
+        maxBounds: [[-179.9, -89.9], [179.9, 89.9]],
       });
       map.current = instance;
       instance.addControl(new maplibregl.NavigationControl(), 'top-right');
@@ -131,8 +134,8 @@ export function LocationPicker({
       });
 
       instance.on('load', () => {
-        instance!.addSource('context-cameras', { type: 'geojson', data: toGeoJson(featuresRef.current) });
-        instance!.addLayer({
+        instance.addSource('context-cameras', { type: 'geojson', data: toGeoJson(featuresRef.current) });
+        instance.addLayer({
           id: 'context-camera-points',
           type: 'circle',
           source: 'context-cameras',

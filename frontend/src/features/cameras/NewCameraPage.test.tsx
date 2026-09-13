@@ -6,9 +6,17 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { App } from '../../App';
 import { AuthProvider } from '../../auth/AuthProvider';
 import { saveSession } from '../../auth/session';
-import { sessionFixture } from '../../test/fixtures';
+import { pageEnvelope, sessionFixture } from '../../test/fixtures';
 
 afterEach(() => { vi.unstubAllGlobals(); sessionStorage.clear(); });
+
+// organizations/units/geographic-areas are fetched a page at a time (see fetchAllPages in
+// endpoints.ts) and need the `{ items, page, pageSize, total, totalPages }` envelope; everything
+// else this file stubs (vms, gis) still expects a bare array.
+const REFERENCE_LIST_PATH = /\/organizations$|\/organizations\/[^/]+\/units$|\/geographic-areas$/;
+function emptyListResponse(pathname: string) {
+  return REFERENCE_LIST_PATH.test(pathname) ? Response.json(pageEnvelope([])) : Response.json([]);
+}
 
 const organizationId = 'c0a80101-0000-4000-8000-000000000001';
 const organization = { id: organizationId, code: 'OPS', name: 'Operations', organizationType: 'PUBLIC', description: null, status: 'ACTIVE' };
@@ -19,11 +27,12 @@ it('shows a retryable organization failure beside the selector', async () => {
   saveSession(sessionFixture('registrar', ['camera.create']));
   let organizationsUnavailable = true;
   vi.stubGlobal('fetch', async (input: RequestInfo | URL) => {
-    if (String(input).endsWith('/organizations') && organizationsUnavailable) {
+    const pathname = new URL(String(input)).pathname;
+    if (pathname.endsWith('/organizations') && organizationsUnavailable) {
       return Response.json({ title: 'Unavailable', detail: 'Reference data is temporarily unavailable.' }, { status: 503 });
     }
-    if (String(input).endsWith('/organizations')) return Response.json([organization]);
-    return Response.json([]);
+    if (pathname.endsWith('/organizations')) return Response.json(pageEnvelope([organization]));
+    return emptyListResponse(pathname);
   });
   render(<MemoryRouter initialEntries={['/cameras/new']}><AuthProvider><App /></AuthProvider></MemoryRouter>);
   const message = await screen.findByText('Reference data is temporarily unavailable.');
@@ -39,12 +48,12 @@ it('preserves entered camera values while organization units fail and retry', as
   let unitsUnavailable = true;
   vi.stubGlobal('fetch', async (input: RequestInfo | URL) => {
     const url = new URL(String(input));
-    if (url.pathname === '/api/v1/organizations') return Response.json([organization]);
+    if (url.pathname === '/api/v1/organizations') return Response.json(pageEnvelope([organization]));
     if (url.pathname === `/api/v1/organizations/${organizationId}/units`) {
       if (unitsUnavailable) return Response.json({ title: 'Unavailable', detail: 'Organization units are temporarily unavailable.' }, { status: 503 });
-      return Response.json([organizationUnit]);
+      return Response.json(pageEnvelope([organizationUnit]));
     }
-    if (url.pathname === '/api/v1/geographic-areas') return Response.json([area]);
+    if (url.pathname === '/api/v1/geographic-areas') return Response.json(pageEnvelope([area]));
     if (url.pathname === '/api/v1/vms') return Response.json([]);
     return new Response(null, { status: 404 });
   });
@@ -76,8 +85,8 @@ it('explains why organization and organization-unit selectors are unavailable wh
   saveSession(sessionFixture('registrar', ['camera.create']));
   vi.stubGlobal('fetch', async (input: RequestInfo | URL) => {
     const url = new URL(String(input));
-    if (url.pathname === '/api/v1/geographic-areas') return Response.json([area]);
-    return Response.json([]);
+    if (url.pathname === '/api/v1/geographic-areas') return Response.json(pageEnvelope([area]));
+    return emptyListResponse(url.pathname);
   });
 
   render(<MemoryRouter initialEntries={['/cameras/new']}><AuthProvider><App /></AuthProvider></MemoryRouter>);
@@ -93,9 +102,9 @@ it('explains why an organization unit is unavailable when the selected organizat
   saveSession(sessionFixture('registrar', ['camera.create']));
   vi.stubGlobal('fetch', async (input: RequestInfo | URL) => {
     const url = new URL(String(input));
-    if (url.pathname === '/api/v1/organizations') return Response.json([organization]);
-    if (url.pathname === '/api/v1/geographic-areas') return Response.json([area]);
-    return Response.json([]);
+    if (url.pathname === '/api/v1/organizations') return Response.json(pageEnvelope([organization]));
+    if (url.pathname === '/api/v1/geographic-areas') return Response.json(pageEnvelope([area]));
+    return emptyListResponse(url.pathname);
   });
   const user = userEvent.setup();
 
@@ -113,8 +122,8 @@ it('explains why the required geographic area selector is unavailable when none 
   saveSession(sessionFixture('registrar', ['camera.create']));
   vi.stubGlobal('fetch', async (input: RequestInfo | URL) => {
     const url = new URL(String(input));
-    if (url.pathname === '/api/v1/organizations') return Response.json([organization]);
-    return Response.json([]);
+    if (url.pathname === '/api/v1/organizations') return Response.json(pageEnvelope([organization]));
+    return emptyListResponse(url.pathname);
   });
 
   render(<MemoryRouter initialEntries={['/cameras/new']}><AuthProvider><App /></AuthProvider></MemoryRouter>);
@@ -129,7 +138,7 @@ it('loads map context only with a bounded bbox after coordinates are valid', asy
   saveSession(sessionFixture('registrar', ['camera.create']));
   const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
     if (String(input).includes('/gis/cameras')) return Response.json({ type: 'FeatureCollection', features: [] });
-    return Response.json([]);
+    return emptyListResponse(new URL(String(input)).pathname);
   });
   vi.stubGlobal('fetch', fetchMock);
   render(<MemoryRouter initialEntries={['/cameras/new']}><AuthProvider><App /></AuthProvider></MemoryRouter>);

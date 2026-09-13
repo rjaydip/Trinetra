@@ -1,17 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Fragment, useState } from 'react';
 
-import { isApiProblem } from '../../api/client';
+import { errorDetail } from '../../api/client';
 import { api } from '../../api/endpoints';
 import type { CreateFromFederatedRequest, UnreconciledCameraResponse } from '../../api/models';
+import { queryKeys } from '../../api/queryKeys';
 import { useAuth } from '../../auth/AuthProvider';
 import { hasPermission } from '../../auth/permissions';
 import { Button, PageState } from '../../components/ui';
 import { cameraTypes, roundCoordinate } from './cameraVocabulary';
-
-function errorDetail(error: unknown, fallback: string) {
-  return isApiProblem(error) ? error.detail : fallback;
-}
 
 function displayName(row: UnreconciledCameraResponse) {
   return row.name?.trim() || row.nativeCameraId;
@@ -29,7 +26,7 @@ function FieldError({ id, message }: { id: string; message?: string }) {
 function LinkExistingForm({ row, onSuccess }: { row: UnreconciledCameraResponse; onSuccess(): Promise<unknown> | void }) {
   const [query, setQuery] = useState('');
   const results = useQuery({
-    queryKey: ['cameras', 'search', query],
+    queryKey: queryKeys.cameras.search(query),
     queryFn: () => api.cameras.list({ q: query, limit: 5 }),
     enabled: query.trim().length >= 2,
   });
@@ -183,16 +180,16 @@ export function ReconciliationPage() {
   const [expandedRow, setExpandedRow] = useState('');
   const [mode, setMode] = useState<'link' | 'create' | ''>('');
 
-  const targets = useQuery({ queryKey: ['vms'], queryFn: api.vms.list });
+  const targets = useQuery({ queryKey: queryKeys.vms.all, queryFn: api.vms.list });
   const unreconciled = useQuery({
-    queryKey: ['reconciliation', 'unreconciled', targetId],
+    queryKey: queryKeys.reconciliation.unreconciled(targetId),
     queryFn: () => api.reconciliation.unreconciled({ targetId: targetId || undefined }),
   });
 
   async function refresh() {
     setExpandedRow('');
     setMode('');
-    await queryClient.invalidateQueries({ queryKey: ['reconciliation', 'unreconciled'] });
+    await queryClient.invalidateQueries({ queryKey: queryKeys.reconciliation.unreconciledAll });
   }
 
   function toggle(row: UnreconciledCameraResponse, nextMode: 'link' | 'create') {
