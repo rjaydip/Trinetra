@@ -1,0 +1,27 @@
+.reports-page { display: grid; gap: 1.25rem; }
+.reports-page > header h1 { margin: .25rem 0 0; }
+.reports-page > header > p:last-child, .report-panel__header p, .report-unavailable p, .report-metrics p, .coverage-scope-form > p { color: var(--color-muted); }
+.reports-page h2 { margin: 0; }
+.report-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: 1rem; margin: .75rem 0 0; }
+.report-metrics > div, .report-panel, .report-unavailable { padding: 1rem; border: 1px solid var(--color-border); border-radius: .75rem; background: var(--color-surface); }
+.report-metrics dt { color: var(--color-muted); font-weight: 700; }
+.report-metrics dd { margin: .25rem 0 0; font-size: 1.75rem; font-weight: 750; }
+.report-metrics p { margin-bottom: 0; }
+.report-panel { display: grid; gap: 1rem; }
+.report-panel__header { display: flex; align-items: start; justify-content: space-between; gap: 1rem; }
+.report-panel__header p { margin-bottom: 0; }
+.coverage-scope-form { display: grid; gap: .625rem; }
+.coverage-scope-form label { display: grid; gap: .375rem; font-size: .875rem; font-weight: 700; }
+.coverage-scope-form input { min-height: 2.75rem; max-width: 28rem; padding: .5rem .625rem; border: 1px solid var(--color-border); border-radius: .375rem; color: var(--color-text); background: var(--color-surface); font: inherit; }
+.coverage-scope-form .button { width: fit-content; }
+.coverage-scope-form > p { margin: 0; }
+.coverage-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: .75rem; }
+.coverage-summary__bucket { padding: .875rem; border: 1px solid var(--color-border); border-radius: .5rem; }
+.coverage-summary__bucket h3 { margin: 0 0 .75rem; font-size: 1rem; }
+.coverage-summary__bucket dl { display: grid; gap: .625rem; margin: 0; }
+.coverage-summary__bucket dl div { display: flex; align-items: baseline; justify-content: space-between; gap: .75rem; }
+.coverage-summary__bucket dt { color: var(--color-muted); }
+.coverage-summary__bucket dd { margin: 0; font-weight: 750; }
+.report-empty { color: var(--color-muted); }
+.report-unavailable { border-left: .25rem solid var(--color-muted); }
+.report-unavailable h2 { margin-top: .75rem; font-size: 1.125rem; }

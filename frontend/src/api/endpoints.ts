@@ -1,5 +1,10 @@
 import { request } from './client';
 import type {
+  CameraConnectionTestAccepted,
+  CameraConnectionTestRequest,
+  CameraConnectionTestResult,
+  CameraCredentialTestAccepted,
+  CameraCredentialTestResult,
   AccessGroupResponse,
   ActivateGroupRequest,
   AddScopeRequest,
@@ -58,6 +63,7 @@ import type {
   OverviewResponse,
   PageResult,
   PermissionResponse,
+  PollInventoryResponse,
   ReconcileRequest,
   ReconcileResponse,
   ResetPasswordRequest,
@@ -155,6 +161,50 @@ export const api = {
     maintenance: (id: string, query: { status?: string; limit?: number } = {}) => request<MaintenanceRecordResponse[]>(withQuery(`/api/v1/cameras/${id}/maintenance`, query)),
     createMaintenance: (id: string, body: MaintenanceCreateRequest) => request<CreatedResponse>(`/api/v1/cameras/${id}/maintenance`, json(body)),
     updateMaintenance: (id: string, recordId: string, body: MaintenanceUpdateRequest) => request<MaintenanceRecordResponse>(`/api/v1/cameras/${id}/maintenance/${recordId}`, { body: JSON.stringify(body), method: 'PATCH' }),
+    connectionTests: {
+      create: (body: CameraConnectionTestRequest) => request<CameraConnectionTestAccepted>('/api/v1/cameras/connection-test', json(body)),
+      get: (statusUrl: string) => request<CameraConnectionTestResult>(statusUrl),
+    },
+    credentials: {
+      status: (id: string) => request<CredentialExistsResponse>(`/api/v1/cameras/${id}/credential/status`),
+      save: (id: string, body: CredentialRequest) => request<CredentialResponse>(`/api/v1/cameras/${id}/credential`, { body: JSON.stringify(body), method: 'PUT' }),
+    },
+    credentialTests: {
+      create: (cameraId: string) => request<CameraCredentialTestAccepted>(`/api/v1/cameras/${cameraId}/credential-test`, { method: 'POST' }),
+      get: (statusUrl: string) => request<CameraCredentialTestResult>(statusUrl),
+    },
+    /** Tests the credential already saved on a created camera (post-save, authenticating check —
+     * contrast with `testConnection`, which is a pre-save reachability-only probe). Polls the
+     * accepted test to a terminal state, same pattern as `testConnection`. */
+    testCredential: async (cameraId: string): Promise<CameraCredentialTestResult> => {
+      const accepted = await api.cameras.credentialTests.create(cameraId);
+      const deadline = Date.now() + 15_000;
+      let result = await api.cameras.credentialTests.get(accepted.statusUrl);
+      while (result.status.toLowerCase() === 'pending' || result.status.toLowerCase() === 'running') {
+        if (Date.now() > deadline) {
+          return { ...result, status: 'timeout', failureReason: result.failureReason ?? 'The credential check timed out.' };
+        }
+        await new Promise((resolve) => setTimeout(resolve, 750));
+        result = await api.cameras.credentialTests.get(accepted.statusUrl);
+      }
+      return result;
+    },
+    /** Pre-save reachability check for a standalone camera. Polls the accepted test to a terminal
+     * state so callers can `await` a single answer; this never sees a credential (see
+     * CameraForm's ConnectionCheck) — it only reports whether protocol/ipAddress/port answered. */
+    testConnection: async (body: CameraConnectionTestRequest): Promise<{ reachable: boolean; detail?: string }> => {
+      const accepted = await api.cameras.connectionTests.create(body);
+      const deadline = Date.now() + 15_000;
+      let result = await api.cameras.connectionTests.get(accepted.statusUrl);
+      while (result.status.toLowerCase() === 'pending' || result.status.toLowerCase() === 'running') {
+        if (Date.now() > deadline) return { reachable: false, detail: 'The connectivity check timed out.' };
+        await new Promise((resolve) => setTimeout(resolve, 750));
+        result = await api.cameras.connectionTests.get(accepted.statusUrl);
+      }
+      if (result.failureReason) return { reachable: false, detail: result.failureReason };
+      if (result.result?.reachable) return { reachable: true };
+      return { reachable: false, detail: result.result?.failure ?? undefined };
+    },
   },
   gis: {
     cameras: (query: { bbox: string; includeSectors?: boolean; includeRetired?: boolean; organizationUnitId?: string; operationalStatus?: string; maintenanceStatus?: string }) => request<GeoJsonFeatureCollection>(withQuery('/api/v1/gis/cameras', query)),
@@ -166,8 +216,10 @@ export const api = {
       request<PageResult<OrganizationResponse>>(withQuery('/api/v1/organizations', { page, pageSize }))),
     organizationUnits: (organizationId: string) => fetchAllPages((page, pageSize) =>
       request<PageResult<OrganizationUnitResponse>>(withQuery(`/api/v1/organizations/${organizationId}/units`, { page, pageSize }))),
+    organizationUnit: (id: string) => request<OrganizationUnitResponse>(`/api/v1/organization-units/${id}`),
     geographicAreas: (query: { rootsOnly?: boolean; parentId?: string } = {}) => fetchAllPages((page, pageSize) =>
       request<PageResult<GeographicAreaResponse>>(withQuery('/api/v1/geographic-areas', { ...query, page, pageSize }))),
+    geographicArea: (id: string) => request<GeographicAreaResponse>(`/api/v1/geographic-areas/${id}`),
   },
   vms: {
     list: () => request<VmsResponse[]>('/api/v1/vms'),
@@ -177,6 +229,7 @@ export const api = {
     get: (id: string) => request<VmsResponse>(`/api/v1/vms/${id}`),
     replace: (id: string, body: ConnectorTargetRequest) => request<void>(`/api/v1/vms/${id}`, { body: JSON.stringify(body), method: 'PUT' }),
     setState: (id: string, body: TargetStateRequest) => request<void>(`/api/v1/vms/${id}/state`, json(body)),
+    pollInventory: (id: string) => request<PollInventoryResponse>(`/api/v1/vms/${id}/poll-inventory`, { method: 'POST' }),
     remove: (id: string) => request<void>(`/api/v1/vms/${id}`, { method: 'DELETE' }),
     health: (id: string, query: { limit?: number; days?: number } = {}) => request<ConnectorHealthResponse[]>(withQuery(`/api/v1/vms/${id}/health`, query)),
     capabilities: (id: string) => request<CapabilityResponse>(`/api/v1/vms/${id}/capabilities`),

@@ -49,6 +49,25 @@ public sealed class MaintenanceRepository
             "SELECT federation.sweep_abandoned_connection_tests();", cancellationToken: ct));
     }
 
+    /// <summary>Marks camera reachability probes abandoned when the instance running them died.</summary>
+    public async Task<int> SweepAbandonedCameraTestsAsync(NpgsqlConnection c, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(c);
+
+        return await c.ExecuteScalarAsync<int>(new CommandDefinition(
+            "SELECT federation.sweep_abandoned_camera_connection_tests();", cancellationToken: ct));
+    }
+
+    /// <summary>Marks authenticated camera credential tests abandoned when the instance running
+    /// them died.</summary>
+    public async Task<int> SweepAbandonedCameraCredentialTestsAsync(NpgsqlConnection c, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(c);
+
+        return await c.ExecuteScalarAsync<int>(new CommandDefinition(
+            "SELECT federation.sweep_abandoned_camera_credential_tests();", cancellationToken: ct));
+    }
+
     /// <summary>Claims today's run of a daily job for this instance.</summary>
     public async Task<bool> TryClaimDailyJobAsync(
         NpgsqlConnection c, string job, DateOnly today, CancellationToken ct)

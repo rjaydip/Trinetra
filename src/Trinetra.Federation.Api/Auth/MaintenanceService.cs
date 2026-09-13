@@ -67,6 +67,22 @@ public sealed partial class MaintenanceService : BackgroundService
                     LogSwept(_logger, swept);
                 }
 
+                var sweptCameraTests =
+                    await _maintenance.SweepAbandonedCameraTestsAsync(connection, stoppingToken);
+
+                if (sweptCameraTests > 0)
+                {
+                    LogSweptCameraTests(_logger, sweptCameraTests);
+                }
+
+                var sweptCameraCredentialTests =
+                    await _maintenance.SweepAbandonedCameraCredentialTestsAsync(connection, stoppingToken);
+
+                if (sweptCameraCredentialTests > 0)
+                {
+                    LogSweptCameraCredentialTests(_logger, sweptCameraCredentialTests);
+                }
+
                 await RunRetentionIfDueAsync(connection, stoppingToken);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
@@ -122,6 +138,17 @@ public sealed partial class MaintenanceService : BackgroundService
         var tests = await _maintenance.PurgeAsync(
             connection, "purge_connection_tests_before", cutoffs.ConnectionTests, cancellationToken);
 
+        // Same cutoff category as VMS connection tests -- both are ephemeral job rows, not worth
+        // a second retention knob for.
+        var cameraTests = await _maintenance.PurgeAsync(
+            connection, "purge_camera_connection_tests_before", cutoffs.ConnectionTests,
+            cancellationToken);
+
+        // Same cutoff category again -- another ephemeral job row, not worth a third knob for.
+        var cameraCredentialTests = await _maintenance.PurgeAsync(
+            connection, "purge_camera_credential_tests_before", cutoffs.ConnectionTests,
+            cancellationToken);
+
         var deadLetter = await _maintenance.PurgeAsync(
             connection, "purge_deadletter_before", cutoffs.DeadLetter, cancellationToken);
 
@@ -129,10 +156,11 @@ public sealed partial class MaintenanceService : BackgroundService
             $"events={events.Count} health={health.Count} "
             + $"cameraStatus={cameraStatus.Count} audit={auditParts.Count} "
             + $"authAudit={authAuditParts.Count} "
-            + $"connectionTests={tests} deadLetter={deadLetter}";
+            + $"connectionTests={tests} cameraConnectionTests={cameraTests} "
+            + $"cameraCredentialTests={cameraCredentialTests} deadLetter={deadLetter}";
 
         LogRetention(_logger, events.Count, health.Count, cameraStatus.Count,
-            auditParts.Count, authAuditParts.Count, tests, deadLetter);
+            auditParts.Count, authAuditParts.Count, tests, cameraTests, deadLetter);
 
         // Named individually at Information: after an incident, "which day did we lose?" must be
         // answerable from the logs rather than inferred from what is missing.
@@ -162,6 +190,8 @@ public sealed partial class MaintenanceService : BackgroundService
                 auditPartitions = auditParts,
                 authAuditPartitions = authAuditParts,
                 connectionTestsPurged = tests,
+                cameraConnectionTestsPurged = cameraTests,
+                cameraCredentialTestsPurged = cameraCredentialTests,
                 deadLetterPurged = deadLetter,
             },
             organizationUnitId: null,
@@ -176,14 +206,25 @@ public sealed partial class MaintenanceService : BackgroundService
                 + "stopped while running them.")]
     private static partial void LogSwept(ILogger logger, int count);
 
+    [LoggerMessage(Level = LogLevel.Warning,
+        Message = "Marked {Count} camera reachability test(s) abandoned. An API instance most "
+                + "likely stopped while running them.")]
+    private static partial void LogSweptCameraTests(ILogger logger, int count);
+
+    [LoggerMessage(Level = LogLevel.Warning,
+        Message = "Marked {Count} camera credential test(s) abandoned. An API instance most "
+                + "likely stopped while running them.")]
+    private static partial void LogSweptCameraCredentialTests(ILogger logger, int count);
+
     [LoggerMessage(Level = LogLevel.Information,
         Message = "Retention pass complete. Dropped {EventPartitions} event, {HealthPartitions} "
                 + "health and {CameraStatusPartitions} camera-status partition(s), "
                 + "{AuditPartitions} audit and {AuthAuditPartitions} auth-audit partition(s); "
-                + "purged {Tests} connection test(s) and {DeadLetter} dead-letter row(s).")]
+                + "purged {Tests} connection test(s), {CameraTests} camera connection test(s) "
+                + "and {DeadLetter} dead-letter row(s).")]
     private static partial void LogRetention(
         ILogger logger, int eventPartitions, int healthPartitions, int cameraStatusPartitions,
-        int auditPartitions, int authAuditPartitions, int tests, int deadLetter);
+        int auditPartitions, int authAuditPartitions, int tests, int cameraTests, int deadLetter);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Dropped partition {Partition}")]
     private static partial void LogDropped(ILogger logger, string partition);

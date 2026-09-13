@@ -4,6 +4,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 
 import type { GeoJsonFeatureCollection } from '../../api/models';
 import { cameraIdForFeature, coverageFeatures, type Bounds } from './geo';
+import './map.css';
 
 const MAP_STYLE: StyleSpecification = {
   version: 8,

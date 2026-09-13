@@ -82,4 +82,13 @@ public sealed record ConnectorTarget
     /// successful sync.
     /// </summary>
     public int? ExpectedCameraCount { get; init; }
+
+    /// <summary>
+    /// When the inventory loop (not the status loop) last completed against this target. Null
+    /// until the first inventory poll succeeds.
+    /// </summary>
+    public DateTimeOffset? LastInventoryPollAt { get; init; }
+
+    /// <summary>Camera count from that same last completed inventory poll.</summary>
+    public int? LastInventoryCameraCount { get; init; }
 }

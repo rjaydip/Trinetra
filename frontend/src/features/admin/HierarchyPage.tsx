@@ -16,6 +16,8 @@ import { queryKeys } from '../../api/queryKeys';
 import { useAuth } from '../../auth/AuthProvider';
 import { hasPermission } from '../../auth/permissions';
 import { Button, PageState, StatusBadge } from '../../components/ui';
+import { buildTree, type TreeNode } from '../../lib/tree';
+import './admin.css';
 
 function value(form: FormData, name: string) {
   return String(form.get(name) ?? '').trim();
@@ -27,42 +29,154 @@ function optional(valueToCheck: string) {
 
 interface ParentOption { id: string; name: string }
 
-interface TreeNode<T> {
-  item: T;
-  children: TreeNode<T>[];
-  depth: number;
-}
-
-function buildTree<T extends { id: string }>(
+/** Every id reachable by walking down from `rootId` — the node's whole subtree, never itself. */
+function descendantIds<T extends { id: string }>(
+  rootId: string,
   items: T[],
   getParentId: (item: T) => string | null | undefined,
-): TreeNode<T>[] {
-  const itemMap = new Map<string, T>();
-  items.forEach((item) => itemMap.set(item.id, item));
-
-  const childrenMap = new Map<string, T[]>();
-  const roots: T[] = [];
-
+): Set<string> {
+  const childrenByParent = new Map<string, string[]>();
   items.forEach((item) => {
     const parentId = getParentId(item);
-    if (parentId && itemMap.has(parentId)) {
-      const list = childrenMap.get(parentId) ?? [];
-      list.push(item);
-      childrenMap.set(parentId, list);
-    } else {
-      roots.push(item);
-    }
+    if (!parentId) return;
+    const list = childrenByParent.get(parentId) ?? [];
+    list.push(item.id);
+    childrenByParent.set(parentId, list);
   });
+  const result = new Set<string>();
+  const stack = [...(childrenByParent.get(rootId) ?? [])];
+  while (stack.length > 0) {
+    const id = stack.pop()!;
+    if (result.has(id)) continue;
+    result.add(id);
+    stack.push(...(childrenByParent.get(id) ?? []));
+  }
+  return result;
+}
 
-  function makeNodes(list: T[], depth: number): TreeNode<T>[] {
-    return list.map((item) => ({
-      item,
-      depth,
-      children: makeNodes(childrenMap.get(item.id) ?? [], depth + 1),
-    }));
+/**
+ * Candidates for a "new parent" picker: `ACTIVE` only (every re-parent operation — edit, move,
+ * deactivate-with-reparent — refuses an inactive parent server-side), excluding the node itself
+ * and its own subtree (re-parenting under a descendant is refused too — it would create a cycle).
+ * Pass `excludeId: undefined` for a picker with no "self" yet (e.g. creating a new node).
+ */
+function validParentOptions<T extends { id: string; status: string }>(
+  items: T[],
+  excludeId: string | undefined,
+  getParentId: (item: T) => string | null | undefined,
+): T[] {
+  const excluded = excludeId ? descendantIds(excludeId, items, getParentId) : new Set<string>();
+  return items.filter((item) => item.status === 'ACTIVE' && item.id !== excludeId && !excluded.has(item.id));
+}
+
+/**
+ * `validParentOptions` filtered for a `<select defaultValue>` picker, plus the node's *current*
+ * parent even when that parent no longer qualifies (inactive — possible via the still-open 5-M8
+ * gap, or a status change since this list loaded). Dropping it would desync `defaultValue` from
+ * every rendered `<option>`; the browser falls back to whatever option happens to render first,
+ * so submitting the form *unchanged* would silently re-parent the unit. Labelled distinctly so
+ * the admin knows to pick a real destination rather than resubmit it as-is.
+ */
+function parentSelectOptions<T extends { id: string; name: string; status: string }>(
+  items: T[],
+  excludeId: string,
+  currentParentId: string | null | undefined,
+  getParentId: (item: T) => string | null | undefined,
+): Array<{ id: string; label: string }> {
+  const valid = validParentOptions(items, excludeId, getParentId);
+  const options = valid.map((item) => ({ id: item.id, label: item.name }));
+  if (currentParentId && !valid.some((item) => item.id === currentParentId)) {
+    const current = items.find((item) => item.id === currentParentId);
+    if (current) options.unshift({ id: current.id, label: `${current.name} (inactive — choose a different parent)` });
+  }
+  return options;
+}
+
+/** Levels shown before a node's children collapse behind its own expand toggle — "2 or 3 levels"
+ * at a glance (depths 0 and 1 auto-expand, so depths 0/1/2 are visible; depth 2's own children
+ * start collapsed). */
+const AUTO_EXPAND_DEPTH = 2;
+
+/** Whether a node's children render, given which nodes the admin has manually toggled away from
+ * their depth-based default (a single toggle set, XORed against the default, means clicking a
+ * node always flips what the admin currently sees rather than needing separate "collapsed below
+ * the fold" and "expanded past the fold" tracking). */
+function isNodeExpanded(id: string, depth: number, toggled: Set<string>): boolean {
+  const defaultExpanded = depth < AUTO_EXPAND_DEPTH;
+  return toggled.has(id) ? !defaultExpanded : defaultExpanded;
+}
+
+function toggleSetMembership(set: Set<string>, id: string): Set<string> {
+  const next = new Set(set);
+  if (next.has(id)) next.delete(id); else next.add(id);
+  return next;
+}
+
+/** Inline "+" form to add a unit directly under a given parent (or at the root) from the tree,
+ * without leaving the tree or hunting for the right dropdown in the create-form further down. */
+function InlineAddUnit({ organizationId, parentUnitId, onCancel, onCreate, pending, error }: {
+  organizationId: string;
+  parentUnitId: string | null;
+  onCancel(): void;
+  onCreate(body: { code: string; name: string; unitType: string; parentUnitId?: string }): void;
+  pending: boolean;
+  error: unknown;
+}) {
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    onCreate({
+      code: value(data, 'code'), name: value(data, 'name'), unitType: value(data, 'unitType'),
+      parentUnitId: parentUnitId ?? undefined,
+    });
   }
 
-  return makeNodes(roots, 0);
+  return <form aria-label={parentUnitId ? 'Add child unit' : 'Add root unit'} className="admin-form admin-form--inline tree-inline-add" onSubmit={submit}>
+    <label>Code<input name="code" required autoFocus /></label>
+    <label>Name<input name="name" required /></label>
+    <label>Unit type<input name="unitType" required /></label>
+    <input name="organizationId" type="hidden" value={organizationId} />
+    {Boolean(error) && <p className="form-error" role="alert">{errorDetail(error, 'The organization unit could not be created.')}</p>}
+    <div className="form-actions">
+      <Button disabled={pending} type="submit">Add unit</Button>
+      <button className="button button--secondary" type="button" onClick={onCancel}>Cancel</button>
+    </div>
+  </form>;
+}
+
+/** Inline "+" form to add a geographic area directly under a given parent (or at the root). */
+function InlineAddArea({ parentAreaId, areaTypes, onCancel, onCreate, pending, error }: {
+  parentAreaId: string | null;
+  areaTypes: Array<{ code: string; name: string }>;
+  onCancel(): void;
+  onCreate(body: { code: string; name: string; areaType: string; parentAreaId?: string }): void;
+  pending: boolean;
+  error: unknown;
+}) {
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    onCreate({
+      code: value(data, 'code'), name: value(data, 'name'), areaType: value(data, 'areaType'),
+      parentAreaId: parentAreaId ?? undefined,
+    });
+  }
+
+  return <form aria-label={parentAreaId ? 'Add child geographic area' : 'Add root geographic area'} className="admin-form admin-form--inline tree-inline-add" onSubmit={submit}>
+    <label>Code<input name="code" required autoFocus /></label>
+    <label>Name<input name="name" required /></label>
+    <label>Area type
+      <select name="areaType" required>
+        <option value="">Select an area type</option>
+        {areaTypes.map((type) => <option key={type.code} value={type.code}>{type.name}</option>)}
+      </select>
+    </label>
+    {Boolean(error) && <p className="form-error" role="alert">{errorDetail(error, 'The geographic area could not be created.')}</p>}
+    <div className="form-actions">
+      <Button disabled={pending} type="submit">Add area</Button>
+      <button className="button button--secondary" type="button" onClick={onCancel}>Cancel</button>
+    </div>
+  </form>;
 }
 
 function buildBreadcrumbs<T extends { id: string; name: string }>(
@@ -212,7 +326,7 @@ function MoveUnitControl({
         setConflict('');
       }}>
         <option value="">{targetUnits.isPending ? 'Loading units…' : 'Select a parent unit'}</option>
-        {(targetUnits.data ?? []).map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name} ({candidate.code})</option>)}
+        {(targetUnits.data ?? []).filter((candidate) => candidate.status === 'ACTIVE').map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name} ({candidate.code})</option>)}
       </select>
     </label>}
     {mutation.isError && !conflict && <p className="form-error" role="alert">{errorDetail(mutation.error, 'The unit could not be moved.')}</p>}
@@ -242,13 +356,21 @@ export function HierarchyPage() {
   const showOrganizationDomain = canReadOrganizations || canManageOrganizations;
   const showGeographyDomain = canReadGeography || canManageGeography;
 
+  const [activeDomain, setActiveDomain] = useState<'organization' | 'geography'>(
+    canReadOrganizations || canManageOrganizations ? 'organization' : 'geography',
+  );
+
   const [organizationId, setOrganizationId] = useState('');
   const [selectedUnitId, setSelectedUnitId] = useState('');
   const [editingOrg, setEditingOrg] = useState(false);
   const [editingUnitId, setEditingUnitId] = useState('');
+  const [unitTreeToggled, setUnitTreeToggled] = useState<Set<string>>(new Set());
+  const [addUnitParentId, setAddUnitParentId] = useState<string | 'root' | null>(null);
 
   const [selectedAreaId, setSelectedAreaId] = useState('');
   const [editingAreaId, setEditingAreaId] = useState('');
+  const [areaTreeToggled, setAreaTreeToggled] = useState<Set<string>>(new Set());
+  const [addAreaParentId, setAddAreaParentId] = useState<string | 'root' | null>(null);
 
   const organizations = useQuery({
     queryKey: queryKeys.admin.organizations, queryFn: api.admin.organizations.list, enabled: showOrganizationDomain,
@@ -396,13 +518,26 @@ export function HierarchyPage() {
   function renderUnitTreeNode(node: TreeNode<OrganizationUnitResponse>) {
     const isSelected = node.item.id === effectiveUnitId;
     const isEditing = editingUnitId === node.item.id;
+    const hasChildren = node.children.length > 0;
+    const expanded = isNodeExpanded(node.item.id, node.depth, unitTreeToggled);
+    const isAdding = addUnitParentId === node.item.id;
     return (
       <div key={node.item.id} className="tree-node-wrapper">
         <div
           className={`tree-node ${isSelected ? 'tree-node--selected' : ''}`}
           style={{ paddingLeft: `${node.depth * 1.5 + 0.5}rem` }}
         >
-          <span className="tree-branch" aria-hidden="true">{node.depth > 0 ? '├─ ' : '• '}</span>
+          {hasChildren ? (
+            <button
+              type="button"
+              className="tree-node__toggle"
+              aria-expanded={expanded}
+              aria-label={expanded ? `Collapse ${node.item.name}` : `Expand ${node.item.name}`}
+              onClick={() => setUnitTreeToggled((prev) => toggleSetMembership(prev, node.item.id))}
+            >
+              {expanded ? '▾' : '▸'}
+            </button>
+          ) : <span className="tree-branch" aria-hidden="true">{node.depth > 0 ? '├─ ' : '• '}</span>}
           <div className="tree-node__info">
             <button
               type="button"
@@ -415,7 +550,18 @@ export function HierarchyPage() {
           </div>
           <div className="tree-node__actions">
             <StatusBadge tone={node.item.status === 'ACTIVE' ? 'success' : 'warning'}>{node.item.status}</StatusBadge>
-            {canManageOrganizations && (
+            {canManageOrganizations && node.item.status === 'ACTIVE' && (
+              <button
+                className="admin-action-link tree-node__add-btn"
+                type="button"
+                aria-label={`Add a unit under ${node.item.name}`}
+                title={`Add a unit under ${node.item.name}`}
+                onClick={() => setAddUnitParentId(isAdding ? null : node.item.id)}
+              >
+                +
+              </button>
+            )}
+            {canManageOrganizations && node.item.status === 'ACTIVE' && (
               <button
                 className="admin-action-link"
                 type="button"
@@ -429,7 +575,21 @@ export function HierarchyPage() {
             )}
           </div>
         </div>
-        {node.children.map(renderUnitTreeNode)}
+        {isAdding && (
+          <div style={{ paddingLeft: `${(node.depth + 1) * 1.5 + 0.5}rem` }}>
+            <InlineAddUnit
+              organizationId={node.item.organizationId}
+              parentUnitId={node.item.id}
+              pending={createUnit.isPending}
+              error={createUnit.isError ? createUnit.error : null}
+              onCancel={() => setAddUnitParentId(null)}
+              onCreate={(body) => createUnit.mutate({ id: node.item.organizationId, body: { ...body, organizationId: node.item.organizationId } }, {
+                onSuccess: () => { setUnitTreeToggled((prev) => (isNodeExpanded(node.item.id, node.depth, prev) ? prev : toggleSetMembership(prev, node.item.id))); setAddUnitParentId(null); },
+              })}
+            />
+          </div>
+        )}
+        {(expanded || isAdding) && node.children.map(renderUnitTreeNode)}
       </div>
     );
   }
@@ -437,13 +597,26 @@ export function HierarchyPage() {
   function renderAreaTreeNode(node: TreeNode<GeographicAreaResponse>) {
     const isSelected = node.item.id === effectiveAreaId;
     const isEditing = editingAreaId === node.item.id;
+    const hasChildren = node.children.length > 0;
+    const expanded = isNodeExpanded(node.item.id, node.depth, areaTreeToggled);
+    const isAdding = addAreaParentId === node.item.id;
     return (
       <div key={node.item.id} className="tree-node-wrapper">
         <div
           className={`tree-node ${isSelected ? 'tree-node--selected' : ''}`}
           style={{ paddingLeft: `${node.depth * 1.5 + 0.5}rem` }}
         >
-          <span className="tree-branch" aria-hidden="true">{node.depth > 0 ? '├─ ' : '• '}</span>
+          {hasChildren ? (
+            <button
+              type="button"
+              className="tree-node__toggle"
+              aria-expanded={expanded}
+              aria-label={expanded ? `Collapse ${node.item.name}` : `Expand ${node.item.name}`}
+              onClick={() => setAreaTreeToggled((prev) => toggleSetMembership(prev, node.item.id))}
+            >
+              {expanded ? '▾' : '▸'}
+            </button>
+          ) : <span className="tree-branch" aria-hidden="true">{node.depth > 0 ? '├─ ' : '• '}</span>}
           <div className="tree-node__info">
             <button
               type="button"
@@ -456,7 +629,18 @@ export function HierarchyPage() {
           </div>
           <div className="tree-node__actions">
             <StatusBadge tone={node.item.status === 'ACTIVE' ? 'success' : 'warning'}>{node.item.status}</StatusBadge>
-            {canManageGeography && (
+            {canManageGeography && node.item.status === 'ACTIVE' && (
+              <button
+                className="admin-action-link tree-node__add-btn"
+                type="button"
+                aria-label={`Add an area under ${node.item.name}`}
+                title={`Add an area under ${node.item.name}`}
+                onClick={() => setAddAreaParentId(isAdding ? null : node.item.id)}
+              >
+                +
+              </button>
+            )}
+            {canManageGeography && node.item.status === 'ACTIVE' && (
               <button
                 className="admin-action-link"
                 type="button"
@@ -470,7 +654,21 @@ export function HierarchyPage() {
             )}
           </div>
         </div>
-        {node.children.map(renderAreaTreeNode)}
+        {isAdding && (
+          <div style={{ paddingLeft: `${(node.depth + 1) * 1.5 + 0.5}rem` }}>
+            <InlineAddArea
+              parentAreaId={node.item.id}
+              areaTypes={areaTypes.data ?? []}
+              pending={createArea.isPending}
+              error={createArea.isError ? createArea.error : null}
+              onCancel={() => setAddAreaParentId(null)}
+              onCreate={(body) => createArea.mutate(body, {
+                onSuccess: () => { setAreaTreeToggled((prev) => (isNodeExpanded(node.item.id, node.depth, prev) ? prev : toggleSetMembership(prev, node.item.id))); setAddAreaParentId(null); },
+              })}
+            />
+          </div>
+        )}
+        {(expanded || isAdding) && node.children.map(renderAreaTreeNode)}
       </div>
     );
   }
@@ -485,7 +683,30 @@ export function HierarchyPage() {
         <p>Build and maintain the organizational units and physical territories that define operational reach.</p>
       </header>
 
-      {showOrganizationDomain && (
+      {showOrganizationDomain && showGeographyDomain && (
+        <div className="hierarchy-tabs" role="tablist" aria-label="Hierarchy domain">
+          <button
+            role="tab"
+            aria-selected={activeDomain === 'organization'}
+            className={`hierarchy-tab ${activeDomain === 'organization' ? 'hierarchy-tab--active' : ''}`}
+            type="button"
+            onClick={() => setActiveDomain('organization')}
+          >
+            Organization
+          </button>
+          <button
+            role="tab"
+            aria-selected={activeDomain === 'geography'}
+            className={`hierarchy-tab ${activeDomain === 'geography' ? 'hierarchy-tab--active' : ''}`}
+            type="button"
+            onClick={() => setActiveDomain('geography')}
+          >
+            Geographic
+          </button>
+        </div>
+      )}
+
+      {showOrganizationDomain && activeDomain === 'organization' && (
         <section className="admin-domain" aria-labelledby="organizations-title">
           <header>
             <div>
@@ -625,7 +846,29 @@ export function HierarchyPage() {
               <div className="admin-panel">
                 <header className="panel-header">
                   <h4>Units Hierarchy</h4>
+                  {canManageOrganizations && effectiveOrganizationId && (
+                    <button
+                      className="button button--secondary button--small"
+                      type="button"
+                      onClick={() => setAddUnitParentId(addUnitParentId === 'root' ? null : 'root')}
+                    >
+                      + Add root unit
+                    </button>
+                  )}
                 </header>
+
+                {addUnitParentId === 'root' && (
+                  <InlineAddUnit
+                    organizationId={effectiveOrganizationId}
+                    parentUnitId={null}
+                    pending={createUnit.isPending}
+                    error={createUnit.isError ? createUnit.error : null}
+                    onCancel={() => setAddUnitParentId(null)}
+                    onCreate={(body) => createUnit.mutate({ id: effectiveOrganizationId, body: { ...body, organizationId: effectiveOrganizationId } }, {
+                      onSuccess: () => setAddUnitParentId(null),
+                    })}
+                  />
+                )}
 
                 <label className="admin-selector">
                   Select unit
@@ -690,13 +933,15 @@ export function HierarchyPage() {
 
                     {canManageOrganizations && (
                       <div className="hierarchy-actions">
-                        <button
-                          className="button button--secondary button--small"
-                          type="button"
-                          onClick={() => setEditingUnitId((prev) => (prev === currentUnit.id ? '' : currentUnit.id))}
-                        >
-                          {editingUnitId === currentUnit.id ? 'Close edit' : 'Edit unit'}
-                        </button>
+                        {currentUnit.status === 'ACTIVE' && (
+                          <button
+                            className="button button--secondary button--small"
+                            type="button"
+                            onClick={() => setEditingUnitId((prev) => (prev === currentUnit.id ? '' : currentUnit.id))}
+                          >
+                            {editingUnitId === currentUnit.id ? 'Close edit' : 'Edit unit'}
+                          </button>
+                        )}
                         {currentUnit.status !== 'ACTIVE' && (
                           <Button
                             disabled={activateUnit.isPending}
@@ -712,7 +957,7 @@ export function HierarchyPage() {
                             itemId={currentUnit.id}
                             itemName={currentUnit.name}
                             parentLabel="New parent unit"
-                            parentOptions={unitList.map(({ id, name }) => ({ id, name }))}
+                            parentOptions={validParentOptions(unitList, currentUnit.id, (u) => u.parentUnitId).map(({ id, name }) => ({ id, name }))}
                             deactivate={(request) => api.admin.organizations.deactivateUnit(currentUnit.id, request)}
                             onSuccess={() => queryClient.invalidateQueries({ queryKey: queryKeys.admin.organizationUnitsAll })}
                           />
@@ -730,7 +975,7 @@ export function HierarchyPage() {
                       </div>
                     )}
 
-                    {editingUnitId === currentUnit.id && canManageOrganizations && (
+                    {editingUnitId === currentUnit.id && currentUnit.status === 'ACTIVE' && canManageOrganizations && (
                       <form
                         aria-label={`Edit unit ${currentUnit.name}`}
                         className="admin-form admin-form--inline"
@@ -753,11 +998,10 @@ export function HierarchyPage() {
                           Parent unit
                           <select name="parentUnitId" defaultValue={currentUnit.parentUnitId ?? ''}>
                             <option value="">No parent (Root unit)</option>
-                            {unitList
-                              .filter((u) => u.id !== currentUnit.id)
-                              .map((u) => (
-                                <option key={u.id} value={u.id}>
-                                  {u.name}
+                            {parentSelectOptions(unitList, currentUnit.id, currentUnit.parentUnitId, (u) => u.parentUnitId)
+                              .map((option) => (
+                                <option key={option.id} value={option.id}>
+                                  {option.label}
                                 </option>
                               ))}
                           </select>
@@ -851,7 +1095,7 @@ export function HierarchyPage() {
                   Parent unit
                   <select name="parentUnitId">
                     <option value="">No parent</option>
-                    {units.data?.map((unit) => (
+                    {(units.data ?? []).filter((unit) => unit.status === 'ACTIVE').map((unit) => (
                       <option key={unit.id} value={unit.id}>
                         {unit.name}
                       </option>
@@ -872,7 +1116,7 @@ export function HierarchyPage() {
         </section>
       )}
 
-      {showGeographyDomain && (
+      {showGeographyDomain && activeDomain === 'geography' && (
         <section className="admin-domain" aria-labelledby="geography-title">
           <header>
             <div>
@@ -891,7 +1135,27 @@ export function HierarchyPage() {
               <div className="admin-panel">
                 <header className="panel-header">
                   <h4>Geographic Areas Hierarchy</h4>
+                  {canManageGeography && (
+                    <button
+                      className="button button--secondary button--small"
+                      type="button"
+                      onClick={() => setAddAreaParentId(addAreaParentId === 'root' ? null : 'root')}
+                    >
+                      + Add root area
+                    </button>
+                  )}
                 </header>
+
+                {addAreaParentId === 'root' && (
+                  <InlineAddArea
+                    parentAreaId={null}
+                    areaTypes={areaTypes.data ?? []}
+                    pending={createArea.isPending}
+                    error={createArea.isError ? createArea.error : null}
+                    onCancel={() => setAddAreaParentId(null)}
+                    onCreate={(body) => createArea.mutate(body, { onSuccess: () => setAddAreaParentId(null) })}
+                  />
+                )}
 
                 <label className="admin-selector">
                   Select geographic area
@@ -952,13 +1216,15 @@ export function HierarchyPage() {
 
                     {canManageGeography && (
                       <div className="hierarchy-actions">
-                        <button
-                          className="button button--secondary button--small"
-                          type="button"
-                          onClick={() => setEditingAreaId((prev) => (prev === currentArea.id ? '' : currentArea.id))}
-                        >
-                          {editingAreaId === currentArea.id ? 'Close edit' : 'Edit area'}
-                        </button>
+                        {currentArea.status === 'ACTIVE' && (
+                          <button
+                            className="button button--secondary button--small"
+                            type="button"
+                            onClick={() => setEditingAreaId((prev) => (prev === currentArea.id ? '' : currentArea.id))}
+                          >
+                            {editingAreaId === currentArea.id ? 'Close edit' : 'Edit area'}
+                          </button>
+                        )}
                         {currentArea.status !== 'ACTIVE' && (
                           <Button
                             disabled={activateArea.isPending}
@@ -974,7 +1240,7 @@ export function HierarchyPage() {
                             itemId={currentArea.id}
                             itemName={currentArea.name}
                             parentLabel="New parent area"
-                            parentOptions={areaList.map(({ id, name }) => ({ id, name }))}
+                            parentOptions={validParentOptions(areaList, currentArea.id, (a) => a.parentAreaId).map(({ id, name }) => ({ id, name }))}
                             deactivate={(request) => api.admin.geography.deactivateArea(currentArea.id, request)}
                             onSuccess={() => queryClient.invalidateQueries({ queryKey: queryKeys.admin.geographicAreas })}
                           />
@@ -982,7 +1248,7 @@ export function HierarchyPage() {
                       </div>
                     )}
 
-                    {editingAreaId === currentArea.id && canManageGeography && (
+                    {editingAreaId === currentArea.id && currentArea.status === 'ACTIVE' && canManageGeography && (
                       <form
                         aria-label={`Edit geographic area ${currentArea.name}`}
                         className="admin-form admin-form--inline"
@@ -1011,11 +1277,10 @@ export function HierarchyPage() {
                           Parent area
                           <select name="parentAreaId" defaultValue={currentArea.parentAreaId ?? ''}>
                             <option value="">No parent (Root territory)</option>
-                            {areaList
-                              .filter((a) => a.id !== currentArea.id)
-                              .map((a) => (
-                                <option key={a.id} value={a.id}>
-                                  {a.name}
+                            {parentSelectOptions(areaList, currentArea.id, currentArea.parentAreaId, (a) => a.parentAreaId)
+                              .map((option) => (
+                                <option key={option.id} value={option.id}>
+                                  {option.label}
                                 </option>
                               ))}
                           </select>
@@ -1073,7 +1338,7 @@ export function HierarchyPage() {
                   Parent area
                   <select name="parentAreaId">
                     <option value="">No parent</option>
-                    {areas.data?.map((area) => (
+                    {(areas.data ?? []).filter((area) => area.status === 'ACTIVE').map((area) => (
                       <option key={area.id} value={area.id}>
                         {area.name}
                       </option>

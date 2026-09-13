@@ -40,7 +40,8 @@ public sealed class ConnectorTargetRepository
         t.endpoint, t.credential_reference, t.verify_tls, t.state::text AS state,
         t.rate_limit_per_second, t.rate_limit_burst,
         t.inventory_poll_seconds, t.status_poll_seconds, t.event_poll_seconds,
-        t.max_concurrent_requests, t.expected_camera_count
+        t.max_concurrent_requests, t.expected_camera_count,
+        t.last_inventory_poll_at, t.last_inventory_camera_count
         """;
 
     // The dual-dimension scope predicate, parameterised by the permission the caller exercises.
@@ -311,6 +312,36 @@ public sealed class ConnectorTargetRepository
     }
 
     /// <summary>
+    /// Flags a target for an out-of-cycle inventory refresh, scoped the same as every other
+    /// write. Does not itself call the adapter or touch the poll loops — it only sets
+    /// <c>inventory_poll_requested_at</c>; <c>TargetWorker</c>'s health loop is what notices the
+    /// flag and brings the next inventory pass forward, still through the normal
+    /// rate-limited/circuit-broken <c>CallAsync</c> path. Returns <c>false</c> when the id is
+    /// unknown or out of the caller's scope, for a 404 rather than a silent no-op.
+    /// </summary>
+    public async Task<bool> RequestInventoryPollAsync(
+        Guid id, DateTimeOffset requestedAt, CallerContext caller, UnitOfWork work,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(caller);
+        ArgumentNullException.ThrowIfNull(work);
+        caller.Require("vms.update");
+
+        var args = ScopeArgs(caller, "vms.update");
+        args.Add("id", id);
+        args.Add("RequestedAt", requestedAt);
+
+        var c = work.Connection;
+        var affected = await c.ExecuteAsync(new CommandDefinition($"""
+            UPDATE federation.connector_target
+            SET inventory_poll_requested_at = @RequestedAt
+            WHERE id = @id AND ({Scope("connector_target", "vms.update")});
+            """, args, work.Transaction, cancellationToken: ct));
+
+        return affected > 0;
+    }
+
+    /// <summary>
     /// Hard-deletes a target the caller can reach. Gated on <c>vms.delete</c>, distinct from
     /// <c>vms.update</c> — a destructive, irreversible cascade should not share a permission
     /// with routine edits (invariant: <c>camera.delete</c> is the same split for the camera
@@ -363,6 +394,8 @@ public sealed class ConnectorTargetRepository
         public int EventPollSeconds { get; init; }
         public int MaxConcurrentRequests { get; init; }
         public int? ExpectedCameraCount { get; init; }
+        public DateTimeOffset? LastInventoryPollAt { get; init; }
+        public int? LastInventoryCameraCount { get; init; }
 
         public ConnectorTarget ToDomain() => new()
         {
@@ -384,6 +417,8 @@ public sealed class ConnectorTargetRepository
             EventPollInterval = TimeSpan.FromSeconds(EventPollSeconds),
             MaxConcurrentRequests = MaxConcurrentRequests,
             ExpectedCameraCount = ExpectedCameraCount,
+            LastInventoryPollAt = LastInventoryPollAt,
+            LastInventoryCameraCount = LastInventoryCameraCount,
         };
     }
 }

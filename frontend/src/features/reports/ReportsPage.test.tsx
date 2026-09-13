@@ -71,7 +71,9 @@ describe('ReportsPage', () => {
 
     expect(await screen.findByText('12')).toBeVisible();
     expect(screen.getByText(/3 unreachable/i)).toBeVisible();
-    await user.selectOptions(await screen.findByLabelText(/coverage geographic area/i), 'c0a80101-0000-4000-8000-000000000030');
+    const areaTrigger = await screen.findByRole('combobox', { name: /coverage geographic area/i });
+    await user.click(areaTrigger);
+    await user.click(await screen.findByRole('button', { name: /^mumbai/i }));
     await user.click(screen.getByRole('button', { name: /load coverage summary/i }));
 
     expect(await screen.findByText('ACTIVE')).toBeVisible();
@@ -99,7 +101,7 @@ describe('ReportsPage', () => {
     await screen.findByText('12');
     await user.click(screen.getByRole('button', { name: /load coverage summary/i }));
 
-    const geographicArea = await screen.findByLabelText(/coverage geographic area/i);
+    const geographicArea = await screen.findByRole('combobox', { name: /coverage geographic area/i });
     expect(geographicArea).toHaveAttribute('aria-describedby', 'coverage-scope-error');
     expect(geographicArea).toHaveAttribute('aria-invalid', 'true');
     expect(screen.getByRole('alert')).toHaveAttribute('id', 'coverage-scope-error');
@@ -132,12 +134,50 @@ describe('ReportsPage', () => {
     expect(screen.getByRole('group', { name: /optional organization-unit narrowing/i })).toBeVisible();
     expect(screen.queryByLabelText(/^coverage organization$/i)).not.toBeInTheDocument();
     await user.selectOptions(screen.getByLabelText(/^organization$/i), 'c0a80101-0000-4000-8000-000000000001');
-    expect(await screen.findByRole('option', { name: /north unit/i })).toBeVisible();
-    await user.selectOptions(screen.getByLabelText(/coverage organization unit/i), 'c0a80101-0000-4000-8000-000000000010');
+    const unitTrigger = await screen.findByRole('combobox', { name: /coverage organization unit/i });
+    await user.click(unitTrigger);
+    await user.click(await screen.findByRole('button', { name: /^north unit/i }));
     await user.click(screen.getByRole('button', { name: /load coverage summary/i }));
 
     expect(screen.getByRole('alert')).toHaveTextContent(/select a geographic area/i);
     expect(fetch.mock.calls.map(([input]) => String(input))).not.toContainEqual(expect.stringContaining('/api/v1/gis/coverage'));
+  });
+
+  it('shows the full fleet summary including VMS target counts', async () => {
+    signIn();
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/api/v1/overview') return Response.json({
+        targets: 10, activeTargets: 8, quarantinedTargets: 2, cameras: 12, unreachableCameras: 3,
+      });
+      if (url.pathname === '/api/v1/organizations' || url.pathname === '/api/v1/geographic-areas') return Response.json(pageEnvelope([]));
+      return new Response(null, { status: 404 });
+    });
+
+    renderApp('/reports');
+
+    expect(await screen.findByText('12')).toBeVisible();
+    expect(screen.getByText('8 / 10')).toBeVisible();
+    expect(screen.getByText('2')).toBeVisible();
+  });
+
+  it('does not let a fleet-summary permission failure block the coverage report', async () => {
+    signIn();
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/api/v1/overview') {
+        return Response.json({ type: 'about:blank', title: 'Forbidden', status: 403, detail: "This action requires the 'vms.read' permission." }, { status: 403 });
+      }
+      if (url.pathname === '/api/v1/organizations' || url.pathname === '/api/v1/geographic-areas') return Response.json(pageEnvelope([]));
+      return new Response(null, { status: 404 });
+    });
+
+    renderApp('/reports');
+
+    expect(await screen.findByText(/vms.read/i)).toBeVisible();
+    expect(screen.getByRole('button', { name: /retry fleet summary/i })).toBeVisible();
+    expect(await screen.findByRole('combobox', { name: /coverage geographic area/i })).toBeVisible();
+    expect(screen.getByRole('heading', { name: /coverage summary/i })).toBeVisible();
   });
 
   it('uses an organization unit only to narrow a selected geographic boundary', async () => {
@@ -166,8 +206,12 @@ describe('ReportsPage', () => {
 
     await screen.findByText('12');
     await user.selectOptions(screen.getByLabelText(/^organization$/i), 'c0a80101-0000-4000-8000-000000000001');
-    await user.selectOptions(await screen.findByLabelText(/coverage organization unit/i), 'c0a80101-0000-4000-8000-000000000010');
-    await user.selectOptions(screen.getByLabelText(/coverage geographic area/i), 'c0a80101-0000-4000-8000-000000000030');
+    const unitTrigger = await screen.findByRole('combobox', { name: /coverage organization unit/i });
+    await user.click(unitTrigger);
+    await user.click(await screen.findByRole('button', { name: /^north unit/i }));
+    const areaTrigger = await screen.findByRole('combobox', { name: /coverage geographic area/i });
+    await user.click(areaTrigger);
+    await user.click(await screen.findByRole('button', { name: /^mumbai/i }));
     await user.click(screen.getByRole('button', { name: /load coverage summary/i }));
 
     await waitFor(() => expect(fetch.mock.calls.map(([input]) => String(input))).toContainEqual(expect.stringMatching(

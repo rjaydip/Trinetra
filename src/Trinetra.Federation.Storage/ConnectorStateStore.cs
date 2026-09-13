@@ -205,6 +205,80 @@ public sealed class ConnectorStateStore
         await using var transaction = await connection
             .BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
 
+        var affected = await MergeCamerasAsync(connection, transaction, cameras, cancellationToken)
+            .ConfigureAwait(false);
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+
+        return affected;
+    }
+
+    /// <summary>
+    /// Upserts the camera inventory reported by a target's <b>inventory loop specifically</b>,
+    /// and — in the same transaction — stamps <c>connector_target.last_inventory_poll_at</c> /
+    /// <c>last_inventory_camera_count</c>.
+    /// </summary>
+    /// <remarks>
+    /// Distinct from <see cref="UpsertCamerasAsync"/>, which the status loop keeps using
+    /// unchanged: that method has no target id and writes only <c>federated_camera</c>, so it
+    /// cannot answer "when did inventory last actually re-enumerate". A zero-camera result
+    /// still stamps the target — a poll that ran and (correctly or not) found nothing is itself
+    /// a freshness signal — but skips the merge/COPY machinery entirely, matching
+    /// <see cref="UpsertCamerasAsync"/>'s short-circuit.
+    /// </remarks>
+    public async Task<int> UpsertInventoryAsync(
+        Guid targetId, IReadOnlyCollection<FederatedCamera> cameras,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(cameras);
+
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        await using var transaction = await connection
+            .BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+
+        var affected = cameras.Count == 0
+            ? 0
+            : await MergeCamerasAsync(connection, transaction, cameras, cancellationToken)
+                .ConfigureAwait(false);
+
+        await connection.ExecuteAsync(new CommandDefinition("""
+            UPDATE federation.connector_target
+            SET last_inventory_poll_at = now(),
+                last_inventory_camera_count = @CameraCount
+            WHERE id = @TargetId;
+            """, new { TargetId = targetId, CameraCount = cameras.Count },
+            transaction: transaction, cancellationToken: cancellationToken))
+            .ConfigureAwait(false);
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+
+        return affected;
+    }
+
+    /// <summary>The operator-requested inventory-refresh flag, or null if none is pending.</summary>
+    public async Task<DateTimeOffset?> GetInventoryPollRequestedAtAsync(
+        Guid targetId, CancellationToken cancellationToken)
+    {
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        return await connection.ExecuteScalarAsync<DateTimeOffset?>(new CommandDefinition("""
+            SELECT inventory_poll_requested_at FROM federation.connector_target
+            WHERE id = @TargetId;
+            """, new { TargetId = targetId }, cancellationToken: cancellationToken))
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The COPY-and-merge that both <see cref="UpsertCamerasAsync"/> and
+    /// <see cref="UpsertInventoryAsync"/> share, run inside a transaction the caller owns.
+    /// </summary>
+    private static async Task<int> MergeCamerasAsync(
+        NpgsqlConnection connection, NpgsqlTransaction transaction,
+        IReadOnlyCollection<FederatedCamera> cameras, CancellationToken cancellationToken)
+    {
         await using (var create = new NpgsqlCommand("""
             CREATE TEMP TABLE staged_camera (
                 ordinal              INT     NOT NULL,
@@ -300,13 +374,9 @@ public sealed class ConnectorStateStore
                 updated_at = now();
             """;
 
-        var affected = await connection.ExecuteAsync(new CommandDefinition(
+        return await connection.ExecuteAsync(new CommandDefinition(
             merge, transaction: transaction, cancellationToken: cancellationToken))
             .ConfigureAwait(false);
-
-        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-
-        return affected;
     }
 
     /// <summary>Writes a value, or NULL when it has none.</summary>

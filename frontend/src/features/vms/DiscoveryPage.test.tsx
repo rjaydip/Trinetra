@@ -24,11 +24,11 @@ const area = geographicAreaFixture({ id: areaId });
 const vms = vmsFixture({ id: vmsId, code: 'NVR-001', organizationUnitId, geographicAreaId: areaId });
 const cameras: FederatedCameraResponse[] = [{
   nativeCameraId: 'CAM-07', cameraId: null, name: 'Gate 7', vendorModel: 'IPC-HFW1230S', firmware: '2.8',
-  isEnabled: true, isRecording: true, health: 'ONLINE', lastSeen: '2026-09-04T10:00:00Z',
+  isEnabled: true, isRecording: true, health: 'Healthy', lastSeen: '2026-09-04T10:00:00Z',
   streamReferences: ['rtsp://stream/7'], statusChangedAt: '2026-09-04T09:30:00Z',
 }, {
   nativeCameraId: 'CAM-08', cameraId: null, name: 'Gate 8', vendorModel: 'IPC-HFW1230S', firmware: '2.8',
-  isEnabled: true, isRecording: false, health: 'DEGRADED', lastSeen: null,
+  isEnabled: true, isRecording: false, health: 'Degraded', lastSeen: null,
   streamReferences: ['rtsp://stream/8'], statusChangedAt: null,
 }];
 
@@ -49,6 +49,9 @@ function apiHandler(requests: Array<{ path: string; method: string; body?: unkno
     requests.push({ path: `${url.pathname}${url.search}`, method, body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined });
     if (url.pathname === `/api/v1/vms/${vmsId}`) return Response.json(target);
     if (url.pathname === `/api/v1/vms/${vmsId}/cameras`) return Response.json(discoveredCameras);
+    if (url.pathname.startsWith(`/api/v1/vms/${vmsId}/cameras/`) && url.pathname.endsWith('/status-history')) {
+      return Response.json({ nativeCameraId: url.pathname.split('/')[6], from: '', to: '', changes: [] });
+    }
     if (url.pathname === '/api/v1/organizations') return Response.json(pageEnvelope([organization]));
     if (url.pathname === `/api/v1/organizations/${organizationId}/units`) return Response.json(pageEnvelope([organizationUnit]));
     if (url.pathname === '/api/v1/geographic-areas') return Response.json(pageEnvelope([area]));
@@ -80,8 +83,12 @@ function DiscoveryRouteSwitcher() {
 
 async function completeGate7(user: ReturnType<typeof userEvent.setup>) {
   await user.selectOptions(screen.getByLabelText(/^organization for gate 7$/i), organizationId);
-  await user.selectOptions(await screen.findByLabelText(/^organization unit for gate 7$/i), organizationUnitId);
-  await user.selectOptions(screen.getByLabelText(/^geographic area for gate 7$/i), areaId);
+  const unitTrigger = await screen.findByRole('combobox', { name: /^organization unit for gate 7$/i });
+  await user.click(unitTrigger);
+  await user.click(await screen.findByRole('button', { name: /^north unit/i }));
+  const areaTrigger = screen.getByRole('combobox', { name: /^geographic area for gate 7$/i });
+  await user.click(areaTrigger);
+  await user.click(await screen.findByRole('button', { name: new RegExp(`^${area.name}`, 'i') }));
   await user.selectOptions(screen.getByLabelText(/^camera type for gate 7$/i), 'FIXED');
   await user.type(screen.getByLabelText(/^latitude for gate 7$/i), '19.076012345');
   await user.type(screen.getByLabelText(/^longitude for gate 7$/i), '72.877700049');
@@ -235,7 +242,7 @@ describe('DiscoveryPage', () => {
     expect(name).toHaveAttribute('aria-describedby', error.id);
   });
 
-  it('keeps one enrichment panel expanded at a time', async () => {
+  it('expands each row independently rather than closing others', async () => {
     const requests: Array<{ path: string; method: string; body?: unknown }> = [];
     const user = userEvent.setup();
     renderDiscoveryPage(requests);
@@ -244,6 +251,10 @@ describe('DiscoveryPage', () => {
     expect(screen.getByRole('region', { name: /onboarding details for gate 7/i })).toBeVisible();
     await user.click(screen.getByRole('checkbox', { name: /gate 8/i }));
 
+    expect(screen.getByRole('region', { name: /onboarding details for gate 7/i })).toBeVisible();
+    expect(screen.getByRole('region', { name: /onboarding details for gate 8/i })).toBeVisible();
+
+    await user.click(screen.getByRole('button', { name: /hide onboarding details for gate 7/i }));
     expect(screen.queryByRole('region', { name: /onboarding details for gate 7/i })).not.toBeInTheDocument();
     expect(screen.getByRole('region', { name: /onboarding details for gate 8/i })).toBeVisible();
   });

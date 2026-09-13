@@ -53,6 +53,24 @@ it('lists provisioned keys without exposing key material', async () => {
   expect(document.body).not.toHaveTextContent(/rawKey/i);
 });
 
+it('shows an error when revoking a key fails', async () => {
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input));
+    if (url.pathname === `/api/v1/api-keys/${keyId}` && init?.method === 'DELETE') {
+      return Response.json({ title: 'Not found', detail: 'The API key is outside your reach.' }, { status: 404 });
+    }
+    if (url.pathname === '/api/v1/api-keys') return Response.json({ items: [apiKey], page: 1, pageSize: 20, total: 1, totalPages: 1 });
+    if (url.pathname === '/api/v1/access-groups') return Response.json([group]);
+    return new Response(null, { status: 404 });
+  }));
+
+  renderKeys(['apikey.read', 'apikey.manage']);
+
+  await userEvent.click(await screen.findByRole('button', { name: /revoke/i }));
+
+  expect(await screen.findByText(/outside your reach/i)).toBeVisible();
+});
+
 it('provisions a key through the selected access group and shows the raw value once', async () => {
   const requests: Array<{ path: string; method: string; body?: Record<string, unknown> }> = [];
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {

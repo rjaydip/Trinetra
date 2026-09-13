@@ -129,6 +129,24 @@ public sealed class FederationQueryRepository
         return [.. rows];
     }
 
+    /// <summary>
+    /// Whether the circuit breaker was open as of the most recent health observation, or
+    /// <c>false</c> if none has been recorded yet. Used by <c>POST /vms/{id}/poll-inventory</c>
+    /// so the caller knows immediately whether a forced refresh will actually run soon or is
+    /// queued behind an open breaker.
+    /// </summary>
+    public async Task<bool> LatestCircuitOpenAsync(Guid targetId, CancellationToken ct)
+    {
+        await using var c = await _dataSource.OpenConnectionAsync(ct);
+
+        return await c.ExecuteScalarAsync<bool?>(new CommandDefinition("""
+            SELECT circuit_open FROM federation.connector_health
+            WHERE target_id = @targetId
+            ORDER BY checked_at DESC
+            LIMIT 1;
+            """, new { targetId }, cancellationToken: ct)) ?? false;
+    }
+
     /// <summary>The stored capability matrix, never a live probe.</summary>
     /// <remarks>
     /// At 80,000 cameras, letting a page render trigger probes turns one dashboard load into

@@ -1,6 +1,8 @@
 import type { ChangeEvent } from 'react';
 
+import { OrganizationUnitFilter } from '../cameras/OrganizationUnitFilter';
 import type { MapFilters as MapFiltersValue } from './geo';
+import './map.css';
 
 export function MapFilters({ filters, onChange }: { filters: MapFiltersValue; onChange(filters: MapFiltersValue): void }) {
   const textField = (field: keyof MapFiltersValue) => (event: ChangeEvent<HTMLInputElement>) => {
@@ -11,10 +13,10 @@ export function MapFilters({ filters, onChange }: { filters: MapFiltersValue; on
   return (
     <fieldset className="map-filters">
       <legend>Map filters</legend>
-      <label>
-        Organization unit ID
-        <input value={filters.organizationUnitId ?? ''} onChange={textField('organizationUnitId')} />
-      </label>
+      <OrganizationUnitFilter
+        organizationUnitId={filters.organizationUnitId}
+        onChange={(organizationUnitId) => onChange({ ...filters, organizationUnitId })}
+      />
       <label>
         Operational status
         <input value={filters.operationalStatus ?? ''} onChange={textField('operationalStatus')} />

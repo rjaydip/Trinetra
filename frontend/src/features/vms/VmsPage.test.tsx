@@ -77,6 +77,11 @@ function renderVmsForm() {
   return onSubmit;
 }
 
+async function selectTreeOption(user: ReturnType<typeof userEvent.setup>, label: RegExp, optionName: RegExp) {
+  await user.click(screen.getByLabelText(label));
+  await user.click(await screen.findByRole('button', { name: optionName }));
+}
+
 async function fillBoundedVmsForm(user: ReturnType<typeof userEvent.setup>, values: {
   code: string;
   displayName: string;
@@ -85,11 +90,13 @@ async function fillBoundedVmsForm(user: ReturnType<typeof userEvent.setup>, valu
 }) {
   fireEvent.change(screen.getByLabelText(/vms code/i), { target: { value: values.code } });
   fireEvent.change(screen.getByLabelText(/display name/i), { target: { value: values.displayName } });
-  await user.selectOptions(screen.getByLabelText(/^organization$/i), organizationId);
-  await user.selectOptions(screen.getByLabelText(/organization unit/i), organizationUnitId);
+  await user.selectOptions(screen.getByLabelText(/^protocol/i), 'RTSP');
+  fireEvent.change(screen.getByLabelText(/^ip address/i), { target: { value: '10.0.0.8' } });
+  fireEvent.change(screen.getByLabelText(/^port/i), { target: { value: '554' } });
+  await user.click(screen.getByRole('button', { name: /continue to vms details/i }));
   await user.selectOptions(screen.getByLabelText(/^vendor/i), 'DahuaCgi');
-  fireEvent.change(screen.getByLabelText(/^endpoint/i), { target: { value: 'https://nvr.example.test' } });
-  fireEvent.change(screen.getByLabelText(/credential reference/i), { target: { value: 'vms/north-nvr' } });
+  await user.selectOptions(screen.getByLabelText(/^organization$/i), organizationId);
+  await selectTreeOption(user, /^organization unit/i, /north unit/i);
   await user.click(screen.getByRole('button', { name: /connection tuning/i }));
   fireEvent.change(screen.getByLabelText(/inventory poll seconds/i), { target: { value: values.inventoryPollSeconds } });
   fireEvent.change(screen.getByLabelText(/status poll seconds/i), { target: { value: values.statusPollSeconds } });
@@ -128,6 +135,10 @@ describe('VmsPage', () => {
 
     expect(screen.getByLabelText(/vms code/i)).toHaveAttribute('maxlength', '100');
     expect(screen.getByLabelText(/display name/i)).toHaveAttribute('maxlength', '255');
+    await user.selectOptions(screen.getByLabelText(/^protocol/i), 'RTSP');
+    fireEvent.change(screen.getByLabelText(/^ip address/i), { target: { value: '10.0.0.8' } });
+    fireEvent.change(screen.getByLabelText(/^port/i), { target: { value: '554' } });
+    await user.click(screen.getByRole('button', { name: /continue to vms details/i }));
     await user.click(screen.getByRole('button', { name: /connection tuning/i }));
     expect(screen.getByLabelText(/inventory poll seconds/i)).toHaveAttribute('min', '30');
     expect(screen.getByLabelText(/status poll seconds/i)).toHaveAttribute('min', '5');
@@ -149,7 +160,7 @@ describe('VmsPage', () => {
       displayName: 'N'.repeat(255),
       inventoryPollSeconds: 30,
       statusPollSeconds: 5,
-    })));
+    }), expect.anything()));
   });
 
   it.each([
@@ -217,6 +228,7 @@ describe('VmsPage', () => {
       if (path === `/api/v1/organizations/${organizationId}/units`) return Response.json(pageEnvelope([organizationUnit]));
       if (path === '/api/v1/geographic-areas') return Response.json(pageEnvelope([area]));
       if (path === '/api/v1/vms' && init?.method === 'POST') return Response.json({ id: vmsId }, { status: 201 });
+      if (path === `/api/v1/vms/${vmsId}/credential` && init?.method === 'PUT') return Response.json({ credentialReference: 'vms/north-nvr', updatedAt: '2026-09-04T10:30:00Z' });
       if (path === '/api/v1/vms') return Response.json({ items: [], page: 1, pageSize: 20, total: 0, totalPages: 0 });
       return new Response(null, { status: 404 });
     }));
@@ -226,12 +238,16 @@ describe('VmsPage', () => {
 
     await user.type(await screen.findByLabelText(/vms code/i), ' NORTH-NVR ');
     await user.type(screen.getByLabelText(/display name/i), ' North NVR ');
-    await user.selectOptions(screen.getByLabelText(/^organization$/i), organizationId);
-    await user.selectOptions(await screen.findByLabelText(/organization unit/i), organizationUnitId);
-    await user.selectOptions(screen.getByLabelText(/^geographic area/i), areaId);
+    await user.selectOptions(screen.getByLabelText(/^protocol/i), 'RTSP');
+    await user.type(screen.getByLabelText(/^ip address/i), '10.0.0.8');
+    await user.type(screen.getByLabelText(/^port/i), '554');
+    await user.type(screen.getByLabelText(/^username/i), 'operator');
+    await user.type(screen.getByLabelText(/^password/i), 'north-nvr-secret');
+    await user.click(screen.getByRole('button', { name: /continue to vms details/i }));
     await user.selectOptions(screen.getByLabelText(/^vendor/i), 'DahuaCgi');
-    await user.type(screen.getByLabelText(/^endpoint/i), ' https://nvr.example.test ');
-    await user.type(screen.getByLabelText(/credential reference/i), ' vms/north-nvr ');
+    await user.selectOptions(screen.getByLabelText(/^organization$/i), organizationId);
+    await selectTreeOption(user, /^organization unit/i, /north unit/i);
+    await selectTreeOption(user, /^geographic area/i, /headquarters/i);
     await user.click(screen.getByRole('button', { name: /connection tuning/i }));
     await user.type(screen.getByLabelText(/rate limit per second/i), '2.5');
     await user.type(screen.getByLabelText(/inventory poll seconds/i), '600');
@@ -246,14 +262,44 @@ describe('VmsPage', () => {
       geographicAreaId: areaId,
       displayName: 'North NVR',
       vendor: 'DahuaCgi',
-      endpoint: 'https://nvr.example.test',
-      credentialReference: 'vms/north-nvr',
+      endpoint: 'rtsp://10.0.0.8:554',
       verifyTls: true,
       rateLimitPerSecond: 2.5,
       inventoryPollSeconds: 600,
       expectedCameraCount: 24,
     }));
-    expect(await screen.findByRole('link', { name: /continue to credentials/i })).toHaveAttribute('href', `/vms/${vmsId}`);
+    const credentialSave = await waitFor(() => requests.find((request) => request.path === `/api/v1/vms/${vmsId}/credential` && request.method === 'PUT')!);
+    expect(credentialSave.body).toEqual(expect.objectContaining({ username: 'operator', password: 'north-nvr-secret' }));
+    expect(await screen.findByRole('link', { name: /view the new integration/i })).toHaveAttribute('href', `/vms/${vmsId}`);
+  });
+
+  it('requests an inventory refresh and shows the last refreshed timestamp', async () => {
+    const refreshedVms = { ...vms, lastInventoryPollAt: '2026-09-10T08:00:00Z', lastInventoryCameraCount: 42 };
+    let pollRequests = 0;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = new URL(String(input)).pathname;
+      if (path === `/api/v1/vms/${vmsId}` && (!init?.method || init.method === 'GET')) {
+        return Response.json(pollRequests > 0 ? refreshedVms : vms);
+      }
+      if (path === `/api/v1/vms/${vmsId}/poll-inventory` && init?.method === 'POST') {
+        pollRequests += 1;
+        return Response.json({ targetId: vmsId, requestedAt: '2026-09-13T09:00:00Z', circuitOpen: false }, { status: 202 });
+      }
+      if (path === `/api/v1/vms/${vmsId}/credential/status`) return Response.json({ reference: 'vms/north-nvr', exists: false });
+      return new Response(null, { status: 404 });
+    }));
+    saveSession(sessionFixture('vms-inventory-user', ['vms.read', 'vms.update']));
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const user = userEvent.setup();
+
+    render(<MemoryRouter initialEntries={[`/vms/${vmsId}`]}><AuthProvider><QueryClientProvider client={queryClient}><Routes><Route path="/vms/:vmsId" element={<VmsPage />} /></Routes></QueryClientProvider></AuthProvider></MemoryRouter>);
+
+    expect(await screen.findByText(/inventory has not been refreshed yet/i)).toBeVisible();
+    await user.click(screen.getByRole('button', { name: /refresh inventory now/i }));
+
+    expect(await screen.findByText(/inventory refresh requested/i)).toBeVisible();
+    expect(await screen.findByText(/inventory last refreshed.*42 cameras reported/i)).toBeVisible();
+    expect(pollRequests).toBe(1);
   });
 
   it('clears target-local secrets and status when the detail route changes', async () => {

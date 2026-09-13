@@ -66,3 +66,20 @@ it('retires a worker record for worker.manage users', async () => {
 
   expect(requests.some((request) => request.path === `/api/v1/worker-health/${workerRecordId}` && request.method === 'DELETE')).toBe(true);
 });
+
+it('shows an error when retiring a worker record fails', async () => {
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = new URL(String(input)).pathname;
+    if (path === `/api/v1/worker-health/${workerRecordId}` && init?.method === 'DELETE') {
+      return Response.json({ title: 'Not found', detail: 'That worker record no longer exists.' }, { status: 404 });
+    }
+    if (path === '/api/v1/worker-health') return Response.json({ items: [liveWorker], page: 1, pageSize: 20, total: 1, totalPages: 1 });
+    return new Response(null, { status: 404 });
+  }));
+
+  renderWorkers(['worker.read', 'worker.manage']);
+
+  await userEvent.click(await screen.findByRole('button', { name: /retire/i }));
+
+  expect(await screen.findByText(/that worker record no longer exists/i)).toBeVisible();
+});

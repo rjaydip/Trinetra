@@ -175,6 +175,59 @@ describe('RolesPage role catalogue maintenance', () => {
     });
   });
 
+  it('does not offer role management to a group.manage-only user, since it grants nothing on roles', async () => {
+    vi.stubGlobal('fetch', rolesFetch());
+    renderRolesPage(['group.manage']);
+
+    expect((await screen.findAllByText('Viewer')).length).toBeGreaterThan(0);
+    expect(screen.queryByRole('button', { name: /create custom role/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /edit role/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /deactivate role/i })).not.toBeInTheDocument();
+  });
+
+  it('uppercases a lowercase role code before submitting', async () => {
+    const fetch = rolesFetch();
+    vi.stubGlobal('fetch', fetch);
+    const user = userEvent.setup();
+    renderRolesPage(['role.manage']);
+
+    await user.click(await screen.findByRole('button', { name: /create custom role/i }));
+    const form = await screen.findByRole('form', { name: /create custom role/i });
+    await user.type(within(form).getByLabelText(/role code/i), 'dispatch_lead');
+    await user.type(within(form).getByLabelText(/display name/i), 'Dispatch Lead');
+    await user.click(within(form).getByRole('button', { name: /create role/i }));
+
+    await waitFor(() => {
+      const postCalls = fetch.mock.calls.filter(([input, init]) => (
+        String(input).includes('/api/v1/roles') && (init as RequestInit | undefined)?.method === 'POST'
+      ));
+      expect(postCalls.length).toBe(1);
+      expect(JSON.parse(String((postCalls[0][1] as RequestInit).body)).code).toBe('DISPATCH_LEAD');
+    });
+  });
+
+  it('shows an error when deactivating a role fails', async () => {
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname === `/api/v1/roles/${customRoleId}` && init?.method === 'DELETE') {
+        return Response.json({ title: 'Role is in use', detail: 'An access group still references this role.' }, { status: 409 });
+      }
+      if (url.pathname === '/api/v1/roles') return Response.json(mockRoles);
+      if (url.pathname === `/api/v1/roles/${customRoleId}`) return Response.json({ ...mockRoles[1], status: 'ACTIVE' });
+      if (url.pathname === '/api/v1/permissions') return Response.json(mockPermissions);
+      return new Response(null, { status: 404 });
+    });
+    const user = userEvent.setup();
+    renderRolesPage(['role.manage']);
+
+    const viewButtons = await screen.findAllByRole('button', { name: /view details/i });
+    await user.click(viewButtons[1]);
+
+    await user.click(await screen.findByRole('button', { name: /deactivate role/i }));
+
+    expect(await screen.findByText(/an access group still references this role/i)).toBeVisible();
+  });
+
   it('allows activating a draft role', async () => {
     const fetch = rolesFetch();
     vi.stubGlobal('fetch', fetch);

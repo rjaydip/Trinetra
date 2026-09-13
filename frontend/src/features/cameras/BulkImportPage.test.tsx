@@ -20,7 +20,7 @@ function signIn() {
 async function uploadJson(name: string, items: unknown[]) {
   const user = userEvent.setup();
   const file = new File([JSON.stringify({ mode: 'insert', items })], name, { type: 'application/json' });
-  await user.upload(screen.getByLabelText(/import JSON file/i), file);
+  await user.upload(await screen.findByLabelText(/import JSON file/i), file);
   return user;
 }
 
@@ -39,7 +39,7 @@ describe('BulkImportPage', () => {
     const user = userEvent.setup();
 
     renderApp('/cameras/import');
-    await user.click(screen.getByRole('button', { name: /download JSON template/i }));
+    await user.click(await screen.findByRole('button', { name: /download JSON template/i }));
 
     expect(createObjectURL).toHaveBeenCalledWith(expect.any(Blob));
     expect(click).toHaveBeenCalled();
@@ -91,7 +91,7 @@ describe('BulkImportPage', () => {
     vi.stubGlobal('fetch', fetch);
     renderApp('/cameras/import');
     const user = userEvent.setup({ applyAccept: false });
-    await user.upload(screen.getByLabelText(/import JSON file/i), new File(['cameraCode,name'], 'cameras.csv', { type: 'text/csv' }));
+    await user.upload(await screen.findByLabelText(/import JSON file/i), new File(['cameraCode,name'], 'cameras.csv', { type: 'text/csv' }));
 
     expect(await screen.findByText(/select a \.json file/i)).toBeVisible();
     expect(fetch).not.toHaveBeenCalled();

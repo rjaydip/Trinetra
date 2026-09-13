@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Trinetra.Federation.Runtime;
 
 namespace Trinetra.Federation.Api.Contracts;
 
@@ -34,6 +35,7 @@ public sealed record CameraWriteRequest(
     string? StreamReference = null,
     string? CredentialReference = null,
     DateOnly? InstallationDate = null,
+    bool RecordEvents = true,
     string? OperationalStatus = null,
     string? ConnectivityStatus = null,
     string? MaintenanceStatus = null);
@@ -65,6 +67,7 @@ public sealed record CameraResponse(
     string? StreamReference,
     string? CredentialReference,
     DateOnly? InstallationDate,
+    bool RecordEvents,
     string OperationalStatus,
     string ConnectivityStatus,
     string MaintenanceStatus,
@@ -226,6 +229,32 @@ public sealed record ReconcileRequest(
 public sealed record ReconcileResponse(
     Guid CameraId, Guid TargetId, string NativeCameraId, Guid? VmsId);
 
+// ---- Standalone reachability probe (pre-save) -----------------------
+
+/// <summary>
+/// What to test — host:port reachability only. No camera id (the camera may not exist yet as a
+/// row) and no credential (this never authenticates).
+/// </summary>
+public sealed record CameraConnectionTestRequest(string Protocol, string IpAddress, int Port);
+
+/// <summary>Accepted a reachability test; poll <see cref="StatusUrl"/> for the result.</summary>
+public sealed record CameraConnectionTestAccepted(Guid TestId, string Status, string StatusUrl);
+
+/// <summary>A camera reachability test as stored. <see cref="Result"/> is
+/// <see cref="CameraReachabilityReport"/> (Trinetra.Federation.Runtime) — deliberately narrow: a
+/// plain TCP connect either opened within the timeout or it did not, with no vendor smarts to
+/// report capabilities, camera counts or authentication outcomes.</summary>
+public sealed record CameraConnectionTestResult(
+    Guid Id,
+    string Protocol,
+    string IpAddress,
+    int Port,
+    string Status,
+    DateTimeOffset RequestedAt,
+    DateTimeOffset? CompletedAt,
+    string? FailureReason,
+    CameraReachabilityReport? Result);
+
 /// <summary>Create a registry camera from an unreconciled federated row and link it in one call.</summary>
 public sealed record CreateFromFederatedRequest(
     Guid TargetId,
@@ -242,3 +271,33 @@ public sealed record CreateFromFederatedRequest(
     double? EffectiveRange = null,
     bool AdoptStreamReference = true,
     bool AdoptVmsId = true);
+
+// ---- Authenticated credential test (post-save) -----------------------
+
+/// <summary>Accepted a credential test; poll <see cref="StatusUrl"/> for the result.</summary>
+public sealed record CameraCredentialTestAccepted(Guid TestId, string Status, string StatusUrl);
+
+/// <summary>An authenticated camera credential test as stored. <see cref="Result"/> is
+/// <see cref="CameraCredentialTestReport"/> (Trinetra.Federation.Runtime) — an
+/// <c>authOutcome</c> of <c>authenticated</c> or <c>credential_rejected</c> means a real
+/// protocol-appropriate handshake ran; <c>not_verifiable</c> means only reachability was
+/// checked, honestly reported as such rather than silently skipped.</summary>
+public sealed record CameraCredentialTestResult(
+    Guid Id,
+    Guid CameraId,
+    string Protocol,
+    string IpAddress,
+    int Port,
+    string Status,
+    DateTimeOffset RequestedAt,
+    DateTimeOffset? CompletedAt,
+    string? FailureReason,
+    CameraCredentialTestReport? Result);
+
+/// <summary>One entry in a camera's credential-test history.</summary>
+public sealed record CameraCredentialTestSummary(
+    Guid Id,
+    string Status,
+    DateTimeOffset RequestedAt,
+    DateTimeOffset? CompletedAt,
+    string? FailureReason);

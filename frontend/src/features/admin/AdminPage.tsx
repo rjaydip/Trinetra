@@ -4,6 +4,7 @@ import { Link, NavLink, Outlet, useLocation } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthProvider';
 import { hasPermission } from '../../auth/permissions';
 import { PageState } from '../../components/ui';
+import './admin.css';
 
 export const supportedAdminReadPermissions = [
   'organization.read', 'geography.read', 'group.read', 'user.read', 'apikey.read', 'worker.read', 'alert.read',

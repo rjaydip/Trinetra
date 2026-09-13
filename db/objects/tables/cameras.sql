@@ -1,6 +1,7 @@
 --
 -- Name: cameras; Type: TABLE; Schema: federation; Owner: -
 -- Added: v1.6 (Centralised CCTV Registry & GIS Mapping)
+-- record_events added: v1.16
 --
 
 CREATE TABLE federation.cameras (
@@ -40,6 +41,7 @@ CREATE TABLE federation.cameras (
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     created_by uuid NOT NULL,
     updated_by uuid NOT NULL,
+    record_events boolean DEFAULT true NOT NULL,
     CONSTRAINT ck_cameras_retire_consistent CHECK (((maintenance_status = 'RETIRED'::text) = (deleted_at IS NOT NULL))),
     CONSTRAINT cameras_latitude_check CHECK (((latitude >= ('-90'::integer)::numeric) AND (latitude <= (90)::numeric))),
     CONSTRAINT cameras_longitude_check CHECK (((longitude >= ('-180'::integer)::numeric) AND (longitude <= (180)::numeric))),

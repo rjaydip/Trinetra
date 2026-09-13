@@ -75,10 +75,12 @@ it('preserves entered camera values while organization units fail and retry', as
   unitsUnavailable = false;
   await user.click(screen.getByRole('button', { name: /retry organization units/i }));
 
-  expect(await screen.findByRole('option', { name: /north unit/i })).toBeVisible();
+  const organizationUnitTrigger = await screen.findByLabelText(/^organization unit/i);
+  expect(organizationUnitTrigger).toBeEnabled();
+  await user.click(organizationUnitTrigger);
+  expect(await screen.findByRole('button', { name: /north unit/i })).toBeVisible();
   expect(screen.getByLabelText(/camera code/i)).toHaveValue('CAM-PRESERVED');
   expect(screen.getByLabelText(/^name/i)).toHaveValue('Preserved camera');
-  expect(screen.getByLabelText(/^organization unit/i)).toBeEnabled();
 });
 
 it('explains why organization and organization-unit selectors are unavailable when results are empty', async () => {

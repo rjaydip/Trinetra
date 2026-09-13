@@ -8,6 +8,8 @@ import { queryKeys } from '../../api/queryKeys';
 import { PageState, StatusBadge } from '../../components/ui';
 import { CameraDetailSections } from './CameraDetailSections';
 import { CameraHealthHistory } from './CameraHealthHistory';
+import { statusTone } from './statusTone';
+import './cameras.css';
 
 function dateTime(value: string | null) {
   return value ? new Date(value).toLocaleString() : 'Not recorded';
@@ -45,7 +47,7 @@ export function CameraDetailPage() {
       <section aria-labelledby="camera-health-heading" className="detail-panel"><h2 id="camera-health-heading">Health</h2>
         {health.isPending && <p aria-live="polite">Loading health information…</p>}
         {health.isError && <p role="status">{unavailable(health.error, 'Health information')}</p>}
-        {health.data && <dl><div><dt>Operational</dt><dd>{health.data.operationalStatus}</dd></div><div><dt>Connectivity</dt><dd>{health.data.connectivityStatus}</dd></div><div><dt>Last seen</dt><dd>{dateTime(health.data.lastSeenAt)}</dd></div><div><dt>Last checked</dt><dd>{dateTime(health.data.lastHealthCheckAt)}</dd></div>{health.data.failureReason && <div><dt>Failure reason</dt><dd>{health.data.failureReason}</dd></div>}</dl>}
+        {health.data && <dl><div><dt>Operational</dt><dd><StatusBadge tone={statusTone(health.data.operationalStatus)}>{health.data.operationalStatus}</StatusBadge></dd></div><div><dt>Connectivity</dt><dd><StatusBadge tone={statusTone(health.data.connectivityStatus)}>{health.data.connectivityStatus}</StatusBadge></dd></div><div><dt>Last seen</dt><dd>{dateTime(health.data.lastSeenAt)}</dd></div><div><dt>Last checked</dt><dd>{dateTime(health.data.lastHealthCheckAt)}</dd></div>{health.data.failureReason && <div><dt>Failure reason</dt><dd>{health.data.failureReason}</dd></div>}</dl>}
       </section>
       <CameraHealthHistory cameraId={camera.data.id} />
       <section aria-labelledby="camera-maintenance-heading" className="detail-panel"><h2 id="camera-maintenance-heading">Maintenance</h2>

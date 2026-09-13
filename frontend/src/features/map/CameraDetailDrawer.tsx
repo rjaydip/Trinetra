@@ -5,6 +5,7 @@ import { createPortal } from 'react-dom';
 import { api } from '../../api/endpoints';
 import { queryKeys } from '../../api/queryKeys';
 import { CameraDetailSections } from '../cameras/CameraDetailSections';
+import './map.css';
 
 export function CameraDetailDrawer({ cameraId, onClose }: { cameraId: string | null; onClose(): void }) {
   const drawer = useRef<HTMLElement>(null);

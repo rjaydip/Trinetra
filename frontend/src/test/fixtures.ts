@@ -8,7 +8,7 @@ export function pageEnvelope<T>(items: T[]): PageResult<T> {
 /** Test fixtures only: production always uses backend responses. */
 export function sessionFixture(subject = 'reviewer', permissions: string[] | string = []): AuthResponse {
   return {
-    token: `eyJhbGciOiJIUzI1NiJ9.${btoa(JSON.stringify({ sub: subject, jti: `session-${subject}`, 'trinetra:perm': permissions })).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '')}.test-signature`,
+    token: `eyJhbGciOiJIUzI1NiJ9.${btoa(JSON.stringify({ sub: `00000000-0000-4000-8000-${subject.length.toString().padStart(12, '0')}`, unique_name: subject, jti: `session-${subject}`, 'trinetra:perm': permissions })).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '')}.test-signature`,
     expiresAt: new Date(Date.now() + 60_000).toISOString(),
     mustChangePassword: false,
   };
@@ -48,6 +48,7 @@ export function vmsFixture(overrides: Partial<VmsResponse> = {}): VmsResponse {
     geographicAreaId: '33333333-3333-4333-8333-333333333333',
     displayName: 'North NVR', vendor: 'DahuaCgi', runtimeClass: 'Managed',
     endpoint: 'https://nvr.example.test', credentialReference: 'vms/north-nvr',
-    verifyTls: true, state: 'Active', expectedCameraCount: 24, ...overrides,
+    verifyTls: true, state: 'Active', expectedCameraCount: 24,
+    lastInventoryPollAt: null, lastInventoryCameraCount: null, ...overrides,
   };
 }

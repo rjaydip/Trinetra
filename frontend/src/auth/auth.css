@@ -1,0 +1,26 @@
+.auth-page { display: grid; min-height: 100vh; grid-template-columns: minmax(0, 1.15fr) minmax(20rem, 26rem); }
+.auth-page__brand-panel { position: relative; display: flex; flex-direction: column; justify-content: space-between; gap: 2rem; padding: clamp(2rem, 5vw, 4rem); overflow: hidden; color: white; background: linear-gradient(155deg, #0c4a6e 0%, var(--color-primary) 45%, #062033 100%); }
+.auth-page__brand-panel > svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.auth-page__brand-lockup { position: relative; display: flex; align-items: center; gap: .75rem; }
+.auth-page__logo { flex: none; width: 2.5rem; height: 2.5rem; }
+.auth-page__brand-mark { margin: 0; font-size: 1.5rem; font-weight: 750; }
+.auth-page__brand-copy { position: relative; max-width: 28rem; color: rgb(255 255 255 / 78%); font-size: 1.0625rem; line-height: 1.5; }
+.auth-page__brand-stats { position: relative; display: flex; flex-wrap: wrap; gap: 1.5rem 2.5rem; margin: 0; padding: 0; list-style: none; }
+.auth-page__brand-stats dt { color: rgb(255 255 255 / 65%); font-size: .75rem; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
+.auth-page__brand-stats dd { margin: 0; font-size: 1.25rem; font-weight: 750; }
+.auth-page__form-panel { display: grid; place-items: center; padding: 1.5rem; background: linear-gradient(180deg, var(--color-surface) 0%, var(--color-canvas) 100%); }
+.auth-page__form-panel .auth-card { width: 100%; }
+.auth-card { max-width: 26rem; padding: 2rem; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: .75rem; box-shadow: 0 .75rem 2rem rgb(15 23 42 / 8%); }
+.auth-form { display: grid; gap: .625rem; margin-top: 1.5rem; }
+.auth-form input { min-height: 2.75rem; padding: .625rem .75rem; color: var(--color-text); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: .375rem; font: inherit; }
+.field-hint { margin: -.25rem 0 0; color: var(--color-muted); font-size: .8125rem; }
+.password-field { position: relative; }
+.password-field input { width: 100%; padding-right: 4.5rem; }
+.password-field__toggle { position: absolute; top: 50%; right: .5rem; padding: .25rem .5rem; color: var(--color-primary); background: transparent; border: none; cursor: pointer; transform: translateY(-50%); font: inherit; font-size: .8125rem; font-weight: 700; }
+.password-field__toggle:hover { text-decoration: underline; }
+
+@media (max-width: 42rem) {
+  .auth-page { grid-template-columns: 1fr; }
+  .auth-page__brand-panel { gap: 1rem; padding: 1.5rem; }
+  .auth-page__brand-stats { display: none; }
+}

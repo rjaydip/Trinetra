@@ -50,6 +50,8 @@ internal static class ApiInfrastructureExtensions
         services.AddScoped<ReconciliationRepository>();
         services.AddScoped<FederationQueryRepository>();
         services.AddScoped<ConnectionTestRepository>();
+        services.AddScoped<CameraConnectionTestRepository>();
+        services.AddScoped<CameraCredentialTestRepository>();
         services.AddScoped<EventQueryRepository>();
         services.AddScoped<ApiKeyRepository>();
         services.AddScoped<RefreshTokenRepository>();
@@ -71,6 +73,8 @@ internal static class ApiInfrastructureExtensions
             $"api@{Environment.MachineName}",
             sp.GetRequiredService<ILogger<PostgresCredentialResolver>>()));
         services.AddSingleton<ConnectionTester>();
+        services.AddSingleton<CameraReachabilityProbe>();
+        services.AddSingleton<CameraCredentialProbe>();
         services.AddHostedService<MaintenanceService>();
 
         return services;

@@ -247,6 +247,62 @@ constant `MaxGisBboxDegrees`.
 `hasCoverage` in properties = all three of `azimuth`, `horizontal_fov`, `effective_range`
 are non-null.
 
+### 2.7 Register-camera flow: pre-save reachability probe + post-save credential test
+
+The register-camera page's "Test connection" step runs in two stages against two different
+endpoints, added after the endpoints in §2.1–§2.6 shipped:
+
+1. **Pre-save, bare TCP (`v1.16`, unchanged by this section).**
+   `POST /api/v1/cameras/connection-test` / `GET .../connection-test/{testId}`
+   (`CameraConnectionTestEndpoints.cs`) — opens a plain TCP socket to `ipAddress:port` with a
+   5s timeout. No camera row, no credential, gated on `camera.create`. This is what the
+   register-camera page called for "Test connection" before the redesign; it stays in place
+   (unused by the redesigned page, but not removed — a later cleanup PR can retire it once
+   nothing links to it).
+
+2. **Post-save, authenticated (`v1.17`, new).** The redesigned flow: the operator's "Test
+   connection" click now (a) creates the camera immediately via the existing
+   `POST /api/v1/cameras` with whatever step-1 fields are filled (see §6 for what
+   `CameraWriteRequest`/`TryBuild` actually requires — that validation is unchanged and is the
+   source of truth), (b) stores the entered username/password via the existing
+   `PUT /api/v1/cameras/{id}/credential`, unchanged, and (c) calls the new endpoint below to run
+   a *real* authenticated probe against the device. The remaining "Camera details" step of the
+   page becomes an edit (`PUT`/`PATCH /api/v1/cameras/{id}`) of the camera this created, not a
+   second `POST`.
+
+| # | Method & path | Purpose | Permission | Request | Response | Codes |
+|---|---|---|---|---|---|---|
+| 21 | `POST /api/v1/cameras/{id:guid}/credential-test` | Runs a protocol-appropriate authenticated probe (`CameraCredentialProbe`, `Federation.Runtime`) against the camera's stored `ipAddress`/`port`/`protocol` and resolved `credentialReference`. Async create-then-poll, same idiom as `POST /vms/{id}/test` and the pre-save probe above. | `camera.update` | — (no body; tests what is saved on the row) | `202` + `CameraCredentialTestAccepted { testId, status: "pending", statusUrl }` | `202`, `404` (camera out of scope/absent), `409` (camera missing `ipAddress`/`port`/`protocol`, or has no credential stored yet) |
+| 22 | `GET /api/v1/cameras/{id:guid}/credential-test/{testId:guid}` | Poll one credential test. | `camera.read` | — | `CameraCredentialTestResult { id, cameraId, protocol, ipAddress, port, status, requestedAt, completedAt, failureReason, result }` where `result` is `CameraCredentialTestReport { reachable, authOutcome, connectMs?, detail?, failure? }` | `200`, `404` |
+| 23 | `GET /api/v1/cameras/{id:guid}/credential-test` | This camera's credential-test history, newest first. | `camera.read` | — | `IReadOnlyList<CameraCredentialTestSummary>` (`{ id, status, requestedAt, completedAt, failureReason }`) | `200`, `404` |
+
+`authOutcome` is one of:
+
+- `authenticated` — a real handshake ran and the device accepted the credential. HTTP-shaped
+  protocols (`HTTP`, `HTTPS`, `ONVIF`): a Basic-auth `GET /` returned 2xx/3xx. `RTSP`/`RTSPS`: an
+  RFC 2326 `OPTIONS` exchange with Basic or Digest returned `200`.
+- `credential_rejected` — same real handshake, device answered `401`/`403` (HTTP) or `401` again
+  after the authenticated RTSP retry.
+- `not_verifiable` — **no credential was actually checked.** Either the protocol is `RTMP`,
+  `SRT` or `OTHER` (no handshake this probe implements), or the device's RTSP `OPTIONS` accepted
+  with no auth challenge at all. `reachable` may still be `true`; the point of this value is that
+  it is never conflated with `authenticated`.
+- `unreachable` — no TCP connection, DNS failure, or timeout.
+- `error` — connected but got a response this probe cannot classify (e.g. an HTTP 5xx, or a
+  malformed RTSP reply).
+
+No vendor adapter is used or added — `Federation.Adapters` remains Model 3/VMS-only. The probe
+is read-only, single-shot (never retried by the probe itself — one bad credential must not look
+like a brute-force attempt to the device), and every credential resolution goes through the same
+`ICredentialResolver` / `PostgresCredentialResolver` path as the connector worker, in-process
+only: the plaintext is never returned in any response from this endpoint.
+
+Schema: `db/versions/v1.17.sql` adds `camera_credential_test` (its own table, not an extension of
+`camera_connection_test` — that table has no `camera_id` and its result shape is TCP-only) plus
+`sweep_abandoned_camera_credential_tests` / `purge_camera_credential_tests_before`, wired into
+`MaintenanceService` the same way as the `v1.16` reachability-probe sweep/purge, sharing the
+`ConnectionTests` retention cutoff.
+
 ---
 
 ## 3. Data model — `db/versions/v1.6.sql`
@@ -1100,8 +1156,29 @@ docs/IMPL-NOTES-HIERARCHY-RBAC.md):**
   `RoleCrudTests`, `AuthorizationTests`, `HierarchyScopeTests`, `GeographyScopeTests`,
   `UnscopedReadScopeTests`.
 
+**Authenticated register-camera flow — shipped (`v1.17`; see §2.7):**
+
+- `db/versions/v1.17.sql` + `db/objects/tables/camera_credential_test.sql` +
+  `db/objects/functions/{sweep_abandoned_camera_credential_tests,purge_camera_credential_tests_before}.sql`
+- `Federation.Runtime`: `CameraCredentialProbe` — HTTP Basic auth for `HTTP`/`HTTPS`/`ONVIF`; an
+  RFC 2326 `OPTIONS` handshake with Basic/Digest for `RTSP`/`RTSPS`; honest `not_verifiable`
+  degrade (reachability only) for `RTMP`/`SRT`/`OTHER`
+- `Federation.Storage`: `CameraCredentialTestRepository` (claim/get/list)
+- `Federation.Api`: `CameraCredentialTestEndpoints.cs` —
+  `POST /cameras/{id}/credential-test`, `GET .../credential-test/{testId}`,
+  `GET .../credential-test` (history); DI + route wire-up;
+  `MaintenanceRepository.SweepAbandonedCameraCredentialTestsAsync` +
+  `MaintenanceService` sweep/purge wiring
+- `tests/Trinetra.UnitTests/CameraCredentialProbeTests.cs` (RTSP Digest/Basic header
+  construction, unsupported-scheme handling)
+- The pre-save `v1.16` reachability probe (`POST /cameras/connection-test`) is left in place,
+  unused by the redesigned register-camera page but not removed
+
 **Not yet built:**
 
 - Camera-registry integration tests: scope matrix, `camera_code` uniqueness, reconcile 409, bulk partial-failure, maintenance→status transitions, audit-row-per-mutation
 - `GET /gis/gaps` real implementation (PostGIS — deliberately deferred)
 - Endpoint-level (HTTP) tests for the P11/P12 activate 409 shaping — the suite has no `WebApplicationFactory`; covered at the repository level instead
+- DB-backed integration tests for `POST /cameras/{id}/credential-test` (claim/poll round trip,
+  409 on a not-ready camera, scope re-check on poll) — needs a live database against a real or
+  simulated device, same gap as the rest of the camera-registry integration suite above

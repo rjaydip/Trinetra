@@ -37,22 +37,30 @@ public sealed class SecretWriter
         _encryption = encryption;
     }
 
-    /// <summary>Stores a credential under a reference, replacing any existing value.</summary>
+    /// <summary>
+    /// Stores a credential under a reference, replacing any existing value. Gated on
+    /// <paramref name="requiredPermission"/> — defaults to <c>credential.write</c>, the
+    /// highest-privilege action in the system, separately gated from ordinary configuration
+    /// writing. A caller with a narrower, resource-scoped write path (standalone registry
+    /// cameras via <c>camera.update</c> — there is no <c>VMS_ADMIN</c>-equivalent role for them,
+    /// so requiring <c>credential.write</c> there would strand the operators who manage the
+    /// registry) passes that permission instead; the endpoint has already verified it holds that
+    /// permission before reaching here, so this re-asserts it rather than silently substituting
+    /// <c>credential.write</c> underneath a caller that was never checked for it.
+    /// </summary>
     public async Task WriteAsync(
         string credentialReference,
         string? username,
         string? password,
         string? token,
         string? description,
-        CallerContext caller, UnitOfWork work, CancellationToken ct)
+        CallerContext caller, UnitOfWork work, CancellationToken ct,
+        string requiredPermission = "credential.write")
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(credentialReference);
         ArgumentNullException.ThrowIfNull(caller);
 
-        // Separately gated from ordinary configuration writing: this is the highest-privilege
-        // action in the system, and most clients that legitimately edit a target have no
-        // business setting the password it connects with.
-        caller.Require("credential.write");
+        caller.Require(requiredPermission);
 
         // Stored as a small document rather than a bare password: ONVIF and ISAPI want a
         // username and password, Milestone an OAuth client, Genetec a username with an appended

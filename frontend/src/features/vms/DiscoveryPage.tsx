@@ -10,12 +10,14 @@ import type {
   GeoJsonFeatureCollection,
   GeographicAreaResponse,
   OrganizationResponse,
-  OrganizationUnitResponse,
 } from '../../api/models';
 import { queryKeys } from '../../api/queryKeys';
 import { Button, PageState, StatusBadge } from '../../components/ui';
 import { LocationPicker } from '../cameras/LocationPicker';
+import { TreeSelect } from '../cameras/TreeSelect';
 import { cameraTypes } from '../cameras/cameraVocabulary';
+import { healthStatusTone } from './vmsTone';
+import './vms.css';
 import {
   createDiscoveredCameraEnrichment,
   toDiscoveredCameraWriteRequest,
@@ -50,7 +52,28 @@ function ReferenceError({ children, retry }: { children: string; retry(): void }
   return <div className="selector-status" role="status"><p>{children}</p><button className="button button--secondary" type="button" onClick={retry}>Retry</button></div>;
 }
 
+function StatusHistoryPanel({ vmsId, row }: { vmsId: string; row: FederatedCameraResponse }) {
+  const history = useQuery({
+    queryKey: queryKeys.vms.cameraStatusHistory(vmsId, row.nativeCameraId),
+    queryFn: () => api.vms.cameraStatusHistory(vmsId, row.nativeCameraId),
+  });
+
+  if (history.isPending) return <p>Loading status history…</p>;
+  if (history.isError) return <p className="form-error">{errorDetail(history.error, 'Status history could not be loaded.')}</p>;
+  if (history.data.changes.length === 0) return <p className="admin-empty">No status changes recorded yet.</p>;
+
+  return <div className="camera-table-wrap"><table className="camera-table"><thead><tr>
+    <th scope="col">Changed at</th><th scope="col">Health</th><th scope="col">Enabled</th><th scope="col">Recording</th>
+  </tr></thead><tbody>{history.data.changes.map((change) => <tr key={change.changedAt}>
+    <td>{new Date(change.changedAt).toLocaleString()}</td>
+    <td>{change.previousHealth ?? 'Unknown'} → {change.health}</td>
+    <td>{change.previousEnabled === null ? 'Unknown' : change.previousEnabled ? 'Enabled' : 'Disabled'} → {change.isEnabled ? 'Enabled' : 'Disabled'}</td>
+    <td>{change.previousRecording === null ? 'Unknown' : change.previousRecording ? 'Recording' : 'Not recording'} → {change.isRecording === null ? 'Unknown' : change.isRecording ? 'Recording' : 'Not recording'}</td>
+  </tr>)}</tbody></table></div>;
+}
+
 interface DiscoveryRowProps {
+  vmsId: string;
   row: FederatedCameraResponse;
   enrichment: DiscoveredCameraEnrichment;
   organizationId: string;
@@ -68,6 +91,7 @@ interface DiscoveryRowProps {
 }
 
 function DiscoveryRow({
+  vmsId,
   row,
   enrichment,
   organizationId,
@@ -119,7 +143,7 @@ function DiscoveryRow({
       <td><input aria-label={`Select ${name}`} checked={selected} disabled={linked} onChange={onToggleSelected} type="checkbox" /></td>
       <td><strong>{name}</strong><div>{row.nativeCameraId}</div></td>
       <td>{row.vendorModel ?? 'Not reported'}<div>Firmware: {row.firmware ?? 'Not reported'}</div></td>
-      <td><StatusBadge tone={row.health.toLowerCase() === 'online' ? 'success' : 'warning'}>{row.health}</StatusBadge><div>{row.isEnabled ? 'Enabled' : 'Disabled'} · {row.isRecording === null ? 'Recording unknown' : row.isRecording ? 'Recording' : 'Not recording'}</div></td>
+      <td><StatusBadge tone={healthStatusTone(row.health)}>{row.health}</StatusBadge><div>{row.isEnabled ? 'Enabled' : 'Disabled'} · {row.isRecording === null ? 'Recording unknown' : row.isRecording ? 'Recording' : 'Not recording'}</div></td>
       <td>{linked ? <span id={`${row.nativeCameraId}-linked-help`}>Already linked; this camera cannot be imported again.</span> : 'Not linked'}</td>
       <td><button aria-controls={`${row.nativeCameraId}-enrichment`} aria-expanded={expanded} className="button button--secondary" disabled={linked} onClick={onToggleExpanded} type="button">{expanded ? 'Hide' : 'Edit'} onboarding details for {name}</button></td>
     </tr>
@@ -129,9 +153,37 @@ function DiscoveryRow({
           <label>{label('Camera code')}<input aria-required="true" value={enrichment.cameraCode} onChange={(event) => update('cameraCode', event.target.value)} {...errorProps('cameraCode')} /></label><FieldError id={`${row.nativeCameraId}-cameraCode-error`} message={errors.cameraCode} />
           <label>{label('Name')}<input aria-required="true" value={enrichment.name} onChange={(event) => update('name', event.target.value)} {...errorProps('name')} /></label><FieldError id={`${row.nativeCameraId}-name-error`} message={errors.name} />
           <label>{label('Organization')}<select disabled={!organizationsReady} value={organizationId} onChange={(event) => onOrganizationChange(event.target.value)}><option value="">Select an organization</option>{organizations.map((organization) => <option key={organization.id} value={organization.id}>{organization.name} ({organization.code})</option>)}</select></label>
-          <label>{label('Organization unit')}<select aria-required="true" disabled={!organizationId || organizationUnits.isPending || organizationUnits.isError} value={enrichment.organizationUnitId} onChange={(event) => update('organizationUnitId', event.target.value)} {...errorProps('organizationUnitId')}><option value="">Select an organization unit</option>{(organizationUnits.data ?? []).map((unit: OrganizationUnitResponse) => <option key={unit.id} value={unit.id}>{unit.name} ({unit.code})</option>)}</select></label><FieldError id={`${row.nativeCameraId}-organizationUnitId-error`} message={errors.organizationUnitId} />
+          <TreeSelect
+            id={`${row.nativeCameraId}-organizationUnitId`}
+            label={label('Organization unit')}
+            items={organizationUnits.data}
+            getParentId={(unit) => unit.parentUnitId}
+            value={enrichment.organizationUnitId || undefined}
+            onChange={(unitId) => update('organizationUnitId', unitId ?? '')}
+            disabled={!organizationId || organizationUnits.isPending || organizationUnits.isError}
+            loading={organizationUnits.isPending}
+            error={organizationUnits.isError}
+            required
+            invalid={Boolean(errors.organizationUnitId)}
+            describedBy={errors.organizationUnitId ? `${row.nativeCameraId}-organizationUnitId-error` : undefined}
+            placeholder="Select an organization unit"
+            emptyMessage="This organization has no units."
+          /><FieldError id={`${row.nativeCameraId}-organizationUnitId-error`} message={errors.organizationUnitId} />
           {organizationUnits.isError && <ReferenceError retry={() => { void organizationUnits.refetch(); }}>{errorDetail(organizationUnits.error, 'Organization units could not be loaded. Please try again.')}</ReferenceError>}
-          <label>{label('Geographic area')}<select aria-required="true" disabled={!geographicAreasReady} value={enrichment.geographicAreaId} onChange={(event) => update('geographicAreaId', event.target.value)} {...errorProps('geographicAreaId')}><option value="">Select a geographic area</option>{geographicAreas.map((area) => <option key={area.id} value={area.id}>{area.name} ({area.code})</option>)}</select></label><FieldError id={`${row.nativeCameraId}-geographicAreaId-error`} message={errors.geographicAreaId} />
+          <TreeSelect
+            id={`${row.nativeCameraId}-geographicAreaId`}
+            label={label('Geographic area')}
+            items={geographicAreas}
+            getParentId={(area) => area.parentAreaId}
+            value={enrichment.geographicAreaId || undefined}
+            onChange={(areaId) => update('geographicAreaId', areaId ?? '')}
+            disabled={!geographicAreasReady}
+            required
+            invalid={Boolean(errors.geographicAreaId)}
+            describedBy={errors.geographicAreaId ? `${row.nativeCameraId}-geographicAreaId-error` : undefined}
+            placeholder="Select a geographic area"
+            emptyMessage="No geographic areas are available."
+          /><FieldError id={`${row.nativeCameraId}-geographicAreaId-error`} message={errors.geographicAreaId} />
           <label>{label('Camera type')}<select aria-required="true" value={enrichment.cameraType} onChange={(event) => update('cameraType', event.target.value)} {...errorProps('cameraType')}><option value="">Select a camera type</option>{cameraTypes.map((type) => <option key={type} value={type}>{type}</option>)}</select></label><FieldError id={`${row.nativeCameraId}-cameraType-error`} message={errors.cameraType} />
           <label>{label('Latitude')}<input aria-required="true" inputMode="decimal" value={enrichment.latitude} onChange={(event) => update('latitude', event.target.value)} {...errorProps('latitude')} /></label><FieldError id={`${row.nativeCameraId}-latitude-error`} message={errors.latitude} />
           <label>{label('Longitude')}<input aria-required="true" inputMode="decimal" value={enrichment.longitude} onChange={(event) => update('longitude', event.target.value)} {...errorProps('longitude')} /></label><FieldError id={`${row.nativeCameraId}-longitude-error`} message={errors.longitude} />
@@ -147,6 +199,9 @@ function DiscoveryRow({
             onAzimuthChange={(nextAzimuth) => update('azimuth', nextAzimuth === null ? '' : String(nextAzimuth))}
           />
           {optionalNumbers.map(({ field, label: fieldLabel }) => <div key={field}><label>{label(fieldLabel)}<input type="number" step="any" value={enrichment[field]} onChange={(event) => update(field, event.target.value)} {...errorProps(field)} /></label><FieldError id={`${row.nativeCameraId}-${field}-error`} message={errors[field]} /></div>)}
+        </fieldset>
+        <fieldset><legend>Recent status changes</legend>
+          <StatusHistoryPanel vmsId={vmsId} row={row} />
         </fieldset>
       </section>
     </td></tr>}
@@ -214,7 +269,7 @@ function DiscoveryWorkspace({ vmsId }: { vmsId: string }) {
       else next.add(row.nativeCameraId);
       return next;
     });
-    if (!selected.has(row.nativeCameraId)) setExpanded(new Set([row.nativeCameraId]));
+    if (!selected.has(row.nativeCameraId)) setExpanded((current) => new Set(current).add(row.nativeCameraId));
     setSelectionError('');
     setResult(null);
   };
@@ -244,7 +299,7 @@ function DiscoveryWorkspace({ vmsId }: { vmsId: string }) {
     });
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length) {
-      setExpanded(new Set([Object.keys(nextErrors)[0]]));
+      setExpanded((current) => new Set([...current, ...Object.keys(nextErrors)]));
       return;
     }
     const items = [...selected].flatMap((nativeCameraId) => {
@@ -279,8 +334,13 @@ function DiscoveryWorkspace({ vmsId }: { vmsId: string }) {
         }}
         type="checkbox"
       /> Select all importable cameras</label>
+      <p>{selected.size} camera{selected.size === 1 ? '' : 's'} selected.</p>
+      {target.data.expectedCameraCount !== null && target.data.expectedCameraCount !== undefined && target.data.expectedCameraCount !== cameras.data.length && <p role="status">
+        Expected {target.data.expectedCameraCount} camera{target.data.expectedCameraCount === 1 ? '' : 's'} for this VMS, but {cameras.data.length} {cameras.data.length === 1 ? 'was' : 'were'} reported. <Link to="/cameras/reconciliation">Review unreconciled cameras</Link>.
+      </p>}
       <div className="camera-table-wrap"><table className="camera-table discovery-table"><caption>{cameras.data.length} camera{cameras.data.length === 1 ? '' : 's'} reported by {target.data.displayName}</caption><thead><tr><th scope="col">Select</th><th scope="col">Camera</th><th scope="col">Vendor facts</th><th scope="col">State</th><th scope="col">Registry</th><th scope="col">Onboarding</th></tr></thead><tbody>{cameras.data.map((row) => <DiscoveryRow
         key={row.nativeCameraId}
+        vmsId={target.data.id}
         row={row}
         enrichment={enrichmentFor(row)}
         organizationId={organizationIds[row.nativeCameraId] ?? ''}
@@ -297,11 +357,13 @@ function DiscoveryWorkspace({ vmsId }: { vmsId: string }) {
           updateEnrichment(row, { organizationUnitId: '' });
         }}
         onToggleExpanded={() => setExpanded((current) => {
-          return current.has(row.nativeCameraId) ? new Set() : new Set([row.nativeCameraId]);
+          const next = new Set(current);
+          if (next.has(row.nativeCameraId)) next.delete(row.nativeCameraId);
+          else next.add(row.nativeCameraId);
+          return next;
         })}
         onToggleSelected={() => toggleSelected(row)}
       />)}</tbody></table></div>
-      <p>{selected.size} camera{selected.size === 1 ? '' : 's'} selected.</p>
       {selectionError && <p className="form-error" role="alert">{selectionError}</p>}
       {importMutation.isError && <p className="form-error" role="alert">{errorDetail(importMutation.error, 'Unable to import the selected cameras. Please try again.')}</p>}
       <Button disabled={importMutation.isPending} type="submit">{importMutation.isPending ? 'Importing selected cameras…' : 'Import selected'}</Button>

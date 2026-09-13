@@ -7,7 +7,9 @@ import { api } from '../../api/endpoints';
 import type { ConnectorTargetRequest, VmsResponse } from '../../api/models';
 import { queryKeys } from '../../api/queryKeys';
 import { Button, StatusBadge } from '../../components/ui';
+import { TreeSelect } from '../cameras/TreeSelect';
 import { runtimeClasses, vendors } from './VmsForm';
+import { healthStatusTone } from './vmsTone';
 
 const targetStates = ['Active', 'Quarantined', 'Disabled'] as const;
 
@@ -64,7 +66,7 @@ export function VmsDeleteControl({ target }: { target: VmsResponse }) {
   }
 
   return <div className="deactivation-strategy">
-    <p role="alert">Deleting {target.displayName} removes its discovered camera inventory, capability matrix, health history and event cursor. This cannot be undone.</p>
+    <p role="alert">Deleting {target.displayName} removes its discovered-but-not-yet-imported camera inventory, capability matrix, health history and event cursor. Cameras already imported into the registry are not affected and will remain. This cannot be undone.</p>
     {mutation.isError && <p className="form-error" role="alert">{errorDetail(mutation.error, 'The VMS could not be deleted.')}</p>}
     <div className="form-actions">
       <Button disabled={mutation.isPending} type="button" onClick={() => mutation.mutate()}>Confirm delete</Button>
@@ -77,28 +79,42 @@ export function VmsDeleteControl({ target }: { target: VmsResponse }) {
  * `PUT /vms/{id}` — a full replacement, not a patch. Connection-tuning fields (rate limits, poll
  * intervals) aren't part of `VmsResponse`, so this form can't pre-fill them; per the endpoint's
  * own contract, omitting them here resets them to their defaults. Organization unit and
- * geographic area are entered as ids directly (no cascading picker) — consistent with how the
- * registry filters expose the same ids elsewhere in this app.
+ * geographic area are picked via the same tree-select browsing used by the rest of the app
+ * (`TreeSelect`) rather than entered as raw ids — the organization unit is scoped through the
+ * unit's own owning organization, resolved from the target's current unit, the same pattern
+ * `ReconciliationPage`'s "register new" form uses.
  */
 export function VmsEditForm({ target, onSuccess }: {
   target: VmsResponse;
   onSuccess(): Promise<unknown> | void;
 }) {
+  const [organizationUnitId, setOrganizationUnitId] = useState(target.organizationUnitId);
+  const [geographicAreaId, setGeographicAreaId] = useState(target.geographicAreaId ?? '');
   const mutation = useMutation({
     mutationFn: (body: ConnectorTargetRequest) => api.vms.replace(target.id, body),
     onSuccess,
   });
 
+  const currentUnit = useQuery({
+    queryKey: queryKeys.reference.organizationUnit(target.organizationUnitId),
+    queryFn: () => api.reference.organizationUnit(target.organizationUnitId),
+  });
+  const organizationUnits = useQuery({
+    queryKey: queryKeys.reference.organizationUnits(currentUnit.data?.organizationId ?? ''),
+    queryFn: () => api.reference.organizationUnits(currentUnit.data!.organizationId),
+    enabled: Boolean(currentUnit.data),
+  });
+  const geographicAreas = useQuery({ queryKey: queryKeys.reference.geographicAreas, queryFn: () => api.reference.geographicAreas() });
+
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
     const value = (name: string) => String(data.get(name) ?? '').trim();
-    const geographicAreaId = value('geographicAreaId');
     const runtimeClass = value('runtimeClass');
 
     mutation.mutate({
       code: value('code'),
-      organizationUnitId: value('organizationUnitId'),
+      organizationUnitId,
       displayName: value('displayName'),
       vendor: value('vendor'),
       endpoint: value('endpoint'),
@@ -116,8 +132,32 @@ export function VmsEditForm({ target, onSuccess }: {
     </p>
     <label>VMS code<input defaultValue={target.code} name="code" required /></label>
     <label>Display name<input defaultValue={target.displayName} name="displayName" required /></label>
-    <label>Organization unit ID<input defaultValue={target.organizationUnitId} name="organizationUnitId" required /></label>
-    <label>Geographic area ID<input defaultValue={target.geographicAreaId ?? ''} name="geographicAreaId" /></label>
+    <TreeSelect
+      id="vms-edit-organizationUnitId"
+      label="Organization unit"
+      items={organizationUnits.data}
+      getParentId={(unit) => unit.parentUnitId}
+      value={organizationUnitId || undefined}
+      onChange={(unitId) => setOrganizationUnitId(unitId ?? '')}
+      disabled={!currentUnit.data}
+      loading={currentUnit.isPending || organizationUnits.isPending}
+      error={currentUnit.isError || organizationUnits.isError}
+      required
+      placeholder="Select an organization unit"
+      emptyMessage="This organization has no units."
+    />
+    <TreeSelect
+      id="vms-edit-geographicAreaId"
+      label="Geographic area"
+      items={geographicAreas.data}
+      getParentId={(area) => area.parentAreaId}
+      value={geographicAreaId || undefined}
+      onChange={(areaId) => setGeographicAreaId(areaId ?? '')}
+      loading={geographicAreas.isPending}
+      error={geographicAreas.isError}
+      placeholder="No geographic area selected"
+      emptyMessage="No geographic areas are available."
+    />
     <label>Vendor
       <select defaultValue={target.vendor} name="vendor" required>
         {vendors.map((vendor) => <option key={vendor} value={vendor}>{vendor}</option>)}
@@ -146,15 +186,15 @@ export function VmsHealthPanel({ vmsId }: { vmsId: string }) {
   if (health.data.length === 0) return <p className="admin-empty">No health checks recorded yet.</p>;
 
   return <div className="camera-table-wrap"><table className="camera-table"><thead><tr>
-    <th>Checked at</th><th>Status</th><th>Latency</th><th>Cameras</th><th>Failures</th><th>Circuit</th><th>Cursor lag</th><th>Last error</th>
+    <th>Checked at</th><th>Status</th><th>Latency</th><th>Cameras</th><th>Consecutive failures</th><th>Connection breaker</th><th>Event delay</th><th>Last error</th>
   </tr></thead><tbody>{health.data.map((check) => <tr key={check.checkedAt}>
     <td>{new Date(check.checkedAt).toLocaleString()}</td>
-    <td><StatusBadge tone={check.status.toLowerCase() === 'ok' ? 'success' : 'warning'}>{check.status}</StatusBadge></td>
+    <td><StatusBadge tone={healthStatusTone(check.status)}>{check.status}</StatusBadge></td>
     <td>{check.latencyMs ?? 'Not recorded'}</td>
     <td>{check.cameraCount ?? 'Not recorded'}</td>
     <td>{check.consecutiveFailures}</td>
-    <td>{check.circuitOpen ? 'Open' : 'Closed'}</td>
-    <td>{check.cursorLagSeconds ?? 'Not recorded'}</td>
+    <td>{check.circuitOpen ? 'Tripped (pausing calls)' : 'Closed (normal)'}</td>
+    <td>{check.cursorLagSeconds === null || check.cursorLagSeconds === undefined ? 'Not recorded' : `${check.cursorLagSeconds}s behind`}</td>
     <td>{check.lastError ?? 'None'}</td>
   </tr>)}</tbody></table></div>;
 }
@@ -162,9 +202,9 @@ export function VmsHealthPanel({ vmsId }: { vmsId: string }) {
 // Mirrors Federation.Core's [Flags] Capability enum — reference data, not fetched from anywhere,
 // since the API returns only the resolved bitmask.
 const capabilityBits: Array<[number, string]> = [
-  [1 << 0, 'Inventory'], [1 << 1, 'Camera status'], [1 << 2, 'Streams'], [1 << 3, 'Recordings'],
-  [1 << 4, 'Recording export'], [1 << 5, 'Events (pull)'], [1 << 6, 'Events (subscribe)'],
-  [1 << 7, 'Metadata'], [1 << 8, 'PTZ'], [1 << 9, 'Snapshot'], [1 << 10, 'Time-sync check'],
+  [1 << 0, 'Camera inventory'], [1 << 1, 'Camera status'], [1 << 2, 'Live streams'], [1 << 3, 'Recordings'],
+  [1 << 4, 'Recording export'], [1 << 5, 'Event history (polled)'], [1 << 6, 'Live event feed'],
+  [1 << 7, 'Camera metadata'], [1 << 8, 'Pan/tilt/zoom control'], [1 << 9, 'Snapshots'], [1 << 10, 'Clock sync check'],
 ];
 
 /** `GET /vms/{id}/capabilities` — served from the stored matrix, never by probing the device. */

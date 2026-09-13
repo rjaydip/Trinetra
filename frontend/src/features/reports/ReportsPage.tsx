@@ -4,8 +4,10 @@ import { useState, type FormEvent } from 'react';
 import { isApiProblem } from '../../api/client';
 import { api } from '../../api/endpoints';
 import { queryKeys } from '../../api/queryKeys';
-import { PageState, StatusBadge } from '../../components/ui';
+import { StatusBadge } from '../../components/ui';
+import { TreeSelect } from '../cameras/TreeSelect';
 import { CoverageSummary } from './CoverageSummary';
+import './reports.css';
 
 function reportError(error: unknown): string {
   return isApiProblem(error) ? error.detail : 'The report could not be loaded. Please try again.';
@@ -41,9 +43,6 @@ export function ReportsPage() {
     setSubmittedScope({ organizationUnitId: organizationUnitId || undefined, geographicAreaId: geographicAreaId || undefined });
   }
 
-  if (overview.isPending) return <PageState title="Loading fleet report">Retrieving current fleet totals…</PageState>;
-  if (overview.isError || !overview.data) return <PageState title="Couldn&apos;t load fleet report">{reportError(overview.error)}</PageState>;
-
   return (
     <section className="reports-page" aria-labelledby="reports-title">
       <header>
@@ -54,20 +53,53 @@ export function ReportsPage() {
 
       <section aria-labelledby="fleet-summary-title">
         <h2 id="fleet-summary-title">Fleet summary</h2>
-        <dl className="report-metrics">
-          <div><dt>Total cameras</dt><dd>{overview.data.cameras}</dd></div>
-          <div><dt>Unreachable cameras</dt><dd><StatusBadge tone="warning">{overview.data.unreachableCameras} unreachable</StatusBadge></dd><p>Warning: unreachable cameras need attention.</p></div>
-        </dl>
+        {overview.isPending ? <p role="status">Retrieving current fleet totals…</p>
+          : overview.isError || !overview.data ? <div role="status">
+            <p>{reportError(overview.error)}</p>
+            <button className="button" type="button" onClick={() => overview.refetch()}>Retry fleet summary</button>
+          </div>
+            : <dl className="report-metrics">
+              <div><dt>Total cameras</dt><dd>{overview.data.cameras}</dd></div>
+              <div><dt>Unreachable cameras</dt><dd><StatusBadge tone="warning">{overview.data.unreachableCameras} unreachable</StatusBadge></dd><p>Warning: unreachable cameras need attention.</p></div>
+              <div><dt>VMS targets connected</dt><dd>{overview.data.activeTargets} / {overview.data.targets}</dd></div>
+              <div><dt>Quarantined targets</dt><dd>{overview.data.quarantinedTargets > 0 ? <StatusBadge tone="warning">{overview.data.quarantinedTargets}</StatusBadge> : overview.data.quarantinedTargets}</dd></div>
+            </dl>}
       </section>
 
       <section className="report-panel" aria-labelledby="coverage-summary-title">
         <div className="report-panel__header"><div><h2 id="coverage-summary-title">Coverage summary</h2><p>Estimated planning aid only; terrain and obstructions are not modelled.</p></div><StatusBadge tone="warning">Estimated</StatusBadge></div>
         <form className="coverage-scope-form" onSubmit={submitCoverage}>
-          <label>Coverage geographic area (required)<select aria-describedby={scopeError ? 'coverage-scope-error' : undefined} aria-invalid={Boolean(scopeError)} aria-required="true" value={geographicAreaId} onChange={(event) => setGeographicAreaId(event.target.value)}><option value="">Choose a geographic area</option>{(geographicAreas.data ?? []).map((area) => <option key={area.id} value={area.id}>{area.name} ({area.code})</option>)}</select></label>
+          <TreeSelect
+            id="reports-geographic-area"
+            label="Coverage geographic area (required)"
+            items={geographicAreas.data}
+            getParentId={(area) => area.parentAreaId}
+            value={geographicAreaId || undefined}
+            onChange={(id) => setGeographicAreaId(id ?? '')}
+            loading={geographicAreas.isPending}
+            error={geographicAreas.isError}
+            required
+            invalid={Boolean(scopeError)}
+            describedBy={scopeError ? 'coverage-scope-error' : undefined}
+            placeholder="Choose a geographic area"
+            emptyMessage="No geographic areas are available."
+          />
           <fieldset><legend>Optional organization-unit narrowing</legend>
             <p>Choose an organization and unit only to narrow the selected geographic area. An organization unit does not define a coverage boundary.</p>
             <label>Organization<select value={organizationId} onChange={(event) => { setOrganizationId(event.target.value); setOrganizationUnitId(''); }}><option value="">Choose an organization</option>{(organizations.data ?? []).map((organization) => <option key={organization.id} value={organization.id}>{organization.name} ({organization.code})</option>)}</select></label>
-            <label>Coverage organization unit<select disabled={!organizationId} value={organizationUnitId} onChange={(event) => setOrganizationUnitId(event.target.value)}><option value="">Do not narrow by organization unit</option>{(organizationUnits.data ?? []).map((unit) => <option key={unit.id} value={unit.id}>{unit.name} ({unit.code})</option>)}</select></label>
+            <TreeSelect
+              id="reports-organization-unit"
+              label="Coverage organization unit"
+              items={organizationUnits.data}
+              getParentId={(unit) => unit.parentUnitId}
+              value={organizationUnitId || undefined}
+              onChange={(id) => setOrganizationUnitId(id ?? '')}
+              disabled={!organizationId}
+              loading={organizationUnits.isPending}
+              error={organizationUnits.isError}
+              placeholder="Do not narrow by organization unit"
+              emptyMessage="This organization has no units."
+            />
           </fieldset>
           {scopeError && <p className="form-error" id="coverage-scope-error" role="alert">{scopeError}</p>}
           <button className="button" type="submit">Load coverage summary</button>

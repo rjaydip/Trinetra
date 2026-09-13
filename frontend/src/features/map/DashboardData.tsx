@@ -4,21 +4,49 @@ import { Link } from 'react-router-dom';
 import { isApiProblem } from '../../api/client';
 import { api } from '../../api/endpoints';
 import { queryKeys } from '../../api/queryKeys';
+import { StatusBadge } from '../../components/ui';
+import './map.css';
 
-export function DashboardSummary() {
+/** The 3-second "is my fleet healthy" read — the first thing an operator sees after login. */
+export function FleetStatusStrip() {
   const overview = useQuery({ queryKey: queryKeys.overview, queryFn: api.overview });
+
+  if (overview.isPending) return <section aria-labelledby="dashboard-fleet-heading"><h2 id="dashboard-fleet-heading">Fleet status</h2><p role="status">Loading fleet summary…</p></section>;
+  if (overview.isError) {
+    return <section aria-labelledby="dashboard-fleet-heading">
+      <h2 id="dashboard-fleet-heading">Fleet status</h2>
+      <div role="status">
+        <p>{isApiProblem(overview.error) && overview.error.status === 403 ? 'Fleet summary is unavailable for your permissions.' : 'Could not load fleet summary.'}</p>
+        <button className="button" type="button" onClick={() => overview.refetch()}>Retry fleet summary</button>
+      </div>
+    </section>;
+  }
+
+  const { cameras, unreachableCameras, targets, activeTargets, quarantinedTargets } = overview.data;
+
   return <section aria-labelledby="dashboard-fleet-heading">
-    <h2 id="dashboard-fleet-heading">Fleet summary</h2>
-    <p>VMS fleet totals use your authorized overview scope, separate from registry search and map viewport filters.</p>
-    {overview.isPending ? <p role="status">Loading fleet summary…</p>
-      : overview.isError ? <div role="status"><p>{isApiProblem(overview.error) && overview.error.status === 403 ? 'Fleet summary is unavailable for your permissions.' : 'Could not load fleet summary.'}</p><button className="button" type="button" onClick={() => overview.refetch()}>Retry fleet summary</button></div>
-        : <dl className="report-metrics">
-          <div><dt>Total cameras</dt><dd>{overview.data.cameras}</dd></div>
-          <div><dt>Unreachable cameras</dt><dd>{overview.data.unreachableCameras}</dd></div>
-          <div><dt>VMS targets</dt><dd>{overview.data.targets}</dd></div>
-          <div><dt>Active targets</dt><dd>{overview.data.activeTargets}</dd></div>
-          <div><dt>Quarantined targets</dt><dd>{overview.data.quarantinedTargets}</dd></div>
-        </dl>}
+    <h2 id="dashboard-fleet-heading">Fleet status</h2>
+    <dl className="fleet-status-strip">
+      <div className="fleet-status-strip__stat">
+        <dt>Total cameras</dt>
+        <dd>{cameras}</dd>
+      </div>
+      <div className="fleet-status-strip__stat">
+        <dt>Camera connectivity</dt>
+        <dd>
+          {cameras - unreachableCameras} online
+          {unreachableCameras > 0 && <StatusBadge tone="danger">{unreachableCameras} unreachable</StatusBadge>}
+        </dd>
+      </div>
+      <div className="fleet-status-strip__stat">
+        <dt>Quarantined targets</dt>
+        <dd>{quarantinedTargets > 0 ? <StatusBadge tone="warning">{quarantinedTargets}</StatusBadge> : quarantinedTargets}</dd>
+      </div>
+      <div className="fleet-status-strip__stat">
+        <dt>VMS targets connected</dt>
+        <dd>{activeTargets} / {targets}</dd>
+      </div>
+    </dl>
   </section>;
 }
 
@@ -33,9 +61,9 @@ export function DashboardSearch() {
     setQuery(next);
   }
 
-  return <section className="report-panel" aria-labelledby="dashboard-search-heading">
+  return <section className="dashboard-search" aria-labelledby="dashboard-search-heading">
     <h2 id="dashboard-search-heading">Registry search</h2>
-    <form className="coverage-scope-form" onSubmit={submit} role="search">
+    <form className="dashboard-search__form" onSubmit={submit} role="search">
       <label>Search registry<input type="search" value={draft} onChange={(event) => setDraft(event.target.value)} aria-describedby="dashboard-search-help" /></label>
       <p id="dashboard-search-help">Search does not filter the map. It finds authorized registry records across locations.</p>
       <button className="button" type="submit">Search cameras</button>

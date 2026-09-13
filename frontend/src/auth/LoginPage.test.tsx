@@ -85,6 +85,22 @@ describe('LoginPage', () => {
     await user.click(screen.getByRole('button', { name: /sign in/i }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent('The username or password is incorrect, or the account is unavailable.');
+    expect(screen.getByLabelText(/username/i)).toHaveAttribute('aria-describedby', 'sign-in-error');
+    expect(screen.getByLabelText(/username/i)).toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getByLabelText(/^password/i)).toHaveAttribute('aria-describedby', 'sign-in-error');
+    expect(screen.getByLabelText(/^password/i)).toHaveAttribute('aria-invalid', 'true');
+  });
+
+  it('toggles password visibility', async () => {
+    const user = userEvent.setup();
+    renderApp('/login');
+
+    const password = screen.getByLabelText(/^password/i);
+    expect(password).toHaveAttribute('type', 'password');
+
+    await user.click(screen.getByRole('button', { name: /show password/i }));
+
+    expect(password).toHaveAttribute('type', 'text');
   });
 
   it('removes protected access when the active session expires', async () => {

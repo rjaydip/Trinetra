@@ -8,6 +8,7 @@ import { queryKeys } from '../../api/queryKeys';
 import { useAuth } from '../../auth/AuthProvider';
 import { hasPermission } from '../../auth/permissions';
 import { Button, PageState, StatusBadge } from '../../components/ui';
+import './admin.css';
 
 function field(form: FormData, name: string) {
   return String(form.get(name) ?? '').trim();
@@ -115,7 +116,10 @@ function PermissionSelector({
 export function RolesPage() {
   const { session } = useAuth();
   const queryClient = useQueryClient();
-  const canManageRoles = hasPermission(session, 'role.manage') || hasPermission(session, 'group.manage');
+  // Every write here (POST/PUT/DELETE /roles) is gated on role.manage alone — group.manage
+  // grants nothing on this resource, so including it would show a fully-enabled create/edit/
+  // deactivate UI to a caller who gets a 403 on every submit.
+  const canManageRoles = hasPermission(session, 'role.manage');
 
   const [includeInactive, setIncludeInactive] = useState(true);
   const [selectedRoleId, setSelectedRoleId] = useState('');
@@ -325,8 +329,8 @@ export function RolesPage() {
                       <input
                         name="code"
                         placeholder="e.g. DISPATCH_SUPERVISOR"
-                        pattern="^[A-Z0-9_]{3,50}$"
-                        title="Uppercase letters, numbers, and underscores (3-50 characters)"
+                        pattern="^[A-Za-z0-9_]{3,50}$"
+                        title="Letters, numbers, and underscores (3-50 characters) — lowercase is uppercased automatically"
                         required
                       />
                     </label>
@@ -530,6 +534,20 @@ export function RolesPage() {
                         </button>
                       )}
                     </div>
+                  )}
+
+                  {/* Errors from the toolbar's own actions (activate/deactivate/reactivate) —
+                      distinct from the edit form's own error message below, since this action
+                      can be taken without the edit form ever being open. */}
+                  {editingRoleId !== currentRole.id && updateRole.isError && (
+                    <p className="form-error" role="alert">
+                      {errorDetail(updateRole.error, 'The role could not be updated.')}
+                    </p>
+                  )}
+                  {deleteRole.isError && (
+                    <p className="form-error" role="alert">
+                      {errorDetail(deleteRole.error, 'The role could not be deactivated.')}
+                    </p>
                   )}
 
                   {/* Edit Form */}

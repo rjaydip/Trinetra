@@ -75,6 +75,12 @@ public sealed record Camera
 
     public DateOnly? InstallationDate { get; init; }
 
+    /// <summary>
+    /// Whether this camera's future event stream should be persisted. A plain operator-set flag,
+    /// not derived from anything else on the record. Defaults true.
+    /// </summary>
+    public bool RecordEvents { get; init; } = true;
+
     public string OperationalStatus { get; init; } = CameraStatus.OperationalUnknown;
     public string ConnectivityStatus { get; init; } = CameraStatus.ConnectivityUnknown;
     public string MaintenanceStatus { get; init; } = CameraStatus.MaintenanceNormal;

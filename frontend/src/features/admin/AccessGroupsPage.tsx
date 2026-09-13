@@ -3,11 +3,13 @@ import { type FormEvent, useState } from 'react';
 
 import { errorDetail, isApiProblem } from '../../api/client';
 import { api } from '../../api/endpoints';
-import type { AccessGroupResponse, AddScopeRequest, CreateGroupRequest, ScopeResponse } from '../../api/models';
+import type { AccessGroupResponse, AddScopeRequest, CreateGroupRequest, GeographicAreaResponse, OrganizationUnitResponse, ScopeResponse } from '../../api/models';
 import { queryKeys } from '../../api/queryKeys';
 import { useAuth } from '../../auth/AuthProvider';
 import { hasPermission } from '../../auth/permissions';
 import { Button, Pager, PageState, StatusBadge } from '../../components/ui';
+import { TreeSelect } from '../cameras/TreeSelect';
+import './admin.css';
 
 function field(form: FormData, name: string) {
   return String(form.get(name) ?? '').trim();
@@ -49,12 +51,14 @@ function CreateGroupForm({ roles, onCreate, error, pending }: {
 
 function ScopeForm({ groupId, areas, organizations, onAdded }: {
   groupId: string;
-  areas: Array<{ id: string; name: string }>;
+  areas: GeographicAreaResponse[];
   organizations: Array<{ id: string; name: string }>;
   onAdded(): Promise<unknown> | void;
 }) {
   const [scopeType, setScopeType] = useState<'ORGANIZATION' | 'GEOGRAPHY' | 'RESOURCE'>('ORGANIZATION');
   const [organizationId, setOrganizationId] = useState('');
+  const [organizationUnitId, setOrganizationUnitId] = useState('');
+  const [geographicAreaId, setGeographicAreaId] = useState('');
   const units = useQuery({
     queryKey: queryKeys.admin.scopeOrganizationUnits(organizationId),
     queryFn: () => api.admin.organizations.listUnits(organizationId),
@@ -62,27 +66,64 @@ function ScopeForm({ groupId, areas, organizations, onAdded }: {
   });
   const add = useMutation({ mutationFn: (request: AddScopeRequest) => api.admin.groups.addScope(groupId, request), onSuccess: onAdded });
 
+  function changeScopeType(nextScopeType: typeof scopeType) {
+    setScopeType(nextScopeType);
+    setOrganizationId('');
+    setOrganizationUnitId('');
+    setGeographicAreaId('');
+  }
+
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = event.currentTarget;
     const data = new FormData(form);
     let request: AddScopeRequest;
-    if (scopeType === 'ORGANIZATION') request = { scopeType, organizationUnitId: field(data, 'organizationUnitId') };
-    else if (scopeType === 'GEOGRAPHY') request = { scopeType, geographicAreaId: field(data, 'geographicAreaId') };
+    if (scopeType === 'ORGANIZATION') request = { scopeType, organizationUnitId };
+    else if (scopeType === 'GEOGRAPHY') request = { scopeType, geographicAreaId };
     else request = { scopeType, resourceType: field(data, 'resourceType'), resourceId: field(data, 'resourceId') };
     const description = field(data, 'description');
     if (description) request.description = description;
-    add.mutate(request, { onSuccess: () => form.reset() });
+    add.mutate(request, {
+      onSuccess: () => {
+        form.reset();
+        setOrganizationId('');
+        setOrganizationUnitId('');
+        setGeographicAreaId('');
+      },
+    });
   }
 
   return <form aria-label="Add access-group scope" className="admin-form scope-form" onSubmit={submit}>
     <h4>Add scope</h4>
-    <label>Scope type<select name="scopeType" value={scopeType} onChange={(event) => setScopeType(event.target.value as typeof scopeType)}><option value="ORGANIZATION">Organization</option><option value="GEOGRAPHY">Geography</option><option value="RESOURCE">Resource</option></select></label>
+    <label>Scope type<select name="scopeType" value={scopeType} onChange={(event) => changeScopeType(event.target.value as typeof scopeType)}><option value="ORGANIZATION">Organization</option><option value="GEOGRAPHY">Geography</option><option value="RESOURCE">Resource</option></select></label>
     {scopeType === 'ORGANIZATION' && <>
-      <label>Organization<select name="organizationId" value={organizationId} onChange={(event) => setOrganizationId(event.target.value)} required><option value="">Select an organization</option>{organizations.map((organization) => <option key={organization.id} value={organization.id}>{organization.name}</option>)}</select></label>
-      <label>Organization unit<select name="organizationUnitId" disabled={!organizationId || units.isPending} required><option value="">Select an organization unit</option>{units.data?.map((unit) => <option key={unit.id} value={unit.id}>{unit.name}</option>)}</select></label>
+      <label>Organization<select name="organizationId" value={organizationId} onChange={(event) => { setOrganizationId(event.target.value); setOrganizationUnitId(''); }} required><option value="">Select an organization</option>{organizations.map((organization) => <option key={organization.id} value={organization.id}>{organization.name}</option>)}</select></label>
+      <TreeSelect
+        id="scope-form-organizationUnitId"
+        label="Organization unit"
+        items={units.data}
+        getParentId={(unit) => unit.parentUnitId}
+        value={organizationUnitId || undefined}
+        onChange={(unitId) => setOrganizationUnitId(unitId ?? '')}
+        disabled={!organizationId || units.isPending}
+        loading={units.isPending}
+        error={units.isError}
+        required
+        placeholder="Select an organization unit"
+        emptyMessage="This organization has no units."
+      />
     </>}
-    {scopeType === 'GEOGRAPHY' && <label>Geographic area<select name="geographicAreaId" required><option value="">Select a geographic area</option>{areas.map((area) => <option key={area.id} value={area.id}>{area.name}</option>)}</select></label>}
+    {scopeType === 'GEOGRAPHY' && <TreeSelect
+      id="scope-form-geographicAreaId"
+      label="Geographic area"
+      items={areas}
+      getParentId={(area) => area.parentAreaId}
+      value={geographicAreaId || undefined}
+      onChange={(areaId) => setGeographicAreaId(areaId ?? '')}
+      required
+      placeholder="Select a geographic area"
+      emptyMessage="No geographic areas are available."
+    />}
     {scopeType === 'RESOURCE' && <div className="admin-coordinate-grid"><label>Resource type<input name="resourceType" required /></label><label>Resource ID<input name="resourceId" required /></label></div>}
     <label>Description<textarea name="description" /></label>
     {add.isError && <p className="form-error" role="alert">{errorDetail(add.error, 'The scope could not be added.')}</p>}
@@ -206,8 +247,14 @@ export function AccessGroupsPage() {
       return refreshSelected();
     },
     onError: (error) => {
-      if (isApiProblem(error) && error.status === 409) {
+      // Only the "estate-wide grant" 409 (an unconstrained org/geo dimension) is fixed by
+      // confirmUnscoped — resending it for the other 409 this route can return ("Role is not
+      // active", the group's role isn't ACTIVE) would just 409 again for the same unrelated
+      // reason, since that check runs before the unconstrained-dimension check server-side.
+      if (isApiProblem(error) && error.status === 409 && error.title === 'Confirm the estate-wide grant') {
         setActivationConflict(error.detail);
+      } else {
+        setActivationConflict('');
       }
     },
   });
@@ -312,6 +359,13 @@ export function AccessGroupsPage() {
                   Confirm estate-wide activation
                 </Button>
               </fieldset>
+            )}
+
+            {activate.isError && !activationConflict && (
+              <p className="form-error" role="alert">{errorDetail(activate.error, 'The group could not be activated.')}</p>
+            )}
+            {disable.isError && (
+              <p className="form-error" role="alert">{errorDetail(disable.error, 'The group could not be disabled.')}</p>
             )}
 
             {editing && canManage && (

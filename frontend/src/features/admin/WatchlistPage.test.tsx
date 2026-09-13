@@ -60,6 +60,42 @@ it('lists active entries and unacknowledged alerts', async () => {
   expect(await within(alertsRegion).findByText('MH12AB1234')).toBeVisible();
 });
 
+it('shows an error when removing a watchlist entry fails', async () => {
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input));
+    if (url.pathname === `/api/v1/watchlist/${entryId}` && init?.method === 'DELETE') {
+      return Response.json({ title: 'Forbidden', detail: 'This action requires the watchlist.manage permission.' }, { status: 403 });
+    }
+    if (url.pathname === '/api/v1/watchlist/alerts') return Response.json({ items: [], page: 1, pageSize: 20, total: 0, totalPages: 0 });
+    if (url.pathname === '/api/v1/watchlist') return Response.json({ items: [entry], page: 1, pageSize: 20, total: 1, totalPages: 1 });
+    return new Response(null, { status: 404 });
+  }));
+
+  renderWatchlist(['alert.read', 'watchlist.manage']);
+
+  await userEvent.click(await screen.findByRole('button', { name: /^remove$/i }));
+
+  expect(await screen.findByText(/requires the watchlist\.manage permission/i)).toBeVisible();
+});
+
+it('shows an error when acknowledging an alert fails', async () => {
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input));
+    if (url.pathname === `/api/v1/watchlist/alerts/${alertId}/acknowledge` && init?.method === 'POST') {
+      return Response.json({ title: 'Forbidden', detail: 'This action requires the alert.acknowledge permission.' }, { status: 403 });
+    }
+    if (url.pathname === '/api/v1/watchlist/alerts') return Response.json({ items: [alert], page: 1, pageSize: 20, total: 1, totalPages: 1 });
+    if (url.pathname === '/api/v1/watchlist') return Response.json({ items: [], page: 1, pageSize: 20, total: 0, totalPages: 0 });
+    return new Response(null, { status: 404 });
+  }));
+
+  renderWatchlist(['alert.read', 'alert.acknowledge']);
+
+  await userEvent.click(await screen.findByRole('button', { name: /acknowledge/i }));
+
+  expect(await screen.findByText(/requires the alert\.acknowledge permission/i)).toBeVisible();
+});
+
 it('acknowledges an alert for alert.acknowledge users', async () => {
   const requests: Array<{ path: string; method: string }> = [];
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {

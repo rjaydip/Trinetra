@@ -1,4 +1,4 @@
-import type { ButtonHTMLAttributes, ReactNode } from 'react';
+import { useState, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode } from 'react';
 
 export function Button({ children, ...props }: ButtonHTMLAttributes<HTMLButtonElement>) {
   return <button className="button" {...props}>{children}</button>;
@@ -6,8 +6,12 @@ export function Button({ children, ...props }: ButtonHTMLAttributes<HTMLButtonEl
 
 type StatusTone = 'neutral' | 'success' | 'warning' | 'danger';
 
-export function StatusBadge({ children, tone = 'neutral' }: { children: ReactNode; tone?: StatusTone }) {
-  return <span className={`status-badge status-badge--${tone}`}>{children}</span>;
+/** `emphasized` layers a stronger visual weight on top of `tone` — e.g. a camera down for days
+ * versus one down for minutes both read as `danger`, but only the former should demand attention
+ * first. It never changes the color itself, only intensity, so "red still means bad" stays true
+ * app-wide. */
+export function StatusBadge({ children, tone = 'neutral', emphasized = false }: { children: ReactNode; tone?: StatusTone; emphasized?: boolean }) {
+  return <span className={`status-badge status-badge--${tone}${emphasized ? ' status-badge--emphasized' : ''}`}>{children}</span>;
 }
 
 export function PageState({ title, children }: { title: string; children?: ReactNode }) {
@@ -16,6 +20,25 @@ export function PageState({ title, children }: { title: string; children?: React
       <h2>{title}</h2>
       {children && <p>{children}</p>}
     </section>
+  );
+}
+
+/** A password `<input>` with a show/hide toggle. Visibility state is local — never lifted. */
+export function PasswordInput({ id, ...props }: InputHTMLAttributes<HTMLInputElement> & { id: string }) {
+  const [visible, setVisible] = useState(false);
+  return (
+    <div className="password-field">
+      <input {...props} id={id} type={visible ? 'text' : 'password'} />
+      <button
+        aria-label={visible ? 'Hide password' : 'Show password'}
+        aria-pressed={visible}
+        className="password-field__toggle"
+        type="button"
+        onClick={() => setVisible((current) => !current)}
+      >
+        {visible ? 'Hide' : 'Show'}
+      </button>
+    </div>
   );
 }
 

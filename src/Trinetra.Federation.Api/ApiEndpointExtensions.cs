@@ -38,10 +38,13 @@ internal static class ApiEndpointExtensions
         app.MapRoleEndpoints();
         app.MapVmsEndpoints();
         app.MapCameraEndpoints();
+        app.MapCameraConnectionTestEndpoints();
         app.MapCameraHealthEndpoints();
         app.MapCameraReconciliationEndpoints();
         app.MapGisEndpoints();
         app.MapCredentialEndpoints();
+        app.MapCameraCredentialEndpoints();
+        app.MapCameraCredentialTestEndpoints();
         app.MapConnectionTestEndpoints();
         app.MapEventEndpoints();
         app.MapDetectionEndpoints();

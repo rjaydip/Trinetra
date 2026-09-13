@@ -4,8 +4,9 @@ import { useForm, useWatch } from 'react-hook-form';
 import { z } from 'zod';
 
 import { isApiProblem } from '../../api/client';
-import type { CameraWriteRequest, GeoJsonFeatureCollection, GeographicAreaResponse, OrganizationResponse, OrganizationUnitResponse, VmsResponse } from '../../api/models';
-import { Button } from '../../components/ui';
+import { api } from '../../api/endpoints';
+import type { CameraPatchRequest, CameraWriteRequest, GeoJsonFeatureCollection, GeographicAreaResponse, OrganizationResponse, OrganizationUnitResponse, VmsResponse } from '../../api/models';
+import { Button, StatusBadge } from '../../components/ui';
 import {
   cameraTypes,
   connectivityStatuses,
@@ -15,6 +16,7 @@ import {
   roundCoordinate,
 } from './cameraVocabulary';
 import { LocationPicker } from './LocationPicker';
+import { TreeSelect } from './TreeSelect';
 
 const uuidSchema = z.guid();
 
@@ -42,6 +44,9 @@ export interface CameraFormValues {
   ipAddress: string;
   port: string;
   protocol: string;
+  username: string;
+  password: string;
+  recordEvents: boolean;
   vmsId: string;
   streamReference: string;
   installationDate: string;
@@ -53,7 +58,7 @@ export interface CameraFormValues {
 const defaults: CameraFormValues = {
   cameraCode: '', name: '', organizationId: '', organizationUnitId: '', geographicAreaId: '', cameraType: '', latitude: '', longitude: '',
   manufacturer: '', model: '', serialNumber: '', altitude: '', mountingHeight: '', azimuth: '', tilt: '',
-  horizontalFov: '', verticalFov: '', effectiveRange: '', ipAddress: '', port: '', protocol: '', vmsId: '',
+  horizontalFov: '', verticalFov: '', effectiveRange: '', ipAddress: '', port: '', protocol: '', username: '', password: '', recordEvents: true, vmsId: '',
   streamReference: '', installationDate: '', operationalStatus: '', connectivityStatus: '', maintenanceStatus: '',
 };
 
@@ -105,6 +110,9 @@ const cameraFormSchema = z.object({
   ipAddress: z.string(),
   port: numeric('Port', 1, 65535),
   protocol: choice(protocols, `Protocol must be one of: ${protocols.join(', ')}.`),
+  username: z.string(),
+  password: z.string(),
+  recordEvents: z.boolean(),
   vmsId: optionalUuid('VMS ID'),
   streamReference: z.string(),
   installationDate: z.string(),
@@ -142,6 +150,7 @@ export function toCameraWriteRequest(values: CameraFormValues): CameraWriteReque
     cameraCode: values.cameraCode.trim(), name: values.name.trim(), organizationUnitId: values.organizationUnitId,
     geographicAreaId: values.geographicAreaId, cameraType: values.cameraType,
     latitude: roundCoordinate(Number(values.latitude)), longitude: roundCoordinate(Number(values.longitude)),
+    recordEvents: values.recordEvents,
   };
   const optionalStrings: Array<keyof Pick<CameraWriteRequest, 'manufacturer' | 'model' | 'serialNumber' | 'ipAddress' | 'protocol' | 'vmsId' | 'streamReference' | 'installationDate' | 'operationalStatus' | 'connectivityStatus' | 'maintenanceStatus'>> = [
     'manufacturer', 'model', 'serialNumber', 'ipAddress', 'protocol', 'vmsId', 'streamReference', 'installationDate',
@@ -159,6 +168,33 @@ export function toCameraWriteRequest(values: CameraFormValues): CameraWriteReque
   return request;
 }
 
+export interface CameraCredentialInput {
+  username?: string;
+  password?: string;
+}
+
+function toCameraCredentialInput(values: CameraFormValues): CameraCredentialInput {
+  const credential: CameraCredentialInput = {};
+  if (values.username.trim()) credential.username = values.username.trim();
+  if (values.password) credential.password = values.password;
+  return credential;
+}
+
+/** Fields the final ("Camera details") step saves via `PATCH /api/v1/cameras/{id}` — the camera
+ * itself was already created (and its network/credential fields already saved) during the
+ * "Connect"-step credential test, so `cameraCode` (immutable after create) is dropped here. */
+export function toCameraPatchRequest(values: CameraFormValues): CameraPatchRequest {
+  const { cameraCode: _cameraCode, ...patch } = toCameraWriteRequest(values);
+  return patch;
+}
+
+/** The fields `POST /api/v1/cameras` requires (Model 1 API plan §2.7) plus network fields the
+ * credential test needs — the minimal set that must be valid before "Test connection" can run. */
+const requiredForTestFields = [
+  'cameraCode', 'name', 'organizationUnitId', 'geographicAreaId', 'cameraType', 'latitude', 'longitude',
+  'protocol', 'ipAddress', 'port',
+] as const satisfies readonly (keyof CameraFormValues)[];
+
 interface CameraFormProps {
   organizations: OrganizationResponse[];
   organizationUnits: OrganizationUnitResponse[];
@@ -169,7 +205,7 @@ interface CameraFormProps {
   initialValues?: CameraFormValues;
   onOrganizationChange(organizationId: string): void;
   onCoordinatesChange?(latitude: number | null, longitude: number | null): void;
-  onSubmit(values: CameraWriteRequest): Promise<void>;
+  onSubmit(cameraId: string, values: CameraPatchRequest): Promise<void>;
 }
 
 export interface SelectorState {
@@ -226,11 +262,29 @@ function optionalNumericValue(value: string) {
   return value.trim() && Number.isFinite(number) ? number : null;
 }
 
+type CredentialTestState =
+  | { status: 'idle' }
+  | { status: 'testing' }
+  | { status: 'authenticated' }
+  | { status: 'not_verifiable'; detail: string }
+  | { status: 'credential_rejected'; detail: string }
+  | { status: 'unreachable'; detail: string }
+  | { status: 'error'; detail: string };
+
 export function CameraForm({ organizations, organizationUnits, geographicAreas, vms, selectorStates = readySelectorStates, mapFeatures, initialValues, onOrganizationChange, onCoordinatesChange, onSubmit }: CameraFormProps) {
   const form = useForm<CameraFormValues>({ defaultValues: initialValues ?? defaults, resolver: zodResolver(cameraFormSchema) });
+  const [step, setStep] = useState<'connect' | 'details'>('connect');
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [cameraId, setCameraId] = useState<string | null>(null);
+  const [credentialTest, setCredentialTest] = useState<CredentialTestState>({ status: 'idle' });
   const { register, formState: { errors, isSubmitting } } = form;
-  const [latitudeValue, longitudeValue, azimuthValue] = useWatch({ control: form.control, name: ['latitude', 'longitude', 'azimuth'] });
+  const [
+    latitudeValue, longitudeValue, azimuthValue, protocolValue, ipAddressValue, portValue,
+    organizationUnitIdValue, geographicAreaIdValue, cameraCodeValue, nameValue, cameraTypeValue,
+  ] = useWatch({
+    control: form.control,
+    name: ['latitude', 'longitude', 'azimuth', 'protocol', 'ipAddress', 'port', 'organizationUnitId', 'geographicAreaId', 'cameraCode', 'name', 'cameraType'],
+  });
   const latitude = coordinate(latitudeValue, -90, 90);
   const longitude = coordinate(longitudeValue, -180, 180);
   const azimuth = optionalNumericValue(azimuthValue);
@@ -245,23 +299,82 @@ export function CameraForm({ organizations, organizationUnits, geographicAreas, 
     { name: 'altitude', label: 'Altitude', step: 'any' }, { name: 'mountingHeight', label: 'Mounting height', step: 'any' },
     { name: 'tilt', label: 'Tilt', step: 'any' },
     { name: 'horizontalFov', label: 'Horizontal field of view', step: 'any' }, { name: 'verticalFov', label: 'Vertical field of view', step: 'any' },
-    { name: 'effectiveRange', label: 'Effective range', step: 'any' }, { name: 'port', label: 'Port', step: '1' },
+    { name: 'effectiveRange', label: 'Effective range', step: 'any' },
   ];
+  const readyForTest = Boolean(
+    cameraCodeValue?.trim() && nameValue?.trim() && organizationUnitIdValue && geographicAreaIdValue && cameraTypeValue
+      && protocolValue && ipAddressValue?.trim() && portValue?.trim() && latitude !== null && longitude !== null,
+  );
 
   useEffect(() => {
     onCoordinatesChange?.(latitude, longitude);
   }, [latitude, longitude, onCoordinatesChange]);
 
+  /**
+   * Creates the camera (first attempt) or saves the latest connect-step fields to the
+   * already-created camera (a retry after fixing ip/port/protocol/credential), then saves
+   * whatever credential was entered and runs the server-side credential test. The camera is
+   * created here — before the operator has filled in the rest of the form — so the test can run
+   * against a real row; an abandoned registration therefore leaves a partially-filled camera,
+   * which is an accepted trade-off (see NewCameraPage's onSubmit for where the remaining fields
+   * are saved via PATCH once the operator finishes).
+   */
+  async function runCredentialTest() {
+    const valid = await form.trigger(requiredForTestFields);
+    if (!valid) return;
+    setCredentialTest({ status: 'testing' });
+    try {
+      const values = form.getValues();
+      let id = cameraId;
+      if (!id) {
+        const created = await api.cameras.create(toCameraWriteRequest(values));
+        id = created.id;
+        setCameraId(id);
+      } else {
+        await api.cameras.update(id, toCameraPatchRequest(values));
+      }
+      const credential = toCameraCredentialInput(values);
+      if (credential.username || credential.password) {
+        await api.cameras.credentials.save(id, credential);
+      }
+      const result = await api.cameras.testCredential(id);
+      const report = result.result;
+      if (!report) {
+        setCredentialTest({ status: 'error', detail: result.failureReason ?? 'The credential check did not complete. Please try again.' });
+        return;
+      }
+      if (report.authOutcome === 'authenticated') {
+        setCredentialTest({ status: 'authenticated' });
+        setStep('details');
+      } else if (report.authOutcome === 'not_verifiable') {
+        setCredentialTest({ status: 'not_verifiable', detail: report.detail ?? 'The credential could not be verified for this protocol, but the device is reachable.' });
+      } else if (report.authOutcome === 'credential_rejected') {
+        setCredentialTest({ status: 'credential_rejected', detail: report.detail ?? 'The device rejected this credential.' });
+      } else {
+        setCredentialTest({ status: 'unreachable', detail: report.detail ?? result.failureReason ?? 'The device did not respond.' });
+      }
+    } catch (error) {
+      setCredentialTest({ status: 'error', detail: isApiProblem(error) ? error.detail : 'Unable to test the connection. Please try again.' });
+    }
+  }
+
   return (
     <form className="camera-form" onSubmit={form.handleSubmit(async (values) => {
       form.clearErrors('root');
+      if (!cameraId) return;
       try {
-        await onSubmit(toCameraWriteRequest(values));
+        await onSubmit(cameraId, toCameraPatchRequest(values));
       } catch (error) {
-        form.setError('root', { message: isApiProblem(error) ? error.detail : 'Unable to register the camera. Please try again.' });
+        form.setError('root', { message: isApiProblem(error) ? error.detail : 'Unable to save the camera. Please try again.' });
       }
     })}>
-      <fieldset><legend>Identity and location <span aria-hidden="true">* Required</span></legend>
+      <ol className="camera-form-steps" aria-label="Registration steps">
+        <li aria-current={step === 'connect' ? 'step' : undefined}>1. Connect</li>
+        <li aria-current={step === 'details' ? 'step' : undefined}>2. Camera details</li>
+      </ol>
+      {step === 'connect' && <fieldset>
+        <legend>Connect to the device</legend>
+        <p className="field-help">Identify the camera and enter how to reach it on the network, then test the connection — this creates the camera and verifies its credential before you continue.</p>
         <label>Camera code<span aria-hidden="true"> *</span><input aria-required="true" {...register('cameraCode')} {...validationProps('cameraCode')} /></label><FieldError id="cameraCode-error" message={errors.cameraCode?.message} />
         <label>Name<span aria-hidden="true"> *</span><input aria-required="true" {...register('name')} {...validationProps('name')} /></label><FieldError id="name-error" message={errors.name?.message} />
         <label>Organization<select aria-describedby={selectorStates.organizations.state === 'ready' ? undefined : 'organizations-status'} disabled={selectorStates.organizations.state !== 'ready'} {...organizationRegistration} onChange={(event) => {
@@ -271,50 +384,104 @@ export function CameraForm({ organizations, organizationUnits, geographicAreas, 
           onOrganizationChange(event.target.value);
         }}><option value="">Select an organization</option>{organizations.map((organization) => <option key={organization.id} value={organization.id}>{organization.name} ({organization.code})</option>)}</select></label>
         <SelectorStatus id="organizations-status" label="Organizations" selector={selectorStates.organizations} emptyMessage="No organizations are available. Ask an administrator to create an organization before registering a camera." />
-        <label>Organization unit<span aria-hidden="true"> *</span><select aria-required="true" disabled={!selectedOrganizationId || selectorStates.organizationUnits.state !== 'ready'} {...register('organizationUnitId')} {...validationProps('organizationUnitId', selectorStates.organizationUnits.state === 'ready' ? undefined : 'organization-units-status')}><option value="">Select an organization unit</option>{organizationUnits.map((unit) => <option key={unit.id} value={unit.id}>{unit.name} ({unit.code})</option>)}</select></label><FieldError id="organizationUnitId-error" message={errors.organizationUnitId?.message} />
+        <TreeSelect
+          id="organizationUnitId"
+          label="Organization unit"
+          items={organizationUnits}
+          getParentId={(unit) => unit.parentUnitId}
+          value={organizationUnitIdValue || undefined}
+          onChange={(unitId) => form.setValue('organizationUnitId', unitId ?? '', { shouldDirty: true, shouldValidate: true })}
+          disabled={!selectedOrganizationId || selectorStates.organizationUnits.state !== 'ready'}
+          loading={selectorStates.organizationUnits.state === 'loading'}
+          error={selectorStates.organizationUnits.state === 'error'}
+          required
+          invalid={Boolean(errors.organizationUnitId)}
+          describedBy={[errors.organizationUnitId ? 'organizationUnitId-error' : undefined, selectorStates.organizationUnits.state === 'ready' ? undefined : 'organization-units-status'].filter(Boolean).join(' ') || undefined}
+          placeholder="Select an organization unit"
+          emptyMessage="This organization has no units."
+        />
+        <FieldError id="organizationUnitId-error" message={errors.organizationUnitId?.message} />
         <SelectorStatus id="organization-units-status" label="Organization units" selector={selectorStates.organizationUnits} idleMessage="Select an organization to load its organization units." emptyMessage="No organization units are available for this organization. Choose another organization or ask an administrator to create an organization unit." />
-        <label>Geographic area<span aria-hidden="true"> *</span><select aria-required="true" disabled={selectorStates.geographicAreas.state !== 'ready'} {...register('geographicAreaId')} {...validationProps('geographicAreaId', selectorStates.geographicAreas.state === 'ready' ? undefined : 'geographic-areas-status')}><option value="">Select a geographic area</option>{geographicAreas.map((area) => <option key={area.id} value={area.id}>{area.name} ({area.code})</option>)}</select></label><FieldError id="geographicAreaId-error" message={errors.geographicAreaId?.message} />
+        <TreeSelect
+          id="geographicAreaId"
+          label="Geographic area"
+          items={geographicAreas}
+          getParentId={(area) => area.parentAreaId}
+          value={geographicAreaIdValue || undefined}
+          onChange={(areaId) => form.setValue('geographicAreaId', areaId ?? '', { shouldDirty: true, shouldValidate: true })}
+          disabled={selectorStates.geographicAreas.state !== 'ready'}
+          loading={selectorStates.geographicAreas.state === 'loading'}
+          error={selectorStates.geographicAreas.state === 'error'}
+          required
+          invalid={Boolean(errors.geographicAreaId)}
+          describedBy={[errors.geographicAreaId ? 'geographicAreaId-error' : undefined, selectorStates.geographicAreas.state === 'ready' ? undefined : 'geographic-areas-status'].filter(Boolean).join(' ') || undefined}
+          placeholder="Select a geographic area"
+          emptyMessage="No geographic areas are available."
+        />
+        <FieldError id="geographicAreaId-error" message={errors.geographicAreaId?.message} />
         <SelectorStatus id="geographic-areas-status" label="Geographic areas" selector={selectorStates.geographicAreas} emptyMessage="No geographic areas are available. Ask an administrator to create one before registering a camera." />
         <label>Camera type<span aria-hidden="true"> *</span><select aria-required="true" {...register('cameraType')} {...validationProps('cameraType')}><option value="">Select a camera type</option>{cameraTypes.map((type) => <option key={type} value={type}>{type}</option>)}</select></label><FieldError id="cameraType-error" message={errors.cameraType?.message} />
         <label>Latitude<span aria-hidden="true"> *</span><input aria-required="true" inputMode="decimal" {...register('latitude')} {...validationProps('latitude')} /></label><FieldError id="latitude-error" message={errors.latitude?.message} />
         <label>Longitude<span aria-hidden="true"> *</span><input aria-required="true" inputMode="decimal" {...register('longitude')} {...validationProps('longitude')} /></label><FieldError id="longitude-error" message={errors.longitude?.message} />
-      </fieldset>
-      <fieldset><legend>Device and network</legend>
-        <label>Manufacturer<span aria-hidden="true"> *</span><input aria-required={!selectedVmsId} {...register('manufacturer')} {...validationProps('manufacturer')} /></label><FieldError id="manufacturer-error" message={errors.manufacturer?.message} />
-        <label>IP address<span aria-hidden="true"> *</span><input aria-required={!selectedVmsId} {...register('ipAddress')} {...validationProps('ipAddress')} /></label><FieldError id="ipAddress-error" message={errors.ipAddress?.message} />
         <label>Protocol<span aria-hidden="true"> *</span><select aria-required={!selectedVmsId} {...register('protocol')} {...validationProps('protocol')}><option value="">Not recorded</option>{protocols.map((protocol) => <option key={protocol} value={protocol}>{protocol}</option>)}</select></label><FieldError id="protocol-error" message={errors.protocol?.message} />
+        <label>IP address<span aria-hidden="true"> *</span><input aria-required={!selectedVmsId} {...register('ipAddress')} {...validationProps('ipAddress')} /></label><FieldError id="ipAddress-error" message={errors.ipAddress?.message} />
         <label>Port<span aria-hidden="true"> *</span><input aria-required={!selectedVmsId} type="number" step="1" {...register('port')} {...validationProps('port')} /></label><FieldError id="port-error" message={errors.port?.message} />
-      </fieldset>
-      <button aria-controls="camera-additional-details" aria-expanded={detailsOpen} className="button button--secondary" onClick={() => setDetailsOpen((open) => !open)} type="button">Additional details</button>
-      {detailsOpen && <section id="camera-additional-details" aria-label="Additional details">
-        <LocationPicker
-          latitude={latitude}
-          longitude={longitude}
-          azimuth={azimuth}
-          azimuthError={errors.azimuth?.message}
-          features={mapFeatures}
-          onLocationChange={(nextLatitude, nextLongitude) => {
-            form.setValue('latitude', String(nextLatitude), { shouldDirty: true, shouldValidate: true });
-            form.setValue('longitude', String(nextLongitude), { shouldDirty: true, shouldValidate: true });
-          }}
-          onAzimuthChange={(nextAzimuth) => form.setValue('azimuth', nextAzimuth === null ? '' : String(nextAzimuth), { shouldDirty: true, shouldValidate: true })}
-        />
-        <fieldset><legend>Optional device details</legend>
-          <label>Model<input {...register('model')} {...validationProps('model')} /></label><label>Serial number<input {...register('serialNumber')} {...validationProps('serialNumber')} /></label>
-          <label>VMS<select disabled={selectorStates.vms.state !== 'ready'} {...register('vmsId')} {...validationProps('vmsId', selectorStates.vms.state === 'ready' ? undefined : 'vms-status')}><option value="">Manual registration</option>{vms.map((vmsTarget) => <option key={vmsTarget.id} value={vmsTarget.id}>{vmsTarget.displayName} ({vmsTarget.code})</option>)}</select></label><FieldError id="vmsId-error" message={errors.vmsId?.message} />
-          <SelectorStatus id="vms-status" label="VMS records" selector={selectorStates.vms} emptyMessage="No VMS records are available. Continue with manual registration, or ask an administrator to create a VMS record." />
-          <label>Stream reference<input {...register('streamReference')} {...validationProps('streamReference')} /></label>
+        <label>Username<input autoComplete="username" {...register('username')} /></label>
+        <label>Password<input autoComplete="new-password" type="password" {...register('password')} /></label>
+        <p className="field-help">The credential is sealed to this camera once the connection test runs — it is never stored as plain text or shown again.</p>
+        <div className="connection-check">
+          <button className="button button--secondary" disabled={!readyForTest || credentialTest.status === 'testing'} type="button" onClick={() => { void runCredentialTest(); }}>
+            {credentialTest.status === 'testing' ? 'Testing connection…' : 'Test connection'}
+          </button>
+          <p className="field-help">Creates the camera, saves the credential, and checks that the device authenticates at this address.</p>
+          {credentialTest.status === 'authenticated' && <p role="status"><StatusBadge tone="success">Authenticated</StatusBadge></p>}
+          {credentialTest.status === 'not_verifiable' && <div role="status">
+            <p><StatusBadge tone="warning">Reachable — credential not verified</StatusBadge> {credentialTest.detail}</p>
+            <Button type="button" onClick={() => setStep('details')}>Continue anyway</Button>
+          </div>}
+          {credentialTest.status === 'credential_rejected' && <p className="form-error" role="alert"><StatusBadge tone="danger">Credential rejected</StatusBadge> {credentialTest.detail}</p>}
+          {credentialTest.status === 'unreachable' && <p className="form-error" role="alert"><StatusBadge tone="danger">Not reachable</StatusBadge> {credentialTest.detail}</p>}
+          {credentialTest.status === 'error' && <p className="form-error" role="alert">{credentialTest.detail}</p>}
+        </div>
+      </fieldset>}
+      {step === 'details' && <div>
+        <button className="button button--secondary" type="button" onClick={() => setStep('connect')}>Back to connection details</button>
+        <fieldset><legend>Device</legend>
+          <label>Manufacturer<span aria-hidden="true"> *</span><input aria-required={!selectedVmsId} {...register('manufacturer')} {...validationProps('manufacturer')} /></label><FieldError id="manufacturer-error" message={errors.manufacturer?.message} />
+          <label>Model<input {...register('model')} {...validationProps('model')} /></label>
+          <label>Serial number<input {...register('serialNumber')} {...validationProps('serialNumber')} /></label>
+          <label className="checkbox-label"><input {...register('recordEvents')} type="checkbox" /> Save camera events</label>
         </fieldset>
-        <fieldset><legend>Position, optics, and status</legend>
-          {numericFields.map(({ name, label, step }) => <div key={name}><label>{label}<input type="number" step={step} {...register(name)} {...validationProps(name)} /></label><FieldError id={`${name}-error`} message={errors[name]?.message} /></div>)}
-          <label>Installation date<input type="date" {...register('installationDate')} {...validationProps('installationDate')} /></label>
-          <label>Operational status<select {...register('operationalStatus')} {...validationProps('operationalStatus')}><option value="">Use server default</option>{operationalStatuses.map((status) => <option key={status} value={status}>{status}</option>)}</select></label><FieldError id="operationalStatus-error" message={errors.operationalStatus?.message} />
-          <label>Connectivity status<select {...register('connectivityStatus')} {...validationProps('connectivityStatus')}><option value="">Use server default</option>{connectivityStatuses.map((status) => <option key={status} value={status}>{status}</option>)}</select></label><FieldError id="connectivityStatus-error" message={errors.connectivityStatus?.message} />
-          <label>Maintenance status<select {...register('maintenanceStatus')} {...validationProps('maintenanceStatus')}><option value="">Use server default</option>{maintenanceStatuses.map((status) => <option key={status} value={status}>{status}</option>)}</select></label><FieldError id="maintenanceStatus-error" message={errors.maintenanceStatus?.message} />
-        </fieldset>
-      </section>}
-      <FieldError id="camera-form-error" message={errors.root?.message} />
-      <Button disabled={isSubmitting} type="submit">{isSubmitting ? 'Registering camera…' : 'Register camera'}</Button>
+        <button aria-controls="camera-additional-details" aria-expanded={detailsOpen} className="button button--secondary" onClick={() => setDetailsOpen((open) => !open)} type="button">Additional details</button>
+        {detailsOpen && <section id="camera-additional-details" aria-label="Additional details">
+          <LocationPicker
+            latitude={latitude}
+            longitude={longitude}
+            azimuth={azimuth}
+            azimuthError={errors.azimuth?.message}
+            features={mapFeatures}
+            onLocationChange={(nextLatitude, nextLongitude) => {
+              form.setValue('latitude', String(nextLatitude), { shouldDirty: true, shouldValidate: true });
+              form.setValue('longitude', String(nextLongitude), { shouldDirty: true, shouldValidate: true });
+            }}
+            onAzimuthChange={(nextAzimuth) => form.setValue('azimuth', nextAzimuth === null ? '' : String(nextAzimuth), { shouldDirty: true, shouldValidate: true })}
+          />
+          <fieldset><legend>VMS link</legend>
+            <label>VMS<select disabled={selectorStates.vms.state !== 'ready'} {...register('vmsId')} {...validationProps('vmsId', selectorStates.vms.state === 'ready' ? undefined : 'vms-status')}><option value="">Manual registration</option>{vms.map((vmsTarget) => <option key={vmsTarget.id} value={vmsTarget.id}>{vmsTarget.displayName} ({vmsTarget.code})</option>)}</select></label><FieldError id="vmsId-error" message={errors.vmsId?.message} />
+            <SelectorStatus id="vms-status" label="VMS records" selector={selectorStates.vms} emptyMessage="No VMS records are available. Continue with manual registration, or ask an administrator to create a VMS record." />
+            <label>Stream reference<input {...register('streamReference')} {...validationProps('streamReference')} /></label>
+          </fieldset>
+          <fieldset><legend>Position, optics, and status</legend>
+            {numericFields.map(({ name, label, step: fieldStep }) => <div key={name}><label>{label}<input type="number" step={fieldStep} {...register(name)} {...validationProps(name)} /></label><FieldError id={`${name}-error`} message={errors[name]?.message} /></div>)}
+            <label>Installation date<input type="date" {...register('installationDate')} {...validationProps('installationDate')} /></label>
+            <label>Operational status<select {...register('operationalStatus')} {...validationProps('operationalStatus')}><option value="">Use server default</option>{operationalStatuses.map((status) => <option key={status} value={status}>{status}</option>)}</select></label><FieldError id="operationalStatus-error" message={errors.operationalStatus?.message} />
+            <label>Connectivity status<select {...register('connectivityStatus')} {...validationProps('connectivityStatus')}><option value="">Use server default</option>{connectivityStatuses.map((status) => <option key={status} value={status}>{status}</option>)}</select></label><FieldError id="connectivityStatus-error" message={errors.connectivityStatus?.message} />
+            <label>Maintenance status<select {...register('maintenanceStatus')} {...validationProps('maintenanceStatus')}><option value="">Use server default</option>{maintenanceStatuses.map((status) => <option key={status} value={status}>{status}</option>)}</select></label><FieldError id="maintenanceStatus-error" message={errors.maintenanceStatus?.message} />
+          </fieldset>
+        </section>}
+        <FieldError id="camera-form-error" message={errors.root?.message} />
+        <Button disabled={isSubmitting} type="submit">{isSubmitting ? 'Saving…' : 'Save details'}</Button>
+      </div>}
     </form>
   );
 }

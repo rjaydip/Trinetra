@@ -1,19 +1,36 @@
-import type { CameraResponse } from '../../api/models';
-import { StatusBadge } from '../../components/ui';
+import { useQuery } from '@tanstack/react-query';
 
-function tone(status: string): 'success' | 'warning' | 'danger' | 'neutral' {
-  const normal = status.toUpperCase();
-  if (['ACTIVE', 'ONLINE', 'CURRENT'].includes(normal)) return 'success';
-  if (['OFFLINE', 'FAILED', 'RETIRED'].includes(normal)) return 'danger';
-  if (['DEGRADED', 'MAINTENANCE', 'DUE'].includes(normal)) return 'warning';
-  return 'neutral';
-}
+import { api } from '../../api/endpoints';
+import type { CameraResponse } from '../../api/models';
+import { queryKeys } from '../../api/queryKeys';
+import { StatusBadge } from '../../components/ui';
+import { statusTone as tone } from './statusTone';
+import './cameras.css';
 
 export function CameraDetailSections({ camera }: { camera: CameraResponse }) {
   const numberWithUnit = (value: number | null | undefined, unit: string) => value == null ? 'Not recorded' : `${value}${unit}`;
+
+  // Resolve the reference ids to human-readable names. Any outcome other than a successful
+  // response — still loading, no permission, the record no longer exists — falls back to
+  // showing the raw id rather than an error or an empty field: this is a display enhancement on
+  // top of data that's already shown, not a gate on seeing the camera record itself.
+  const organizationUnit = useQuery({
+    queryKey: queryKeys.reference.organizationUnit(camera.organizationUnitId),
+    queryFn: () => api.reference.organizationUnit(camera.organizationUnitId),
+  });
+  const geographicArea = useQuery({
+    queryKey: queryKeys.reference.geographicArea(camera.geographicAreaId ?? ''),
+    queryFn: () => api.reference.geographicArea(camera.geographicAreaId!),
+    enabled: Boolean(camera.geographicAreaId),
+  });
+  const vms = useQuery({
+    queryKey: queryKeys.vms.detail(camera.vmsId ?? ''),
+    queryFn: () => api.vms.get(camera.vmsId!),
+    enabled: Boolean(camera.vmsId),
+  });
   return (
     <div className="camera-detail-sections">
-      <section aria-labelledby="camera-status-heading">
+      <section className="detail-panel" aria-labelledby="camera-status-heading">
         <h3 id="camera-status-heading">Status</h3>
         <dl>
           <div><dt>Operational</dt><dd><StatusBadge tone={tone(camera.operationalStatus)}>{camera.operationalStatus}</StatusBadge></dd></div>
@@ -21,13 +38,13 @@ export function CameraDetailSections({ camera }: { camera: CameraResponse }) {
           <div><dt>Maintenance</dt><dd><StatusBadge tone={tone(camera.maintenanceStatus)}>{camera.maintenanceStatus}</StatusBadge></dd></div>
         </dl>
       </section>
-      <section aria-labelledby="camera-location-heading">
+      <section className="detail-panel" aria-labelledby="camera-location-heading">
         <h3 id="camera-location-heading">Registry details</h3>
         <dl>
           <div><dt>Camera code</dt><dd>{camera.cameraCode}</dd></div>
           <div><dt>Camera ID</dt><dd>{camera.id}</dd></div>
-          <div><dt>Organization unit ID</dt><dd>{camera.organizationUnitId}</dd></div>
-          <div><dt>Geographic area ID</dt><dd>{camera.geographicAreaId}</dd></div>
+          <div><dt>Organization unit</dt><dd>{organizationUnit.data?.name ?? camera.organizationUnitId}</dd></div>
+          <div><dt>Geographic area</dt><dd>{camera.geographicAreaId ? (geographicArea.data?.name ?? camera.geographicAreaId) : 'Not recorded'}</dd></div>
           <div><dt>Type</dt><dd>{camera.cameraType}</dd></div>
           <div><dt>Coordinates</dt><dd>{camera.latitude}, {camera.longitude}</dd></div>
           <div><dt>Manufacturer</dt><dd>{camera.manufacturer ?? 'Not recorded'}</dd></div>
@@ -39,17 +56,17 @@ export function CameraDetailSections({ camera }: { camera: CameraResponse }) {
           <div><dt>Retired at</dt><dd>{camera.retiredAt ? new Date(camera.retiredAt).toLocaleString() : 'Not retired'}</dd></div>
         </dl>
       </section>
-      <section aria-labelledby="camera-connection-heading">
+      <section className="detail-panel" aria-labelledby="camera-connection-heading">
         <h3 id="camera-connection-heading">Connection</h3>
         <dl>
           <div><dt>IP address</dt><dd>{camera.ipAddress ?? 'Not recorded'}</dd></div>
           <div><dt>Port</dt><dd>{camera.port ?? 'Not recorded'}</dd></div>
           <div><dt>Protocol</dt><dd>{camera.protocol ?? 'Not recorded'}</dd></div>
-          <div><dt>VMS ID</dt><dd>{camera.vmsId ?? 'Not recorded'}</dd></div>
+          <div><dt>VMS</dt><dd>{camera.vmsId ? (vms.data?.displayName ?? camera.vmsId) : 'Not recorded'}</dd></div>
           <div><dt>Stream reference</dt><dd>{camera.streamReference ?? 'Not recorded'}</dd></div>
         </dl>
       </section>
-      <section aria-labelledby="camera-coverage-inputs-heading">
+      <section className="detail-panel" aria-labelledby="camera-coverage-inputs-heading">
         <h3 id="camera-coverage-inputs-heading">Coverage inputs</h3>
         <p>Coverage is an estimate for planning; terrain and obstructions are not modelled.</p>
         <dl>
