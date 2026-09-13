@@ -122,7 +122,16 @@ public sealed record ApiKeyResponse(
 public sealed record VmsResponse(
     Guid Id, string Code, Guid OrganizationUnitId, Guid? GeographicAreaId, string DisplayName,
     string Vendor, string RuntimeClass, string Endpoint, string CredentialReference,
-    bool VerifyTls, string State, int? ExpectedCameraCount);
+    bool VerifyTls, string State, int? ExpectedCameraCount,
+    DateTimeOffset? LastInventoryPollAt, int? LastInventoryCameraCount);
+
+/// <summary>
+/// Acknowledgement of an operator-requested inventory refresh. No adapter call has happened by
+/// the time this is returned — <c>requestedAt</c> is only the flag <c>TargetWorker</c>'s health
+/// loop will notice on its next tick.
+/// </summary>
+public sealed record PollInventoryResponse(
+    Guid TargetId, DateTimeOffset RequestedAt, bool CircuitOpen);
 
 /// <summary>One health observation for a connector target.</summary>
 /// <remarks>

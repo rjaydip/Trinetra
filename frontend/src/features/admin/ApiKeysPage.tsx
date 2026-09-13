@@ -8,6 +8,7 @@ import { queryKeys } from '../../api/queryKeys';
 import { useAuth } from '../../auth/AuthProvider';
 import { hasPermission } from '../../auth/permissions';
 import { Button, Pager, PageState, StatusBadge } from '../../components/ui';
+import './admin.css';
 
 function field(form: FormData, name: string) {
   return String(form.get(name) ?? '').trim();
@@ -69,6 +70,7 @@ export function ApiKeysPage() {
               </li>)}</ul>
               <Pager page={keys.data.page} pageSize={keys.data.pageSize} total={keys.data.total} onPageChange={setPage} />
             </>}
+      {revoke.isError && <p className="form-error" role="alert">{errorDetail(revoke.error, 'The API key could not be revoked.')}</p>}
     </section>
     {canManage && <form aria-label="Provision API key" className="admin-form" onSubmit={submit}>
       <h3>Provision API key</h3>

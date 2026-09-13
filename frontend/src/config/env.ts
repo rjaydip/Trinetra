@@ -17,6 +17,9 @@ export function apiBaseUrl(): string {
  * into the client bundle at build time like any other `VITE_*` variable.
  */
 export function devCredentials(): { username: string; password: string } {
+  // Gated on DEV so a stray VITE_USERNAME/VITE_PASSWORD left in a shared or production .env file
+  // is ignored by the production build rather than baked into the client bundle.
+  if (!import.meta.env.DEV) return { username: '', password: '' };
   return {
     username: import.meta.env.VITE_USERNAME ?? '',
     password: import.meta.env.VITE_PASSWORD ?? '',

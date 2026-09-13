@@ -251,4 +251,113 @@ public sealed class VmsLifecycleTests : IClassFixture<PostgresFixture>, IAsyncLi
         await Should.ThrowAsync<InvalidReferenceException>(
             () => repo.UpsertAsync(target, SystemCaller(), work, CancellationToken.None));
     }
+
+    // ---- Inventory freshness (POST /vms/{id}/poll-inventory) ---------------
+
+    [Fact]
+    public async Task RequestInventoryPoll_OnAnInScopeTarget_SetsTheFlag()
+    {
+        var repo = new ConnectorTargetRepository(_fixture.DataSource);
+        var requestedAt = DateTimeOffset.UtcNow;
+
+        await using (var work = await UnitOfWork.BeginAsync(_fixture.DataSource, CancellationToken.None))
+        {
+            (await repo.RequestInventoryPollAsync(
+                TargetId, requestedAt, SystemCaller(), work, CancellationToken.None))
+                .ShouldBeTrue();
+            await work.CommitAsync(CancellationToken.None);
+        }
+
+        var stored = await _fixture.ScalarAsync<DateTimeOffset?>(
+            $"SELECT inventory_poll_requested_at FROM federation.connector_target "
+            + $"WHERE id = '{TargetId}';");
+
+        stored.ShouldNotBeNull();
+        stored!.Value.ShouldBe(requestedAt, TimeSpan.FromSeconds(1));
+    }
+
+    [Fact]
+    public async Task RequestInventoryPoll_UnknownId_ReturnsFalse_ForA404NotASilentNoOp()
+    {
+        var repo = new ConnectorTargetRepository(_fixture.DataSource);
+        await using var work = await UnitOfWork.BeginAsync(_fixture.DataSource, CancellationToken.None);
+
+        (await repo.RequestInventoryPollAsync(
+            Guid.NewGuid(), DateTimeOffset.UtcNow, SystemCaller(), work, CancellationToken.None))
+            .ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task RequestInventoryPoll_CallerWithoutVmsUpdate_IsForbidden()
+    {
+        // Same pattern as Delete_CallerWithoutVmsDelete_IsForbidden: caller.Require(...) is an
+        // in-memory check on the claims already in hand, checked before any SQL runs.
+        var caller = new CallerContext
+        {
+            Actor = "no-update",
+            Permissions = new HashSet<string>(StringComparer.Ordinal) { "vms.read" },
+        };
+
+        var repo = new ConnectorTargetRepository(_fixture.DataSource);
+        await using var work = await UnitOfWork.BeginAsync(_fixture.DataSource, CancellationToken.None);
+
+        await Should.ThrowAsync<ForbiddenException>(
+            () => repo.RequestInventoryPollAsync(
+                TargetId, DateTimeOffset.UtcNow, caller, work, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task UpsertInventoryAsync_StampsLastPollTimeAndCameraCount_OnConnectorTarget()
+    {
+        var state = new ConnectorStateStore(_fixture.DataSource);
+
+        var cameras = new[]
+        {
+            new FederatedCamera
+            {
+                TargetId = TargetId,
+                NativeCameraId = "cam-1",
+                OrganizationUnitId = PostgresFixture.PoliceUnit,
+                IsEnabled = true,
+                Health = HealthStatus.Healthy,
+                StreamReferences = [],
+            },
+        };
+
+        var before = DateTimeOffset.UtcNow;
+        await state.UpsertInventoryAsync(TargetId, cameras, CancellationToken.None);
+
+        var pollAt = await _fixture.ScalarAsync<DateTimeOffset?>(
+            $"SELECT last_inventory_poll_at FROM federation.connector_target "
+            + $"WHERE id = '{TargetId}';");
+        var count = await _fixture.ScalarAsync<int?>(
+            $"SELECT last_inventory_camera_count FROM federation.connector_target "
+            + $"WHERE id = '{TargetId}';");
+
+        pollAt.ShouldNotBeNull();
+        pollAt!.Value.ShouldBeGreaterThanOrEqualTo(before);
+        count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task UpsertInventoryAsync_WithZeroCameras_StillStampsThePollTime()
+    {
+        // A poll that ran and (correctly or not) found nothing is itself a freshness signal —
+        // the target must not look stale just because the merge/COPY path was skipped.
+        var state = new ConnectorStateStore(_fixture.DataSource);
+
+        var before = DateTimeOffset.UtcNow;
+        await state.UpsertInventoryAsync(TargetId, [], CancellationToken.None);
+
+        var pollAt = await _fixture.ScalarAsync<DateTimeOffset?>(
+            $"SELECT last_inventory_poll_at FROM federation.connector_target "
+            + $"WHERE id = '{TargetId}';");
+        var count = await _fixture.ScalarAsync<int?>(
+            $"SELECT last_inventory_camera_count FROM federation.connector_target "
+            + $"WHERE id = '{TargetId}';");
+
+        pollAt.ShouldNotBeNull();
+        pollAt!.Value.ShouldBeGreaterThanOrEqualTo(before);
+        count.ShouldBe(0);
+    }
 }

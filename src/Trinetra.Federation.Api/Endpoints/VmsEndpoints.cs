@@ -123,6 +123,22 @@ public static class VmsEndpoints
               + "Gated on `vms.delete`, not `vms.update`: permanently destroying a target and its "
               + "whole inventory is a distinct, irreversible action from editing it.");
 
+        group.MapPost("/{id:guid}/poll-inventory", PollInventoryAsync)
+          .RequirePermission("vms.update")
+          .WithSummary("Bring a target's next inventory pass forward")
+          .WithDescription(
+              "Sets a flag only — **this process never calls the adapter.** `TargetWorker`'s "
+              + "health loop (60s cadence) is what notices the flag and runs the next inventory "
+              + "pass early, through the same rate-limited, circuit-broken path the regular "
+              + "cadence uses.\n\n"
+              + "Returns `202` immediately with `requestedAt` and whether the circuit breaker is "
+              + "currently open — an open breaker means the refresh will wait behind it rather "
+              + "than run on the next tick. There is no `statusUrl` to poll; `lastInventoryPollAt` "
+              + "on `GET /vms/{id}` moves once it has actually run.\n\n"
+              + "`404` if the target is out of the caller's scope, `409` if it is not `Active` — "
+              + "an inactive target is not being polled by any worker, so a request here could "
+              + "never be served.");
+
         // ---- Monitoring ----------------------------------------------------
 
         group.MapGet("/{id:guid}/health", HealthAsync)
@@ -290,7 +306,8 @@ public static class VmsEndpoints
     private static VmsResponse ToResponse(ConnectorTarget t) => new(
         t.Id, t.Code, t.OrganizationUnitId, t.GeographicAreaId, t.DisplayName,
         t.Vendor.ToString(), t.RuntimeClass.ToString(), t.Endpoint, t.CredentialReference,
-        t.VerifyTls, t.State.ToString(), t.ExpectedCameraCount);
+        t.VerifyTls, t.State.ToString(), t.ExpectedCameraCount,
+        t.LastInventoryPollAt, t.LastInventoryCameraCount);
 
     /// <summary>Audit projection. Records the credential <i>reference</i>, never its value.</summary>
     private static object Redact(ConnectorTargetRequest r) => new
@@ -412,6 +429,49 @@ public static class VmsEndpoints
         await work.CommitAsync(ct);
 
         return TypedResults.NoContent();
+    }
+
+    private static async Task<Results<Accepted<PollInventoryResponse>, NotFound, ProblemHttpResult>>
+        PollInventoryAsync(
+            Guid id, ConnectorTargetRepository repo, FederationQueryRepository queries,
+            NpgsqlDataSource db, HttpContext http, CancellationToken ct)
+    {
+        var caller = CallerContextFactory.From(http);
+        var target = await repo.GetAsync(id, caller, ct);
+
+        if (target is null)
+        {
+            return TypedResults.NotFound();
+        }
+
+        // Not being polled by any worker, so a refresh request here could never be served.
+        if (target.State != TargetState.Active)
+        {
+            return TypedResults.Problem(
+                title: "Target is not active",
+                detail: "Only an Active target is polled by a worker. Set the target's state "
+                      + "with POST /vms/{id}/state before requesting an inventory refresh.",
+                statusCode: StatusCodes.Status409Conflict);
+        }
+
+        var requestedAt = DateTimeOffset.UtcNow;
+
+        await using var work = await UnitOfWork.BeginAsync(db, ct);
+
+        if (!await repo.RequestInventoryPollAsync(id, requestedAt, caller, work, ct))
+        {
+            return TypedResults.NotFound();
+        }
+
+        await work.AuditAsync(caller, "update", "connector_target", id.ToString(),
+            before: null, after: new { inventoryPollRequestedAt = requestedAt },
+            target.OrganizationUnitId, ct);
+        await work.CommitAsync(ct);
+
+        var circuitOpen = await queries.LatestCircuitOpenAsync(id, ct);
+
+        return TypedResults.Accepted(
+            (string?)null, new PollInventoryResponse(id, requestedAt, circuitOpen));
     }
 
     private static async Task<Results<NoContent, NotFound, ProblemHttpResult>> RemoveAsync(

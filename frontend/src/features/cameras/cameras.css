@@ -1,0 +1,106 @@
+.registry-page, .camera-detail-page { display: grid; gap: 1.25rem; }
+.registry-page__header h1, .camera-detail-page h1 { margin: .25rem 0 0; }
+.registry-page__header, .registry-page__actions { display: flex; align-items: start; justify-content: space-between; gap: .75rem; }
+.registry-page__actions { flex-wrap: wrap; justify-content: end; }
+.registry-page__actions .button { display: inline-flex; align-items: center; text-decoration: none; }
+.camera-form { display: grid; gap: 1rem; }
+.camera-form fieldset, .import-preview, .import-result { display: grid; gap: .75rem; margin: 0; padding: 1rem; border: 1px solid var(--color-border); border-radius: .75rem; background: var(--color-surface); }
+.camera-form legend, .import-preview legend { padding-inline: .25rem; font-weight: 700; }
+.camera-form label, .file-input { display: grid; gap: .375rem; font-size: .875rem; font-weight: 600; }
+.camera-form input, .camera-form select, .file-input input { min-height: 2.75rem; padding: .5rem .625rem; border: 1px solid var(--color-border); border-radius: .375rem; color: var(--color-text); background: var(--color-surface); font: inherit; }
+.field-help { grid-column: 1 / -1; margin: 0; color: var(--color-muted); font-size: .875rem; }
+.camera-form-steps { display: flex; gap: 1rem; margin: 0; padding: 0; list-style: none; font-size: .875rem; font-weight: 600; color: var(--color-muted); }
+.camera-form-steps li[aria-current="step"] { color: var(--color-primary); }
+.connection-check { display: grid; gap: .5rem; }
+
+.location-picker { display: grid; gap: .75rem; padding-top: .25rem; }
+.location-picker h3, .location-picker p { margin: 0; }
+.location-picker > div:first-child p { margin-top: .25rem; color: var(--color-muted); font-size: .875rem; }
+.location-picker__canvas { min-height: 20rem; overflow: hidden; border: 1px solid var(--color-border); border-radius: .625rem; background: #dbeafe; }
+.location-picker__marker { position: relative; width: 1.75rem; height: 1.75rem; }
+.location-picker__pin { position: absolute; z-index: 1; inset: 0; border: .1875rem solid white; border-radius: 50% 50% 50% 0; background: var(--color-danger); box-shadow: 0 .125rem .375rem rgb(15 23 42 / 35%); transform: rotate(-45deg); }
+.location-picker__azimuth-arm { position: absolute; z-index: 0; left: 50%; bottom: 50%; width: .125rem; height: 3.5rem; background: var(--color-primary); transform-origin: bottom center; }
+.location-picker__azimuth-handle { position: absolute; top: -1.375rem; left: 50%; width: 2.75rem; height: 2.75rem; border-radius: 50%; cursor: grab; touch-action: none; transform: translateX(-50%); }
+.location-picker__azimuth-handle::before { position: absolute; inset: .75rem; border: .1875rem solid white; border-radius: 50%; background: var(--color-primary); box-shadow: 0 .125rem .375rem rgb(15 23 42 / 30%); content: ''; }
+.location-picker__azimuth-handle:active { cursor: grabbing; }
+.location-picker__azimuth-handle:active::before { background: var(--color-primary-hover); }
+.location-picker__azimuth-input { max-width: 16rem; }
+.import-preview > fieldset { display: flex; flex-wrap: wrap; gap: 1rem; border: 0; padding: 0; }
+.import-preview > fieldset label { display: flex; align-items: center; gap: .5rem; }
+.import-preview > fieldset input { width: 1.25rem; min-height: 1.25rem; }
+.import-preview__table { display: block; }
+.camera-table a { color: var(--color-primary); font-weight: 700; }
+.camera-cards { display: grid; gap: .75rem; margin: 0; padding: 0; list-style: none; }
+.camera-card { display: grid; gap: .5rem; padding: 1rem; border: 1px solid var(--color-border); border-radius: .75rem; background: var(--color-surface); }
+.camera-card h2 { margin: .125rem 0 0; font-size: 1.125rem; }
+.camera-card > p { margin: 0; color: var(--color-muted); }
+.camera-card a { color: var(--color-primary); font-weight: 700; }
+.camera-card dl { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .75rem; margin: .25rem 0 0; }
+.camera-card dl div { display: grid; gap: .25rem; }
+.camera-card dt { color: var(--color-muted); font-size: .75rem; font-weight: 700; text-transform: uppercase; }
+.camera-card dd { margin: 0; }
+.registry-page .camera-table-wrap { display: none; }
+.camera-detail-page > header { padding-bottom: 1rem; border-bottom: 1px solid var(--color-border); }
+.maintenance-records { display: grid; gap: .75rem; margin: 0; padding: 0; list-style: none; }
+.maintenance-records li { padding-top: .75rem; border-top: 1px solid var(--color-border); }
+.maintenance-records li:first-child { padding-top: 0; border-top: 0; }
+.maintenance-records p { margin: .375rem 0 0; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+
+/* Shared by the camera detail page and the map's camera detail drawer */
+/* Each section is a .detail-panel card (same as the Health/Maintenance panels further down the
+   same page) so the whole detail page reads as one consistent set of cards instead of some
+   sections looking like styled panels and others like plain dividered text. */
+.camera-detail-sections { display: grid; gap: 1rem; }
+/* h3 here, not h2: this component renders both under a page h1 (CameraDetailPage) and under a
+   drawer's own h2 title (CameraDetailDrawer) — h3 is correct in the drawer and merely non-ideal
+   (a skipped level) on the standalone page, whereas h2 would be flatly wrong in the drawer
+   (implying these are siblings of the drawer's own title). Match .detail-panel h2's spacing so
+   the visual result is identical regardless of which context sets the semantic level. */
+.camera-detail-sections h3 { margin-top: 0; margin-bottom: .5rem; font-size: 1.5rem; }
+.camera-detail-sections dl { display: grid; grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr)); gap: .75rem; margin: .25rem 0 0; }
+.camera-detail-sections dl div { display: grid; gap: .25rem; }
+.camera-detail-sections dt { color: var(--color-muted); font-size: .75rem; font-weight: 700; text-transform: uppercase; }
+.camera-detail-sections dd { margin: 0; overflow-wrap: break-word; }
+
+/* Organization → organization-unit tree filter, in the camera registry's Scope filter group */
+.org-unit-filter { display: grid; gap: .625rem; }
+.org-unit-filter select { min-height: 2.5rem; padding: .5rem .625rem; border: 1px solid var(--color-border); border-radius: .375rem; color: var(--color-text); background: var(--color-surface); font: inherit; }
+
+/* Shared tree-style dropdown (TreeSelect.tsx) — organization units and geographic areas both use
+   this. Trigger + clear sit in one flex row so there is nothing for the clear button to overlap,
+   unlike the earlier absolutely-positioned version. */
+.tree-select { position: relative; display: grid; gap: .375rem; font-size: .875rem; font-weight: 600; }
+.tree-select__field-label { color: var(--color-text); }
+.tree-select__control { display: flex; gap: .375rem; }
+.tree-select__trigger { flex: 1; min-width: 0; overflow: hidden; display: flex; align-items: center; min-height: 2.5rem; padding: .5rem .625rem; color: var(--color-text); text-align: left; text-overflow: ellipsis; white-space: nowrap; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: .375rem; cursor: pointer; font: inherit; font-weight: 400; }
+/* Explicit background/border, not just relying on the base rule: browsers apply their own
+   default appearance to disabled buttons (a flatter, sometimes borderless look) that can win
+   over an author's un-repeated declarations, which is why this field alone was rendering with
+   no visible box in testing while every sibling field (a native <select>/<input>, or this same
+   component enabled) kept its border. */
+.tree-select__trigger:disabled { color: var(--color-muted); background: var(--color-canvas); border: 1px solid var(--color-border); cursor: not-allowed; }
+.tree-select__clear { flex: none; width: 2.5rem; min-height: 2.5rem; color: var(--color-muted); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: .375rem; cursor: pointer; font-size: 1.125rem; line-height: 1; }
+.tree-select__clear:hover { color: var(--color-text); background: var(--color-canvas); }
+.tree-select__panel { position: absolute; z-index: 5; top: calc(100% + .25rem); left: 0; width: 100%; max-height: 18rem; overflow-y: auto; padding: .375rem; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: .375rem; box-shadow: 0 .5rem 1.5rem rgb(15 23 42 / 12%); }
+.tree-select__hint { margin: .25rem; color: var(--color-muted); font-size: .875rem; }
+.tree-select__list { display: grid; gap: .0625rem; margin: 0; padding: 0; list-style: none; }
+.tree-select__row { display: flex; align-items: center; gap: .25rem; }
+.tree-select__toggle, .tree-select__toggle-spacer { flex: none; width: 1.5rem; height: 1.5rem; }
+.tree-select__toggle { display: flex; align-items: center; justify-content: center; padding: 0; color: var(--color-text); background: none; border: 0; border-radius: .25rem; cursor: pointer; }
+.tree-select__toggle:hover { background: var(--color-canvas); }
+.tree-select__chevron { width: 1rem; height: 1rem; transition: transform .1s ease; }
+.tree-select__chevron--open { transform: rotate(90deg); }
+.tree-select__label { flex: 1; padding: .375rem .5rem; color: var(--color-text); text-align: left; background: none; border: 0; border-radius: .25rem; cursor: pointer; font: inherit; font-weight: 500; }
+.tree-select__label:hover { background: var(--color-canvas); }
+.tree-select__label[aria-current='true'] { color: var(--color-primary); font-weight: 700; background: #e0f2fe; }
+.tree-select__code { color: var(--color-muted); font-weight: 400; }
+
+@media (max-width: 42rem) {
+  .camera-card dl { grid-template-columns: 1fr; }
+}
+
+@media (min-width: 43rem) {
+  .registry-page .camera-table-wrap { display: block; }
+  .registry-page .camera-cards { display: none; }
+}

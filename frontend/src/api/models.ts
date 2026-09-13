@@ -53,6 +53,58 @@ export interface CameraWriteRequest {
   operationalStatus?: string | null;
   connectivityStatus?: string | null;
   maintenanceStatus?: string | null;
+  recordEvents?: boolean;
+}
+
+export interface CameraConnectionTestRequest {
+  protocol: string;
+  ipAddress: string;
+  port: number;
+}
+
+export interface CameraConnectionTestAccepted {
+  testId: string;
+  status: string;
+  statusUrl: string;
+}
+
+export interface CameraConnectionTestResult {
+  id: string;
+  protocol: string;
+  ipAddress: string;
+  port: number;
+  status: string;
+  requestedAt: string;
+  completedAt: string | null;
+  failureReason: string | null;
+  result: { reachable: boolean; connectMs?: number | null; failure?: string | null } | null;
+}
+
+export interface CameraCredentialTestAccepted {
+  testId: string;
+  status: string;
+  statusUrl: string;
+}
+
+export interface CameraCredentialTestReport {
+  reachable: boolean;
+  authOutcome: 'authenticated' | 'credential_rejected' | 'not_verifiable' | 'unreachable' | 'error';
+  connectMs?: number | null;
+  detail?: string | null;
+  failure?: string | null;
+}
+
+export interface CameraCredentialTestResult {
+  id: string;
+  cameraId: string;
+  protocol: string;
+  ipAddress: string;
+  port: number;
+  status: string;
+  requestedAt: string;
+  completedAt: string | null;
+  failureReason: string | null;
+  result: CameraCredentialTestReport | null;
 }
 
 /** Fields accepted by `PATCH /api/v1/cameras/{id}`. Omitted fields are unchanged; nullable fields clear when sent as `null`. */
@@ -83,6 +135,7 @@ export interface CameraPatchRequest {
   operationalStatus?: string;
   connectivityStatus?: string;
   maintenanceStatus?: string;
+  recordEvents?: boolean;
 }
 
 export interface CameraResponse extends CameraWriteRequest {
@@ -417,6 +470,14 @@ export interface VmsResponse {
   verifyTls: boolean;
   state: string;
   expectedCameraCount: number | null;
+  lastInventoryPollAt: string | null;
+  lastInventoryCameraCount: number | null;
+}
+
+export interface PollInventoryResponse {
+  targetId: string;
+  requestedAt: string;
+  circuitOpen: boolean;
 }
 
 export interface ConnectorTargetRequest {

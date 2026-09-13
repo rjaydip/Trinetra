@@ -8,6 +8,7 @@ import { queryKeys } from '../../api/queryKeys';
 import { useAuth } from '../../auth/AuthProvider';
 import { hasPermission } from '../../auth/permissions';
 import { Button, Pager, PageState, StatusBadge } from '../../components/ui';
+import './admin.css';
 
 function field(form: FormData, name: string) {
   return String(form.get(name) ?? '').trim();
@@ -148,6 +149,7 @@ function UserDetail({ userId, canManage, onClose }: {
               {membership.expiresAt && <span> · Expires {new Date(membership.expiresAt).toLocaleDateString()}</span>}
               {canManage && <button className="admin-action-link" type="button" onClick={() => removeFromGroup.mutate(membership.groupId)}>Remove</button>}
             </li>)}</ul>}
+      {removeFromGroup.isError && <p className="form-error" role="alert">{errorDetail(removeFromGroup.error, 'The user could not be removed from the group.')}</p>}
       {canManage && <form aria-label="Add to access group" className="admin-form admin-form--inline" onSubmit={(event) => {
         event.preventDefault();
         if (groupId) addToGroup.mutate({ groupId });

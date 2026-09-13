@@ -33,6 +33,7 @@ public sealed class CameraRepository
         c.azimuth, c.tilt, c.horizontal_fov, c.vertical_fov, c.effective_range,
         host(c.ip_address) AS ip_address, c.port, c.protocol,
         c.vms_id, c.stream_reference, c.credential_reference, c.installation_date,
+        c.record_events,
         c.operational_status, c.connectivity_status, c.maintenance_status,
         c.last_seen_at, c.last_health_check_at, c.deleted_at
         """;
@@ -55,12 +56,36 @@ public sealed class CameraRepository
 
         await using var c = await _dataSource.OpenConnectionAsync(ct);
 
-        var row = await c.QuerySingleOrDefaultAsync<CameraRow>(new CommandDefinition($"""
+        return await GetAsync(id, caller, c, null, ct);
+    }
+
+    /// <summary>
+    /// Reads within an in-flight <see cref="UnitOfWork"/>'s own connection and transaction —
+    /// needed to read back a row this same transaction just wrote. A read on a fresh connection
+    /// (the plain <see cref="GetAsync(Guid,CallerContext,CancellationToken)"/> overload) opens a
+    /// separate Postgres session, so under read-committed isolation it cannot see this
+    /// transaction's own uncommitted write: called before <c>CommitAsync</c>, it silently returns
+    /// the row as it stood <i>before</i> this write, not after it.
+    /// </summary>
+    public Task<Camera?> GetAsync(Guid id, CallerContext caller, UnitOfWork work, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(work);
+        return GetAsync(id, caller, work.Connection, work.Transaction, ct);
+    }
+
+    private async Task<Camera?> GetAsync(
+        Guid id, CallerContext caller, NpgsqlConnection connection, NpgsqlTransaction? transaction,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(caller);
+        caller.Require("camera.read");
+
+        var row = await connection.QuerySingleOrDefaultAsync<CameraRow>(new CommandDefinition($"""
             SELECT {Columns}
             FROM federation.cameras c
             WHERE c.id = @id
               AND ({Scope("camera.read")})
-            """, ScopeArgs(id, caller, "camera.read"), cancellationToken: ct));
+            """, ScopeArgs(id, caller, "camera.read"), transaction, cancellationToken: ct));
 
         return row?.ToDomain();
     }
@@ -228,6 +253,7 @@ public sealed class CameraRepository
                 ip_address = @IpAddress::inet, port = @Port, protocol = @Protocol,
                 vms_id = @VmsId, stream_reference = @StreamReference,
                 credential_reference = @CredentialReference, installation_date = @InstallationDate,
+                record_events = @RecordEvents,
                 operational_status = @OperationalStatus, connectivity_status = @ConnectivityStatus,
                 maintenance_status = @MaintenanceStatus,
                 updated_by = @ActorId, updated_at = now()
@@ -317,6 +343,47 @@ public sealed class CameraRepository
             """, ScopeArgs(id, caller, "camera.delete"), cancellationToken: ct));
 
         return reachableAndRetired;
+    }
+
+    /// <summary>
+    /// Persists a generated <c>credential_reference</c> on a camera that does not have one yet.
+    /// Never overwrites an existing reference: the reference is the key into
+    /// <c>federation.secret</c>, so changing it out from under an already-sealed credential would
+    /// orphan the stored secret. Returns false if the camera is out of scope.
+    /// </summary>
+    public async Task<bool> SetCredentialReferenceIfMissingAsync(
+        Guid id, string reference, CallerContext caller, UnitOfWork work, CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(reference);
+        ArgumentNullException.ThrowIfNull(caller);
+        ArgumentNullException.ThrowIfNull(work);
+        caller.Require("camera.update");
+
+        var args = ScopeArgs(id, caller, "camera.update");
+        args.Add("Reference", reference);
+
+        var affected = await work.Connection.ExecuteAsync(new CommandDefinition($"""
+            UPDATE federation.cameras c
+            SET credential_reference = @Reference, updated_by = @ActorId, updated_at = now()
+            WHERE c.id = @id
+              AND c.deleted_at IS NULL
+              AND c.credential_reference IS NULL
+              AND ({Scope("camera.update")});
+            """, AddActor(args, caller), work.Transaction, cancellationToken: ct));
+
+        if (affected > 0)
+        {
+            return true;
+        }
+
+        // Zero rows: out of scope, already retired, or a reference was already set (the
+        // ordinary case on a second call — not an error).
+        await using var conn = await _dataSource.OpenConnectionAsync(ct);
+        return await conn.ExecuteScalarAsync<bool>(new CommandDefinition($"""
+            SELECT EXISTS (
+                SELECT 1 FROM federation.cameras c
+                WHERE c.id = @id AND c.deleted_at IS NULL AND ({Scope("camera.update")}));
+            """, ScopeArgs(id, caller, "camera.update"), cancellationToken: ct));
     }
 
     // -------------------------------------------------------------------
@@ -410,7 +477,7 @@ public sealed class CameraRepository
         camera_code, name, organization_unit_id, geographic_area_id, manufacturer, model, camera_type,
         serial_number, latitude, longitude, altitude, mounting_height, azimuth, tilt,
         horizontal_fov, vertical_fov, effective_range, ip_address, port, protocol,
-        vms_id, stream_reference, credential_reference, installation_date,
+        vms_id, stream_reference, credential_reference, installation_date, record_events,
         operational_status, connectivity_status, maintenance_status
         """;
 
@@ -418,7 +485,7 @@ public sealed class CameraRepository
         @Code, @Name, @OrganizationUnitId, @GeographicAreaId, @Manufacturer, @Model, @CameraType,
         @SerialNumber, @Latitude, @Longitude, @Altitude, @MountingHeight, @Azimuth, @Tilt,
         @HorizontalFov, @VerticalFov, @EffectiveRange, @IpAddress::inet, @Port, @Protocol,
-        @VmsId, @StreamReference, @CredentialReference, @InstallationDate,
+        @VmsId, @StreamReference, @CredentialReference, @InstallationDate, @RecordEvents,
         @OperationalStatus, @ConnectivityStatus, @MaintenanceStatus
         """;
 
@@ -431,6 +498,7 @@ public sealed class CameraRepository
         cam.IpAddress, cam.Port, cam.Protocol, cam.VmsId, cam.StreamReference,
         cam.CredentialReference,
         InstallationDate = cam.InstallationDate is { } d ? d.ToDateTime(TimeOnly.MinValue) : (DateTime?)null,
+        cam.RecordEvents,
         cam.OperationalStatus, cam.ConnectivityStatus, cam.MaintenanceStatus,
         ActorId = caller.UserId,
         // Scope parameters for the UPDATE guard (unused by INSERT).
@@ -466,6 +534,7 @@ public sealed class CameraRepository
         public string? StreamReference { get; init; }
         public string? CredentialReference { get; init; }
         public DateTime? InstallationDate { get; init; }
+        public bool RecordEvents { get; init; } = true;
         public string OperationalStatus { get; init; } = "";
         public string ConnectivityStatus { get; init; } = "";
         public string MaintenanceStatus { get; init; } = "";
@@ -500,6 +569,7 @@ public sealed class CameraRepository
             StreamReference = StreamReference,
             CredentialReference = CredentialReference,
             InstallationDate = InstallationDate is { } d ? DateOnly.FromDateTime(d) : null,
+            RecordEvents = RecordEvents,
             OperationalStatus = OperationalStatus,
             ConnectivityStatus = ConnectivityStatus,
             MaintenanceStatus = MaintenanceStatus,
@@ -551,10 +621,15 @@ public sealed class CameraPatch
     /// <summary>Set when the patch moves the camera to a different geographic area.</summary>
     public Guid? NewGeographicAreaId { get; private set; }
 
-    /// <summary>Records <c>column = @param</c> with its value. <paramref name="column"/> is a literal.</summary>
-    public void Set(string column, string parameter, object? value)
+    /// <summary>
+    /// Records <c>column = @param</c> with its value. <paramref name="column"/> is a literal.
+    /// <paramref name="cast"/> is an optional literal Postgres cast (e.g. <c>"::inet"</c>) appended
+    /// to the parameter reference — needed for columns, like <c>ip_address</c>, whose type has no
+    /// implicit assignment cast from the CLR type Dapper binds the value as.
+    /// </summary>
+    public void Set(string column, string parameter, object? value, string? cast = null)
     {
-        _assignments.Add($"{column} = @{parameter}");
+        _assignments.Add($"{column} = @{parameter}{cast}");
         Parameters[parameter] = value;
 
         if (column == "organization_unit_id" && value is Guid org)

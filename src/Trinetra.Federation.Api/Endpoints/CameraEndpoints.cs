@@ -417,7 +417,11 @@ public static class CameraEndpoints
             return TypedResults.NotFound();
         }
 
-        var after = await repo.GetAsync(id, caller, ct);
+        // Same connection/transaction as the write above, not a fresh one: a read on a separate
+        // connection here would run before this transaction commits and, under read-committed
+        // isolation, would not see the write it is meant to report (the bug this replaces — every
+        // PATCH response silently echoed the pre-patch row).
+        var after = await repo.GetAsync(id, caller, work, ct);
         await work.AuditAsync(caller, "update", "camera", id.ToString(),
             Redact(before), after is null ? null : Redact(after),
             (after ?? before).OrganizationUnitId, ct);
@@ -579,6 +583,7 @@ public static class CameraEndpoints
             StreamReference = Trim(r.StreamReference),
             CredentialReference = Trim(r.CredentialReference),
             InstallationDate = r.InstallationDate,
+            RecordEvents = r.RecordEvents,
             OperationalStatus = op,
             ConnectivityStatus = conn,
             MaintenanceStatus = maint,
@@ -660,7 +665,7 @@ public static class CameraEndpoints
                     built.Set("effective_range", "p_range", NullableDouble(prop.Value, "effectiveRange", 0.001, 5000, errors));
                     break;
                 case "ipAddress":
-                    built.Set("ip_address", "p_ip", NullableString(prop.Value, "ipAddress", errors, 45));
+                    built.Set("ip_address", "p_ip", NullableString(prop.Value, "ipAddress", errors, 45), cast: "::inet");
                     break;
                 case "port":
                     built.Set("port", "p_port", NullableInt(prop.Value, "port", 1, 65535, errors));
@@ -691,6 +696,10 @@ public static class CameraEndpoints
                                 ? instDate
                                 : Fail(errors, "installationDate"));
                     break;
+                case "recordEvents":
+                    built.Set("record_events", "p_record_events",
+                        RequireBool(prop.Value, "recordEvents", errors));
+                    break;
                 case "operationalStatus":
                     built.Set("operational_status", "p_op",
                         Enumerated(prop.Value, CameraStatus.Operational, "operationalStatus", errors));
@@ -710,7 +719,10 @@ public static class CameraEndpoints
                     built.Set("maintenance_status", "p_maint", m);
                     break;
                 default:
-                    errors.Add($"'{prop.Name}' is not a patchable field.");
+                    // Unknown fields are ignored rather than rejected: a patch body built from a
+                    // wider write-request shape (e.g. the register-camera form re-sending fields
+                    // the camera doesn't accept a change to) should still apply the fields it does
+                    // recognize instead of failing the whole request over one it doesn't.
                     break;
             }
         }
@@ -782,6 +794,17 @@ public static class CameraEndpoints
         }
 
         return s;
+    }
+
+    private static bool? RequireBool(JsonElement e, string field, List<string> errors)
+    {
+        if (e.ValueKind is JsonValueKind.True or JsonValueKind.False)
+        {
+            return e.GetBoolean();
+        }
+
+        errors.Add($"{field} must be a boolean.");
+        return null;
     }
 
     private static Guid? RequireGuid(JsonElement e, string field, List<string> errors)
@@ -936,6 +959,7 @@ public static class CameraEndpoints
         c.Altitude, c.MountingHeight, c.Azimuth, c.Tilt, c.HorizontalFov,
         c.VerticalFov, c.EffectiveRange, c.IpAddress, c.Port, c.Protocol,
         c.VmsId, c.StreamReference, c.CredentialReference, c.InstallationDate,
+        c.RecordEvents,
         c.OperationalStatus, c.ConnectivityStatus, c.MaintenanceStatus,
         CoverageSector.CanCompute(c.Azimuth, c.HorizontalFov, c.EffectiveRange),
         c.LastSeenAt, c.LastHealthCheckAt, c.DeletedAt);
@@ -945,7 +969,7 @@ public static class CameraEndpoints
     {
         c.Code, c.Name, c.OrganizationUnitId, c.GeographicAreaId, c.CameraType,
         c.Latitude, c.Longitude, c.Azimuth, c.HorizontalFov, c.EffectiveRange,
-        c.VmsId, c.CredentialReference,
+        c.VmsId, c.CredentialReference, c.RecordEvents,
         c.OperationalStatus, c.ConnectivityStatus, c.MaintenanceStatus,
     };
 }

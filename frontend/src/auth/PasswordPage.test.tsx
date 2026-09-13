@@ -74,8 +74,32 @@ describe('PasswordPage', () => {
     await user.type(screen.getByLabelText(/confirm new password/i), 'same-secret');
     await user.click(screen.getByRole('button', { name: /change password/i }));
 
-    for (const label of [/current password/i, /^new password/i, /confirm new password/i]) {
+    for (const label of [/current password/i, /confirm new password/i]) {
       expect(screen.getByLabelText(label)).toHaveAttribute('aria-describedby', 'password-change-error');
     }
+    expect(screen.getByLabelText(/^new password/i)).toHaveAttribute('aria-describedby', 'password-change-error new-password-hint');
+
+    for (const label of [/current password/i, /^new password/i, /confirm new password/i]) {
+      expect(screen.getByLabelText(label)).toHaveAttribute('aria-invalid', 'true');
+    }
+  });
+
+  it('shows the password policy hint before any error occurs', () => {
+    renderPasswordPage();
+
+    expect(screen.getByText(/at least 12 characters/i)).toBeVisible();
+    expect(screen.getByLabelText(/^new password/i)).toHaveAttribute('aria-describedby', 'new-password-hint');
+  });
+
+  it('toggles password visibility', async () => {
+    const user = userEvent.setup();
+    renderPasswordPage();
+
+    const currentPassword = screen.getByLabelText(/current password/i);
+    expect(currentPassword).toHaveAttribute('type', 'password');
+
+    await user.click(screen.getAllByRole('button', { name: /show password/i })[0]);
+
+    expect(currentPassword).toHaveAttribute('type', 'text');
   });
 });

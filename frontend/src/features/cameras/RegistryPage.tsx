@@ -11,6 +11,7 @@ import { PageState } from '../../components/ui';
 import { CameraCards } from './CameraCards';
 import { CameraFilters, type RegistryFilters } from './CameraFilters';
 import { CameraTable } from './CameraTable';
+import './cameras.css';
 
 const filterNames: Array<keyof RegistryFilters> = [
   'q', 'cameraType', 'organizationUnitId', 'geographicAreaId',
@@ -41,10 +42,20 @@ export function RegistryPage() {
   const [draftFilters, setDraftFilters] = useState<RegistryFilters>(() => committedFilters);
   const committedSignature = filterSignature(committedFilters);
   const draftSignature = filterSignature(draftFilters);
+  // Cursor pagination has no "page N" concept the server can jump back to — this stack of prior
+  // cursor values is the only way to offer a Previous button without an offset-based backend
+  // change (cursor pagination here is scale-motivated: an OFFSET that grows with page depth
+  // doesn't hold up at the 80k-camera target). Cleared whenever committed filters change, same
+  // as the cursor param itself.
+  const [cursorStack, setCursorStack] = useState<string[]>([]);
 
   useEffect(() => {
     if (draftSignature !== committedSignature) setDraftFilters(committedFilters);
   }, [search.toString()]);
+
+  useEffect(() => {
+    setCursorStack([]);
+  }, [committedSignature]);
 
   useEffect(() => {
     if (draftSignature === committedSignature) return undefined;
@@ -75,14 +86,25 @@ export function RegistryPage() {
 
   function nextPage() {
     if (filtersPending || !registry.data?.nextCursor) return;
+    setCursorStack((stack) => [...stack, search.get('cursor') ?? '']);
     const updated = new URLSearchParams(search);
     updated.set('cursor', registry.data.nextCursor);
     setSearch(updated);
   }
 
+  function previousPage() {
+    if (filtersPending || cursorStack.length === 0) return;
+    const priorCursor = cursorStack.at(-1)!;
+    setCursorStack((stack) => stack.slice(0, -1));
+    const updated = new URLSearchParams(search);
+    if (priorCursor) updated.set('cursor', priorCursor);
+    else updated.delete('cursor');
+    setSearch(updated);
+  }
+
   return (
     <section className="registry-page" aria-labelledby="camera-registry-title">
-      <header className="registry-page__header"><div><p className="eyebrow">Live registry</p><h1 id="camera-registry-title">Camera registry</h1></div><div className="registry-page__actions">{hasPermission(session, 'camera.import') && <Link className="button button--secondary" to="/cameras/import">Bulk import</Link>}{hasPermission(session, 'camera.create') && <Link className="button" to="/cameras/new">Register camera</Link>}</div></header>
+      <header className="registry-page__header"><div><p className="eyebrow">Live registry</p><h1 id="camera-registry-title">Camera registry</h1></div><div className="registry-page__actions">{hasPermission(session, 'camera.reconcile') && <Link className="button button--secondary" to="/cameras/reconciliation">Reconcile</Link>}{hasPermission(session, 'camera.import') && <Link className="button button--secondary" to="/cameras/import">Bulk import</Link>}{hasPermission(session, 'camera.create') && <Link className="button" to="/cameras/new">Register camera</Link>}</div></header>
       <CameraFilters filters={draftFilters} onChange={setFilter} onClear={clearFilters} />
       <div aria-label="Registry results" role="region" aria-busy={registry.isFetching}>
       {registry.isPending ? <PageState title="Loading camera registry">Retrieving authorized camera records…</PageState>
@@ -94,7 +116,10 @@ export function RegistryPage() {
       </div>
       <nav className="registry-pagination" aria-label="Camera registry pagination">
         <span aria-live="polite">{registry.isSuccess ? registry.data.nextCursor ? 'More camera records are available.' : 'End of available camera records.' : 'Camera results are unavailable.'}</span>
-        <button className="button" disabled={filtersPending || registry.isFetching || !registry.isSuccess || !registry.data?.nextCursor} onClick={nextPage} type="button">Next</button>
+        <div className="registry-pagination__buttons">
+          <button className="button button--secondary" disabled={filtersPending || registry.isFetching || cursorStack.length === 0} onClick={previousPage} type="button">Previous</button>
+          <button className="button" disabled={filtersPending || registry.isFetching || !registry.isSuccess || !registry.data?.nextCursor} onClick={nextPage} type="button">Next</button>
+        </div>
       </nav>
     </section>
   );

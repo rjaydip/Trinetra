@@ -4,6 +4,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 
 import type { GeoJsonFeatureCollection } from '../../api/models';
 import { roundCoordinate } from './cameraVocabulary';
+import './cameras.css';
 
 const MAP_STYLE: StyleSpecification = {
   version: 8,
@@ -14,6 +15,11 @@ const MAP_STYLE: StyleSpecification = {
 };
 
 const EMPTY_FEATURES: GeoJsonFeatureCollection = { type: 'FeatureCollection', features: [] };
+
+/** Center of India, used when a new camera has no coordinates yet — a whole-world view at zoom 1
+ * puts the operator nowhere useful, since every deployment this registry serves is in India. */
+const INDIA_CENTER: [number, number] = [78.9629, 20.5937];
+const INDIA_ZOOM = 4;
 
 export interface LocationPickerProps {
   latitude: number | null;
@@ -83,8 +89,8 @@ export function LocationPicker({
       instance = new maplibregl.Map({
         container: container.current,
         style: MAP_STYLE,
-        center: hasLocation ? [initialLocation.longitude!, initialLocation.latitude!] : [0, 0],
-        zoom: hasLocation ? 15 : 1,
+        center: hasLocation ? [initialLocation.longitude!, initialLocation.latitude!] : INDIA_CENTER,
+        zoom: hasLocation ? 15 : INDIA_ZOOM,
         // The literal world extent makes this exact MapLibre version's constraint math degenerate
         // into a singular view-projection matrix on the map's first resize — see CameraMap.tsx for
         // the full root-cause writeup. A hair inset from the true poles/antimeridian avoids it.

@@ -4,8 +4,10 @@ import { useNavigate } from 'react-router-dom';
 
 import { isApiProblem } from '../../api/client';
 import { api } from '../../api/endpoints';
+import type { CameraPatchRequest } from '../../api/models';
 import { queryKeys } from '../../api/queryKeys';
 import { CameraForm, type CameraSelectorStates, type SelectorState } from './CameraForm';
+import './cameras.css';
 
 function referenceError(error: unknown, fallback: string): string {
   return isApiProblem(error) ? error.detail : fallback;
@@ -43,8 +45,8 @@ export function NewCameraPage() {
       return { latitude, longitude };
     });
   }, []);
-  const create = useMutation({
-    mutationFn: api.cameras.create,
+  const update = useMutation({
+    mutationFn: async ({ id, request }: { id: string; request: CameraPatchRequest }) => api.cameras.update(id, request),
     onSuccess: async () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.cameras.all }),
@@ -91,5 +93,5 @@ export function NewCameraPage() {
     vms: vmsState,
   };
 
-  return <section className="onboarding-page" aria-labelledby="new-camera-title"><header><p className="eyebrow">Camera registry</p><h1 id="new-camera-title">Register camera</h1><p>Required fields identify the camera and its physical location.</p></header><CameraForm organizations={organizations.data ?? []} organizationUnits={organizationUnits.data ?? []} geographicAreas={geographicAreas.data ?? []} vms={vms.data ?? []} selectorStates={selectorStates} mapFeatures={mapContext.data} onCoordinatesChange={handleCoordinatesChange} onOrganizationChange={setOrganizationId} onSubmit={async (values) => { await create.mutateAsync(values); }} /></section>;
+  return <section className="onboarding-page" aria-labelledby="new-camera-title"><header><p className="eyebrow">Camera registry</p><h1 id="new-camera-title">Register camera</h1><p>Required fields identify the camera and its physical location.</p></header><CameraForm organizations={organizations.data ?? []} organizationUnits={organizationUnits.data ?? []} geographicAreas={geographicAreas.data ?? []} vms={vms.data ?? []} selectorStates={selectorStates} mapFeatures={mapContext.data} onCoordinatesChange={handleCoordinatesChange} onOrganizationChange={setOrganizationId} onSubmit={async (id, request) => { await update.mutateAsync({ id, request }); }} /></section>;
 }

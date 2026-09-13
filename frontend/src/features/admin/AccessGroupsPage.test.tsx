@@ -22,6 +22,9 @@ const group = {
   scopes: [{ id: scopeId, scopeType: 'ORGANIZATION', organizationUnitId: unitId, geographicAreaId: null, resourceType: null, resourceId: null, description: 'Headquarters' }],
 };
 
+const draftGroupId = '20000000-0000-4000-8000-000000000006';
+const draftGroup = { ...group, id: draftGroupId, code: 'DRAFT_GROUP', name: 'Draft Group', status: 'DRAFT', scopes: [] };
+
 afterEach(() => {
   vi.unstubAllGlobals();
   sessionStorage.clear();
@@ -132,6 +135,94 @@ describe('AccessGroupsPage', () => {
     ));
   });
 
+  it('shows a dead-end error, not the estate-wide confirm flow, when activation fails because the role is not active', async () => {
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname === `/api/v1/access-groups/${draftGroupId}/activate` && init?.method === 'POST') {
+        return Response.json({
+          title: 'Role is not active',
+          detail: 'This group’s role VIEWER is DRAFT. Activate the role, or repoint the group, before activating the group.',
+        }, { status: 409 });
+      }
+      if (url.pathname === '/api/v1/access-groups') return Response.json({ items: [draftGroup], page: 1, pageSize: 20, total: 1, totalPages: 1 });
+      if (url.pathname === `/api/v1/access-groups/${draftGroupId}`) return Response.json(draftGroup);
+      if (url.pathname === `/api/v1/access-groups/${draftGroupId}/members`) return Response.json({ items: [], page: 1, pageSize: 20, total: 0, totalPages: 1 });
+      if (url.pathname === '/api/v1/roles') return Response.json([{ id: roleId, code: 'VIEWER', name: 'Viewer', description: null, isSystem: true }]);
+      if (url.pathname === '/api/v1/organizations') return Response.json(pageEnvelope([]));
+      if (url.pathname === '/api/v1/geographic-areas') return Response.json(pageEnvelope([]));
+      return new Response(null, { status: 404 });
+    });
+    const user = userEvent.setup();
+    renderGroups(['group.read', 'group.manage']);
+
+    await user.click(await screen.findByRole('button', { name: /view draft group/i }));
+    await user.click(await screen.findByRole('button', { name: /activate group/i }));
+
+    expect(await screen.findByText(/role vieweris draft|role viewer is draft/i)).toBeVisible();
+    expect(screen.queryByRole('checkbox', { name: /estate-wide/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /confirm estate-wide activation/i })).not.toBeInTheDocument();
+  });
+
+  it('offers the estate-wide confirm flow when activation is blocked by an unconstrained dimension', async () => {
+    let confirmedRequest: unknown;
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname === `/api/v1/access-groups/${draftGroupId}/activate` && init?.method === 'POST') {
+        const body = init.body ? JSON.parse(String(init.body)) : {};
+        if (body.confirmUnscoped) {
+          confirmedRequest = body;
+          return new Response(null, { status: 204 });
+        }
+        return Response.json({
+          title: 'Confirm the estate-wide grant',
+          detail: 'This group is unrestricted on organization, so activating it grants its permissions across every department. Re-send with confirmUnscoped: true to proceed.',
+        }, { status: 409 });
+      }
+      if (url.pathname === '/api/v1/access-groups') return Response.json({ items: [draftGroup], page: 1, pageSize: 20, total: 1, totalPages: 1 });
+      if (url.pathname === `/api/v1/access-groups/${draftGroupId}`) return Response.json(draftGroup);
+      if (url.pathname === `/api/v1/access-groups/${draftGroupId}/members`) return Response.json({ items: [], page: 1, pageSize: 20, total: 0, totalPages: 1 });
+      if (url.pathname === '/api/v1/roles') return Response.json([{ id: roleId, code: 'VIEWER', name: 'Viewer', description: null, isSystem: true }]);
+      if (url.pathname === '/api/v1/organizations') return Response.json(pageEnvelope([]));
+      if (url.pathname === '/api/v1/geographic-areas') return Response.json(pageEnvelope([]));
+      return new Response(null, { status: 404 });
+    });
+    const user = userEvent.setup();
+    renderGroups(['group.read', 'group.manage']);
+
+    await user.click(await screen.findByRole('button', { name: /view draft group/i }));
+    await user.click(await screen.findByRole('button', { name: /activate group/i }));
+
+    expect(await screen.findByText(/unrestricted on organization/i)).toBeVisible();
+    const checkbox = screen.getByRole('checkbox', { name: /estate-wide/i });
+    await user.click(checkbox);
+    await user.click(screen.getByRole('button', { name: /confirm estate-wide activation/i }));
+
+    await waitFor(() => expect(confirmedRequest).toEqual({ confirmUnscoped: true }));
+  });
+
+  it('shows an error when disabling a group fails', async () => {
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname === `/api/v1/access-groups/${groupId}/disable` && init?.method === 'POST') {
+        return Response.json({ title: 'Forbidden', detail: 'This action requires the group.manage permission.' }, { status: 403 });
+      }
+      if (url.pathname === '/api/v1/access-groups') return Response.json({ items: [group], page: 1, pageSize: 20, total: 1, totalPages: 1 });
+      if (url.pathname === `/api/v1/access-groups/${groupId}`) return Response.json(group);
+      if (url.pathname === `/api/v1/access-groups/${groupId}/members`) return Response.json({ items: [], page: 1, pageSize: 20, total: 0, totalPages: 1 });
+      if (url.pathname === '/api/v1/roles') return Response.json([{ id: roleId, code: 'VIEWER', name: 'Viewer', description: null, isSystem: true }]);
+      if (url.pathname === '/api/v1/organizations') return Response.json(pageEnvelope([]));
+      if (url.pathname === '/api/v1/geographic-areas') return Response.json(pageEnvelope([]));
+      return new Response(null, { status: 404 });
+    });
+    const user = userEvent.setup();
+    renderGroups(['group.read', 'group.manage']);
+
+    await user.click(await screen.findByRole('button', { name: /view operators/i }));
+    await user.click(await screen.findByRole('button', { name: /disable group/i }));
+
+    expect(await screen.findByText(/requires the group\.manage permission/i)).toBeVisible();
+  });
+
   it('adds an organization scope with a live organization-unit reference', async () => {
     const fetch = groupsFetch();
     vi.stubGlobal('fetch', fetch);
@@ -142,7 +233,9 @@ describe('AccessGroupsPage', () => {
     const form = await screen.findByRole('form', { name: /add access-group scope/i });
     await user.selectOptions(within(form).getByLabelText(/^scope type$/i), 'ORGANIZATION');
     await user.selectOptions(within(form).getByLabelText(/^organization$/i), 'org-1');
-    await user.selectOptions(await within(form).findByLabelText(/organization unit/i), unitId);
+    const unitTrigger = await within(form).findByRole('combobox', { name: /organization unit/i });
+    await user.click(unitTrigger);
+    await user.click(await within(form).findByRole('button', { name: /^headquarters/i }));
     await user.click(within(form).getByRole('button', { name: /add scope/i }));
 
     await waitFor(() => expect(fetch).toHaveBeenCalledWith(

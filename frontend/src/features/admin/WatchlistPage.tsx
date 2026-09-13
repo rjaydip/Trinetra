@@ -8,6 +8,8 @@ import { queryKeys } from '../../api/queryKeys';
 import { useAuth } from '../../auth/AuthProvider';
 import { hasPermission } from '../../auth/permissions';
 import { Button, Pager, PageState, StatusBadge } from '../../components/ui';
+import { OrganizationUnitFilter } from '../cameras/OrganizationUnitFilter';
+import './admin.css';
 
 function field(form: FormData, name: string) {
   return String(form.get(name) ?? '').trim();
@@ -17,6 +19,8 @@ function EntriesSection({ canManage }: { canManage: boolean }) {
   const queryClient = useQueryClient();
   const [page, setPage] = useState(1);
   const pageSize = 20;
+
+  const [organizationUnitId, setOrganizationUnitId] = useState('');
 
   const entries = useQuery({
     queryKey: queryKeys.watchlist.entriesPage(true, page, pageSize),
@@ -39,12 +43,13 @@ function EntriesSection({ canManage }: { canManage: boolean }) {
     const data = new FormData(form);
     const reason = field(data, 'reason');
     create.mutate({
-      organizationUnitId: field(data, 'organizationUnitId'),
+      organizationUnitId,
       plateNumber: field(data, 'plateNumber'),
       severity: field(data, 'severity'),
       ...(reason ? { reason } : {}),
     });
     form.reset();
+    setOrganizationUnitId('');
   }
 
   return <section aria-labelledby="watchlist-entries-title">
@@ -60,9 +65,10 @@ function EntriesSection({ canManage }: { canManage: boolean }) {
             </li>)}</ul>
             <Pager page={entries.data.page} pageSize={entries.data.pageSize} total={entries.data.total} onPageChange={setPage} />
           </>}
+    {deactivate.isError && <p className="form-error" role="alert">{errorDetail(deactivate.error, 'The watchlist entry could not be removed.')}</p>}
     {canManage && <form aria-label="Add watchlist entry" className="admin-form" onSubmit={submit}>
       <h4>Add a plate to the watchlist</h4>
-      <label>Organization unit ID<input name="organizationUnitId" required /></label>
+      <OrganizationUnitFilter organizationUnitId={organizationUnitId || undefined} onChange={(id) => setOrganizationUnitId(id ?? '')} />
       <label>Plate number<input name="plateNumber" required /></label>
       <label>Severity<select name="severity" required defaultValue="Medium">
         <option value="Low">Low</option>
@@ -105,6 +111,7 @@ function AlertsSection({ canAcknowledge }: { canAcknowledge: boolean }) {
             </li>)}</ul>
             <Pager page={alerts.data.page} pageSize={alerts.data.pageSize} total={alerts.data.total} onPageChange={setPage} />
           </>}
+    {acknowledge.isError && <p className="form-error" role="alert">{errorDetail(acknowledge.error, 'The alert could not be acknowledged.')}</p>}
   </section>;
 }
 

@@ -5,7 +5,7 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { vmsFixture } from '../../test/fixtures';
+import { pageEnvelope, vmsFixture } from '../../test/fixtures';
 import { VmsCapabilitiesPanel, VmsDeleteControl, VmsEditForm, VmsHealthPanel, VmsStateControl } from './VmsManagement';
 
 const vmsId = '44444444-4444-4444-8444-444444444444';
@@ -74,7 +74,17 @@ describe('VmsDeleteControl', () => {
 describe('VmsEditForm', () => {
   it('pre-fills current values and sends a full replacement on submit', async () => {
     const requests: Array<{ body: unknown }> = [];
-    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname === `/api/v1/organization-units/${target.organizationUnitId}`) {
+        return Response.json({ id: target.organizationUnitId, organizationId: 'org-1', parentUnitId: null, code: 'NORTH', name: 'North Unit', unitType: 'REGION', status: 'ACTIVE' });
+      }
+      if (url.pathname === '/api/v1/organizations/org-1/units') {
+        return Response.json(pageEnvelope([{ id: target.organizationUnitId, organizationId: 'org-1', parentUnitId: null, code: 'NORTH', name: 'North Unit', unitType: 'REGION', status: 'ACTIVE' }]));
+      }
+      if (url.pathname === '/api/v1/geographic-areas') {
+        return Response.json(pageEnvelope([{ id: target.geographicAreaId, parentAreaId: null, code: 'HQ', name: 'Headquarters', areaType: 'DISTRICT', status: 'ACTIVE' }]));
+      }
       requests.push({ body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined });
       return new Response(null, { status: 204 });
     }));
@@ -124,9 +134,9 @@ describe('VmsCapabilitiesPanel', () => {
     })));
     renderWithProviders(<VmsCapabilitiesPanel vmsId={vmsId} />);
 
-    expect(await screen.findByText('Inventory')).toBeVisible();
-    expect(screen.getByText('Streams')).toBeVisible();
-    expect(screen.queryByText('PTZ')).not.toBeInTheDocument();
+    expect(await screen.findByText('Camera inventory')).toBeVisible();
+    expect(screen.getByText('Live streams')).toBeVisible();
+    expect(screen.queryByText('Pan/tilt/zoom control')).not.toBeInTheDocument();
     expect(screen.getByText('seasonal firmware')).toBeVisible();
   });
 

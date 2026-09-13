@@ -60,6 +60,15 @@ public sealed partial class TargetWorker : IAsyncDisposable
     private string? _lastError;
     private int? _lastCameraCount;
 
+    /// <summary>
+    /// When this worker's own inventory loop last completed, in memory only. Compared against
+    /// <c>connector_target.inventory_poll_requested_at</c> on every health tick so an operator's
+    /// forced refresh (<c>POST /vms/{id}/poll-inventory</c>) is noticed without a second column
+    /// of "have we already served this request" bookkeeping — once <see cref="RunInventoryPollAsync"/>
+    /// completes, this moves past the request and the check stops firing on its own.
+    /// </summary>
+    private DateTimeOffset? _lastInventoryCompletedAt;
+
     public TargetWorker(
         ConnectorTarget target,
         IAdapterFactory adapters,
@@ -191,29 +200,42 @@ public sealed partial class TargetWorker : IAsyncDisposable
 
         do
         {
-            try
-            {
-                var cameras = await CallAsync(
-                    ct => _adapter!.GetCamerasAsync(ct), cancellationToken).ConfigureAwait(false);
-
-                await _state.UpsertCamerasAsync(cameras, cancellationToken).ConfigureAwait(false);
-                _lastCameraCount = cameras.Count;
-
-                // Silent inventory drift is a common vendor failure: a device returns 3 of its
-                // 128 channels and every other signal still says healthy.
-                if (_target.ExpectedCameraCount is { } expected && cameras.Count < expected)
-                {
-                    LogInventoryDrift(_logger, _target.Id, cameras.Count, expected);
-                }
-
-                Interlocked.Exchange(ref _consecutiveFailures, 0);
-            }
-            catch (Exception ex) when (IsPollFailure(ex))
-            {
-                RecordFailure(ex);
-            }
+            await RunInventoryPollAsync(cancellationToken).ConfigureAwait(false);
         }
         while (await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false));
+    }
+
+    /// <summary>
+    /// Runs one inventory pass. Shared by <see cref="InventoryLoopAsync"/>'s own cadence and by
+    /// <see cref="HealthLoopAsync"/>'s forced-refresh check — both go through <see cref="CallAsync"/>,
+    /// so an operator-requested refresh still respects rate limiting and the circuit breaker
+    /// rather than bypassing them.
+    /// </summary>
+    private async Task RunInventoryPollAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            var cameras = await CallAsync(
+                ct => _adapter!.GetCamerasAsync(ct), cancellationToken).ConfigureAwait(false);
+
+            await _state.UpsertInventoryAsync(_target.Id, cameras, cancellationToken)
+                .ConfigureAwait(false);
+            _lastCameraCount = cameras.Count;
+            _lastInventoryCompletedAt = DateTimeOffset.UtcNow;
+
+            // Silent inventory drift is a common vendor failure: a device returns 3 of its
+            // 128 channels and every other signal still says healthy.
+            if (_target.ExpectedCameraCount is { } expected && cameras.Count < expected)
+            {
+                LogInventoryDrift(_logger, _target.Id, cameras.Count, expected);
+            }
+
+            Interlocked.Exchange(ref _consecutiveFailures, 0);
+        }
+        catch (Exception ex) when (IsPollFailure(ex))
+        {
+            RecordFailure(ex);
+        }
     }
 
     // ---- Status: fast cadence ----------------------------------------------
@@ -385,6 +407,25 @@ public sealed partial class TargetWorker : IAsyncDisposable
 
         while (await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false))
         {
+            // An operator's POST /vms/{id}/poll-inventory only ever sets a timestamp — it never
+            // calls the adapter from the API process. This is where that request is actually
+            // noticed and acted on, still through RunInventoryPollAsync's CallAsync wrapper so
+            // rate limiting and the circuit breaker apply exactly as they do to the regular
+            // cadence. Checked here rather than on its own timer: the health loop already runs
+            // every 60s, and a second PeriodicTimer for a rarely-set flag would be pure overhead.
+            if (_adapter!.Capabilities.Has(Capability.Inventory))
+            {
+                var requestedAt = await _state
+                    .GetInventoryPollRequestedAtAsync(_target.Id, cancellationToken)
+                    .ConfigureAwait(false);
+
+                if (requestedAt is { } requested
+                    && (_lastInventoryCompletedAt is null || requested > _lastInventoryCompletedAt))
+                {
+                    await RunInventoryPollAsync(cancellationToken).ConfigureAwait(false);
+                }
+            }
+
             var started = Stopwatch.StartNew();
             HealthStatus status;
             double? latency = null;

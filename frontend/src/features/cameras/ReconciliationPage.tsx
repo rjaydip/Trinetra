@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Fragment, useState } from 'react';
+import { Link } from 'react-router-dom';
 
 import { errorDetail } from '../../api/client';
 import { api } from '../../api/endpoints';
@@ -9,6 +10,8 @@ import { useAuth } from '../../auth/AuthProvider';
 import { hasPermission } from '../../auth/permissions';
 import { Button, PageState } from '../../components/ui';
 import { cameraTypes, roundCoordinate } from './cameraVocabulary';
+import { TreeSelect } from './TreeSelect';
+import './cameras.css';
 
 function displayName(row: UnreconciledCameraResponse) {
   return row.name?.trim() || row.nativeCameraId;
@@ -20,6 +23,24 @@ function rowKey(row: UnreconciledCameraResponse) {
 
 function FieldError({ id, message }: { id: string; message?: string }) {
   return message ? <p className="form-error" id={id} role="alert">{message}</p> : null;
+}
+
+/** Resolves an organization unit id to its name, falling back to the id while loading or on error. */
+function OrganizationUnitName({ id }: { id: string }) {
+  const result = useQuery({
+    queryKey: queryKeys.reference.organizationUnit(id),
+    queryFn: () => api.reference.organizationUnit(id),
+  });
+  return <>{result.data?.name ?? id}</>;
+}
+
+/** Resolves a geographic area id to its name, falling back to the id while loading or on error. */
+function GeographicAreaName({ id }: { id: string }) {
+  const result = useQuery({
+    queryKey: queryKeys.reference.geographicArea(id),
+    queryFn: () => api.reference.geographicArea(id),
+  });
+  return <>{result.data?.name ?? id}</>;
 }
 
 /** Look up an existing registry camera by code or name and link the VMS row to it directly. */
@@ -136,6 +157,19 @@ function CreateFromFederatedForm({ row, onSuccess }: { row: UnreconciledCameraRe
     setErrors((current) => (current[field] ? { ...current, [field]: undefined } : current));
   };
 
+  // The VMS row's own unit tells us which organization to browse: an operator overriding the unit
+  // still needs to pick a sibling under the same organization, not type a bare UUID.
+  const reportedUnit = useQuery({
+    queryKey: queryKeys.reference.organizationUnit(row.organizationUnitId),
+    queryFn: () => api.reference.organizationUnit(row.organizationUnitId),
+  });
+  const organizationUnits = useQuery({
+    queryKey: queryKeys.reference.organizationUnits(reportedUnit.data?.organizationId ?? ''),
+    queryFn: () => api.reference.organizationUnits(reportedUnit.data!.organizationId),
+    enabled: Boolean(reportedUnit.data),
+  });
+  const geographicAreas = useQuery({ queryKey: queryKeys.reference.geographicAreas, queryFn: () => api.reference.geographicAreas() });
+
   function submit() {
     const nextErrors = validateCreateValues(values);
     setErrors(nextErrors);
@@ -148,10 +182,34 @@ function CreateFromFederatedForm({ row, onSuccess }: { row: UnreconciledCameraRe
       <input aria-required="true" value={values.cameraCode} onChange={(event) => update('cameraCode', event.target.value)} />
     </label><FieldError id={`${rowKey(row)}-cameraCode-error`} message={errors.cameraCode} />
     <label>Name<input value={values.name} onChange={(event) => update('name', event.target.value)} /></label>
-    <label>Organization unit ID<input value={values.organizationUnitId} onChange={(event) => update('organizationUnitId', event.target.value)} placeholder="Defaults to the VMS-reported unit" /></label>
-    <label>Geographic area ID<span aria-hidden="true"> *</span>
-      <input aria-required="true" value={values.geographicAreaId} onChange={(event) => update('geographicAreaId', event.target.value)} />
-    </label><FieldError id={`${rowKey(row)}-geographicAreaId-error`} message={errors.geographicAreaId} />
+    <TreeSelect
+      id={`${rowKey(row)}-organizationUnitId`}
+      label="Organization unit"
+      items={organizationUnits.data}
+      getParentId={(unit) => unit.parentUnitId}
+      value={values.organizationUnitId || undefined}
+      onChange={(unitId) => update('organizationUnitId', unitId ?? '')}
+      disabled={!reportedUnit.data}
+      loading={reportedUnit.isPending || organizationUnits.isPending}
+      error={reportedUnit.isError || organizationUnits.isError}
+      placeholder="Defaults to the VMS-reported unit"
+      emptyMessage="This organization has no units."
+    />
+    <TreeSelect
+      id={`${rowKey(row)}-geographicAreaId`}
+      label="Geographic area"
+      items={geographicAreas.data}
+      getParentId={(area) => area.parentAreaId}
+      value={values.geographicAreaId || undefined}
+      onChange={(areaId) => update('geographicAreaId', areaId ?? '')}
+      loading={geographicAreas.isPending}
+      error={geographicAreas.isError}
+      required
+      invalid={Boolean(errors.geographicAreaId)}
+      describedBy={errors.geographicAreaId ? `${rowKey(row)}-geographicAreaId-error` : undefined}
+      emptyMessage="No geographic areas are available."
+    />
+    <FieldError id={`${rowKey(row)}-geographicAreaId-error`} message={errors.geographicAreaId} />
     <label>Camera type<span aria-hidden="true"> *</span>
       <select aria-required="true" value={values.cameraType} onChange={(event) => update('cameraType', event.target.value)}>
         <option value="">Select a camera type</option>
@@ -177,14 +235,20 @@ export function ReconciliationPage() {
   const queryClient = useQueryClient();
   const canCreate = hasPermission(session, 'camera.create');
   const [targetId, setTargetId] = useState('');
+  const [cursor, setCursor] = useState<string | undefined>(undefined);
   const [expandedRow, setExpandedRow] = useState('');
   const [mode, setMode] = useState<'link' | 'create' | ''>('');
 
   const targets = useQuery({ queryKey: queryKeys.vms.all, queryFn: api.vms.list });
   const unreconciled = useQuery({
-    queryKey: queryKeys.reconciliation.unreconciled(targetId),
-    queryFn: () => api.reconciliation.unreconciled({ targetId: targetId || undefined }),
+    queryKey: queryKeys.reconciliation.unreconciled(targetId, cursor),
+    queryFn: () => api.reconciliation.unreconciled({ targetId: targetId || undefined, cursor }),
   });
+
+  function changeTarget(nextTargetId: string) {
+    setTargetId(nextTargetId);
+    setCursor(undefined);
+  }
 
   async function refresh() {
     setExpandedRow('');
@@ -219,15 +283,15 @@ export function ReconciliationPage() {
       <p>Cameras a VMS reports that the registry has never matched to a record.</p>
     </header>
     <label>Filter by VMS
-      <select value={targetId} onChange={(event) => setTargetId(event.target.value)}>
+      <select value={targetId} onChange={(event) => changeTarget(event.target.value)}>
         <option value="">All targets</option>
         {(targets.data ?? []).map((target) => <option key={target.id} value={target.id}>{target.displayName}</option>)}
       </select>
     </label>
-    {items.length === 0 ? (
+    {items.length === 0 && !cursor ? (
       <PageState title="Nothing to reconcile">Every discovered camera is already linked to a registry record.</PageState>
     ) : (
-      <div className="camera-table-wrap"><table className="camera-table"><caption>{items.length} unreconciled camera{items.length === 1 ? '' : 's'}</caption><thead><tr>
+      <div className="camera-table-wrap"><table className="camera-table"><caption>{items.length} unreconciled camera{items.length === 1 ? '' : 's'} on this page{unreconciled.data.nextCursor ? ' — more are available' : ''}</caption><thead><tr>
         <th scope="col">Camera</th><th scope="col">Vendor facts</th><th scope="col">Organization unit</th>
         <th scope="col">Geographic area</th><th scope="col">Last seen</th><th scope="col">Reconcile</th>
       </tr></thead><tbody>{items.map((row) => {
@@ -235,10 +299,10 @@ export function ReconciliationPage() {
         const expanded = expandedRow === key;
         return <Fragment key={key}>
           <tr>
-            <td><strong>{displayName(row)}</strong><div>{row.nativeCameraId}</div></td>
+            <td><strong>{displayName(row)}</strong><div>{row.nativeCameraId}</div><div><Link to={`/vms/${row.targetId}/discovery`}>View in VMS discovery</Link></div></td>
             <td>{row.vendorModel ?? 'Not reported'}<div>Firmware: {row.firmware ?? 'Not reported'}</div></td>
-            <td>{row.organizationUnitId}</td>
-            <td>{row.geographicAreaId ?? 'Not reported'}</td>
+            <td><OrganizationUnitName id={row.organizationUnitId} /></td>
+            <td>{row.geographicAreaId ? <GeographicAreaName id={row.geographicAreaId} /> : 'Not reported'}</td>
             <td>{row.lastSeen ? new Date(row.lastSeen).toLocaleString() : 'Never'}</td>
             <td>
               <button aria-expanded={expanded && mode === 'link'} className="button button--secondary button--small" type="button" onClick={() => toggle(row, 'link')}>
@@ -258,5 +322,9 @@ export function ReconciliationPage() {
         </Fragment>;
       })}</tbody></table></div>
     )}
+    {items.length > 0 && <nav aria-label="Reconciliation backlog pagination" className="registry-pagination">
+      <span aria-live="polite">{unreconciled.data.nextCursor ? 'More unreconciled cameras are available.' : 'End of the backlog.'}</span>
+      <button className="button" disabled={unreconciled.isFetching || !unreconciled.data.nextCursor} type="button" onClick={() => setCursor(unreconciled.data.nextCursor ?? undefined)}>Next</button>
+    </nav>}
   </section>;
 }

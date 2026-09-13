@@ -57,21 +57,24 @@ describe('RegistryPage', () => {
     let rejectFilter: (() => void) | undefined;
     vi.stubGlobal('fetch', (input: RequestInfo | URL) => {
       const url = new URL(String(input));
-      if (url.searchParams.get('organizationUnitId')) {
-        return new Promise<Response>((resolve) => { rejectFilter = () => resolve(Response.json({ title: 'Invalid filter', detail: 'Organization unit ID must be a UUID.' }, { status: 400 })); });
+      if (url.pathname === '/api/v1/cameras' && url.searchParams.get('cameraType')) {
+        return new Promise<Response>((resolve) => { rejectFilter = () => resolve(Response.json({ title: 'Invalid filter', detail: 'Camera type is not recognized.' }, { status: 400 })); });
       }
-      return Promise.resolve(Response.json({ items: [liveCamera()], nextCursor: null }));
+      if (url.pathname === '/api/v1/cameras') return Promise.resolve(Response.json({ items: [liveCamera()], nextCursor: null }));
+      if (url.pathname === '/api/v1/organizations') return Promise.resolve(Response.json({ items: [], page: 1, pageSize: 200, total: 0, totalPages: 0 }));
+      if (url.pathname === '/api/v1/geographic-areas') return Promise.resolve(Response.json({ items: [], page: 1, pageSize: 200, total: 0, totalPages: 0 }));
+      return Promise.resolve(new Response(null, { status: 404 }));
     });
     const user = userEvent.setup();
     renderApp('/cameras');
-    const input = await screen.findByLabelText(/organization unit id/i);
+    const input = await screen.findByLabelText(/camera type/i);
     await user.type(input, 'bad');
     await waitFor(() => expect(rejectFilter).toBeDefined());
     expect(input).toBeVisible();
     expect(input).toHaveFocus();
     rejectFilter!();
     expect(await screen.findByRole('heading', { name: /couldn't load camera registry/i })).toBeVisible();
-    expect(screen.getByLabelText(/organization unit id/i)).toBe(input);
+    expect(screen.getByLabelText(/camera type/i)).toBe(input);
     await user.clear(input);
     expect((await screen.findAllByText('North Gate'))[0]).toBeVisible();
     expect(input).toHaveFocus();

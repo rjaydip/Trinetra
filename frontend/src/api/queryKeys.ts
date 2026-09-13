@@ -18,6 +18,7 @@ export const queryKeys = {
     health: (id: string) => ['vms', id, 'health'] as const,
     capabilities: (id: string) => ['vms', id, 'capabilities'] as const,
     discoveredCameras: (id: string) => ['vms', id, 'discovered-cameras'] as const,
+    cameraStatusHistory: (id: string, nativeCameraId: string) => ['vms', id, 'discovered-cameras', nativeCameraId, 'status-history'] as const,
     connectionTest: (id: string, testId: string) => ['vms', id, 'connection-test', testId] as const,
   },
 
@@ -27,6 +28,12 @@ export const queryKeys = {
     search: (query: string) => ['cameras', 'search', query] as const,
     mapBootstrap: ['cameras', 'map-bootstrap'] as const,
     dashboardSearch: (query: string) => ['cameras', 'dashboard-search', query] as const,
+    attentionList: ['cameras', 'attention-list'] as const,
+  },
+
+  dashboardFooter: {
+    workerHealth: ['dashboard-footer', 'worker-health'] as const,
+    unacknowledgedAlerts: ['dashboard-footer', 'unacknowledged-alerts'] as const,
   },
 
   camera: {
@@ -47,13 +54,15 @@ export const queryKeys = {
 
   reconciliation: {
     unreconciledAll: ['reconciliation', 'unreconciled'] as const,
-    unreconciled: (targetId: string) => ['reconciliation', 'unreconciled', targetId] as const,
+    unreconciled: (targetId: string, cursor?: string) => ['reconciliation', 'unreconciled', targetId, cursor ?? null] as const,
   },
 
   reference: {
     organizations: ['reference', 'organizations'] as const,
     organizationUnits: (organizationId: string) => ['reference', 'organization-units', organizationId] as const,
+    organizationUnit: (id: string) => ['reference', 'organization-unit', id] as const,
     geographicAreas: ['reference', 'geographic-areas'] as const,
+    geographicArea: (id: string) => ['reference', 'geographic-area', id] as const,
   },
 
   admin: {

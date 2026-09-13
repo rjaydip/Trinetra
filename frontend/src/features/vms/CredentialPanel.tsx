@@ -89,6 +89,7 @@ export function CredentialPanel({ vmsId, permissions }: { vmsId: string; permiss
   const [saveError, setSaveError] = useState('');
   const [updatedAt, setUpdatedAt] = useState('');
   const [confirmedExists, setConfirmedExists] = useState(false);
+  const [confirmingOverwrite, setConfirmingOverwrite] = useState(false);
   const [testId, setTestId] = useState('');
   const [testStatusUrl, setTestStatusUrl] = useState('');
   const [testStarting, setTestStarting] = useState(false);
@@ -116,6 +117,11 @@ export function CredentialPanel({ vmsId, permissions }: { vmsId: string; permiss
       setSaveError('A password or token is required.');
       return;
     }
+    if (credentialExists && !confirmingOverwrite) {
+      setConfirmingOverwrite(true);
+      return;
+    }
+    setConfirmingOverwrite(false);
     setSavePending(true);
     const request: CredentialRequest = {
       username: username.trim() || undefined,
@@ -173,7 +179,13 @@ export function CredentialPanel({ vmsId, permissions }: { vmsId: string; permiss
       <label>Description<input value={description} onChange={(event) => setDescription(event.target.value)} /></label>
       {saveError && <p className="form-error" role="alert">{saveError}</p>}
       {updatedAt && <p className="save-confirmation" role="status">Credential updated {formatDate(updatedAt)}. Secret fields were cleared.</p>}
-      <button className="button" disabled={savePending} type="submit">{savePending ? 'Saving credential…' : 'Save credential'}</button>
+      {confirmingOverwrite && <p role="alert">A credential is already stored for this VMS. Saving will overwrite it and cannot be undone.</p>}
+      <div className="form-actions">
+        <button className="button" disabled={savePending} type="submit">
+          {savePending ? 'Saving credential…' : confirmingOverwrite ? 'Confirm overwrite' : 'Save credential'}
+        </button>
+        {confirmingOverwrite && <button className="button button--secondary" type="button" onClick={() => setConfirmingOverwrite(false)}>Cancel</button>}
+      </div>
     </form>}
     {canTest && <div className="connection-test">
       <div><h3>Connection test</h3><p>Uses the stored credential to contact the live device. It may take up to one minute.</p></div>

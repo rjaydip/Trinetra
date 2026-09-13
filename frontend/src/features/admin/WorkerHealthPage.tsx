@@ -7,12 +7,8 @@ import { queryKeys } from '../../api/queryKeys';
 import { useAuth } from '../../auth/AuthProvider';
 import { hasPermission } from '../../auth/permissions';
 import { Pager, PageState, StatusBadge } from '../../components/ui';
-
-const STALE_AFTER_MINUTES = 5;
-
-function isStale(lastHeartbeatAt: string) {
-  return Date.now() - new Date(lastHeartbeatAt).getTime() > STALE_AFTER_MINUTES * 60 * 1000;
-}
+import './admin.css';
+import { isWorkerStale } from './workerHealthStatus';
 
 export function WorkerHealthPage() {
   const { session } = useAuth();
@@ -46,8 +42,9 @@ export function WorkerHealthPage() {
                   <span>Last heartbeat {new Date(worker.lastHeartbeatAt).toLocaleString()}</span>
                   {worker.clockDriftSeconds !== null && Math.abs(worker.clockDriftSeconds) > 30 && <span>Clock drift {worker.clockDriftSeconds.toFixed(0)}s</span>}
                   {canManage && <button className="admin-action-link" type="button" disabled={retire.isPending} onClick={() => retire.mutate(worker.id)}>Retire</button>}
+                  {retire.isError && retire.variables === worker.id && <span className="form-error" role="alert">{errorDetail(retire.error, 'The worker record could not be retired.')}</span>}
                 </div>
-                <StatusBadge tone={isStale(worker.lastHeartbeatAt) ? 'danger' : 'success'}>{isStale(worker.lastHeartbeatAt) ? 'Stale' : 'Live'}</StatusBadge>
+                <StatusBadge tone={isWorkerStale(worker.lastHeartbeatAt) ? 'danger' : 'success'}>{isWorkerStale(worker.lastHeartbeatAt) ? 'Stale' : 'Live'}</StatusBadge>
               </li>)}</ul>
               <Pager page={workers.data.page} pageSize={workers.data.pageSize} total={workers.data.total} onPageChange={setPage} />
             </>}

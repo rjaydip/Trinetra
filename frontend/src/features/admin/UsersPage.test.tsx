@@ -56,6 +56,32 @@ it('lists user accounts with pagination and shows detail on selection', async ()
   expect(await screen.findByText('camera.read')).toBeVisible();
 });
 
+it('shows an error when removing a group membership fails', async () => {
+  const groupId = '30000000-0000-4000-8000-000000000002';
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input));
+    if (url.pathname === `/api/v1/users/${userId}/groups/${groupId}` && init?.method === 'DELETE') {
+      return Response.json({
+        title: 'Would lock everyone out',
+        detail: 'This membership is the only remaining grant of user administration. Grant it to another user first.',
+      }, { status: 409 });
+    }
+    if (url.pathname === '/api/v1/users') return Response.json({ items: [user], page: 1, pageSize: 20, total: 1, totalPages: 1 });
+    if (url.pathname === `/api/v1/users/${userId}`) return Response.json(user);
+    if (url.pathname === `/api/v1/users/${userId}/groups`) return Response.json([{ groupId, code: 'ADMIN', name: 'Admins', expiresAt: null }]);
+    if (url.pathname === `/api/v1/users/${userId}/permissions`) return Response.json(['user.manage']);
+    if (url.pathname === '/api/v1/access-groups') return Response.json([]);
+    return new Response(null, { status: 404 });
+  }));
+
+  renderUsers(['user.read', 'user.manage']);
+
+  await userEvent.click(await screen.findByRole('button', { name: /view ravi kumar/i }));
+  await userEvent.click(await screen.findByRole('button', { name: /^remove$/i }));
+
+  expect(await screen.findByText(/only remaining grant of user administration/i)).toBeVisible();
+});
+
 it('creates a user account', async () => {
   const requests: Array<{ path: string; method: string; body?: Record<string, unknown> }> = [];
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {

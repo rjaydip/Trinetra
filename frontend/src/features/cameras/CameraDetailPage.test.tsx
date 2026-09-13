@@ -54,12 +54,20 @@ describe('CameraDetailPage', () => {
     renderApp(`/cameras/${cameraId}`);
     await screen.findByRole('heading', { name: 'North Gate' });
     const metadata = [
-      ['Organization unit ID', record.organizationUnitId], ['Geographic area ID', record.geographicAreaId], ['Model', 'Q6135'], ['Serial number', 'AX-4421'],
+      ['Model', 'Q6135'], ['Serial number', 'AX-4421'],
       ['Installation date', '2025-02-14'], ['IP address', '10.0.0.8'], ['Port', '554'], ['Protocol', 'RTSP'],
-      ['VMS ID', record.vmsId!], ['Stream reference', 'external-stream-17'], ['Altitude', '12 m'], ['Mounting height', '8 m'],
+      ['Stream reference', 'external-stream-17'], ['Altitude', '12 m'], ['Mounting height', '8 m'],
       ['Azimuth', '0°'], ['Tilt', '-15°'], ['Horizontal field of view', '90°'], ['Vertical field of view', '45°'], ['Effective range', '70 m'],
     ];
     for (const [label, value] of metadata) expect(screen.getByText(label).nextElementSibling).toHaveTextContent(value);
+    // Organization unit / geographic area / VMS are resolved to human-readable names via
+    // separate lookups; every URL but the camera record itself 403s in this test's fetch stub,
+    // so resolution fails and each field falls back to showing the raw id — exactly as it should
+    // when the admin lacks permission to read the reference record, or it's since been deleted.
+    expect(await screen.findByText('Organization unit')).toBeVisible();
+    expect(screen.getByText('Organization unit').nextElementSibling).toHaveTextContent(record.organizationUnitId);
+    expect(screen.getByText('Geographic area').nextElementSibling).toHaveTextContent(record.geographicAreaId!);
+    expect(screen.getByText('VMS').nextElementSibling).toHaveTextContent(record.vmsId!);
     expect(screen.queryByText('DO-NOT-RENDER-CREDENTIAL')).not.toBeInTheDocument();
     expect(screen.queryByText(/credential reference/i)).not.toBeInTheDocument();
   });

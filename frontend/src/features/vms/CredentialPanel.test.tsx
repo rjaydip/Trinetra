@@ -60,6 +60,33 @@ describe('CredentialPanel', () => {
     expect(queryClient.getMutationCache().getAll()).toHaveLength(0);
   });
 
+  it('requires an explicit confirmation before overwriting an existing credential', async () => {
+    let puts = 0;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = new URL(String(input)).pathname;
+      if (path.endsWith('/credential/status')) return Response.json({ reference: 'vms/north-nvr', exists: true });
+      if (path.endsWith('/credential') && init?.method === 'PUT') {
+        puts += 1;
+        return Response.json({ credentialReference: 'vms/north-nvr', updatedAt: '2026-09-04T10:30:00Z' });
+      }
+      return new Response(null, { status: 404 });
+    }));
+    const user = userEvent.setup();
+
+    renderCredentialPanel();
+    await screen.findByText(/^credential set$/i);
+    await user.type(screen.getByLabelText(/^password/i), 'new-secret');
+    await user.click(screen.getByRole('button', { name: /save credential/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/already stored.*overwrite/i);
+    expect(puts).toBe(0);
+
+    await user.click(screen.getByRole('button', { name: /confirm overwrite/i }));
+
+    expect(await screen.findByText(/updated/i)).toBeVisible();
+    expect(puts).toBe(1);
+  });
+
   it('requires a password or token before sending a credential', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const path = new URL(String(input)).pathname;
