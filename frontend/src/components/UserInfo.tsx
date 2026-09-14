@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 
 import { useAuth } from '../auth/AuthProvider';
 import { permissionsFromSession, usernameFromSession } from '../auth/permissions';
+import { getStoredTheme, setStoredTheme, type Theme } from '../lib/theme';
 
 /** Avatar + username + permission-count subtitle, with the full permission list and Log out in
  * the menu underneath. There is no "role" claim in this token model (many fine-grained
@@ -12,6 +13,7 @@ export function UserInfo() {
   const { session, logout } = useAuth();
   const [menuOpen, setMenuOpen] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
+  const [theme, setTheme] = useState<Theme | null>(() => getStoredTheme());
   const [menuPosition, setMenuPosition] = useState<{ top?: number; bottom?: number; left: number } | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -47,6 +49,16 @@ export function UserInfo() {
       document.removeEventListener('keydown', onKeyDown);
     };
   }, [menuOpen]);
+
+  // Light -> Dark -> System (follow prefers-color-scheme), cycling. "System" is the unset state
+  // — no explicit choice is stored, so the CSS media-query palette applies on its own.
+  function cycleTheme() {
+    const next: Theme | null = theme === null ? 'light' : theme === 'light' ? 'dark' : null;
+    setStoredTheme(next);
+    setTheme(next);
+  }
+
+  const themeLabel = theme === 'light' ? 'Light' : theme === 'dark' ? 'Dark' : 'System';
 
   async function handleLogout() {
     setLoggingOut(true);
@@ -90,6 +102,9 @@ export function UserInfo() {
             ? <p className="user-info__menu-empty">This account holds no permissions.</p>
             : <ul className="user-info__permission-list">{permissions.map((permission) => <li key={permission}><code>{permission}</code></li>)}</ul>}
           <hr className="user-info__menu-divider" />
+          <button className="user-info__menu-item" role="menuitem" type="button" onClick={cycleTheme}>
+            Theme: {themeLabel}
+          </button>
           <button className="user-info__menu-item" disabled={loggingOut} role="menuitem" type="button" onClick={() => { setMenuOpen(false); void handleLogout(); }}>
             Log out
           </button>

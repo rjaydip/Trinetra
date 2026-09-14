@@ -6,6 +6,14 @@
     <meta name="theme-color" content="#10253f" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <title>Trinetra Registry</title>
+    <script>
+      (function () {
+        try {
+          var theme = localStorage.getItem('trinetra.theme');
+          if (theme === 'light' || theme === 'dark') document.documentElement.setAttribute('data-theme', theme);
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

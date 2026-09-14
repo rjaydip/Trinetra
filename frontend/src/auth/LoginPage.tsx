@@ -5,10 +5,12 @@ import './auth.css';
 import { isApiProblem } from '../api/client';
 import { Button, PasswordInput } from '../components/ui';
 import { devCredentials } from '../config/env';
+import { useDocumentTitle } from '../lib/useDocumentTitle';
 import { AuthBrandPanel } from './AuthBrandPanel';
 import { useAuth } from './AuthProvider';
 
 export function LoginPage() {
+  useDocumentTitle('Sign in');
   const { login } = useAuth();
   const navigate = useNavigate();
   const [username, setUsername] = useState(() => devCredentials().username);

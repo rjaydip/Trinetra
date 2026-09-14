@@ -7,10 +7,12 @@ import { queryKeys } from '../../api/queryKeys';
 import { useAuth } from '../../auth/AuthProvider';
 import { hasPermission } from '../../auth/permissions';
 import { Pager, PageState, StatusBadge } from '../../components/ui';
+import { useDocumentTitle } from '../../lib/useDocumentTitle';
 import './admin.css';
 import { isWorkerStale } from './workerHealthStatus';
 
 export function WorkerHealthPage() {
+  useDocumentTitle('AI worker health');
   const { session } = useAuth();
   const queryClient = useQueryClient();
   const canManage = hasPermission(session, 'worker.manage');
@@ -19,7 +21,7 @@ export function WorkerHealthPage() {
 
   const workers = useQuery({
     queryKey: queryKeys.workerHealth.page(page, pageSize),
-    queryFn: () => api.admin.workerHealth.listPage({ page, pageSize }),
+    queryFn: ({ signal }) => api.admin.workerHealth.listPage({ page, pageSize }, signal),
   });
 
   const retire = useMutation({

@@ -18,10 +18,10 @@ export function OrganizationUnitFilter({ organizationUnitId, onChange }: {
 }) {
   const [organizationId, setOrganizationId] = useState('');
 
-  const organizations = useQuery({ queryKey: queryKeys.reference.organizations, queryFn: api.reference.organizations });
+  const organizations = useQuery({ queryKey: queryKeys.reference.organizations, queryFn: ({ signal }) => api.reference.organizations(signal) });
   const units = useQuery({
     queryKey: queryKeys.reference.organizationUnits(organizationId),
-    queryFn: () => api.reference.organizationUnits(organizationId),
+    queryFn: ({ signal }) => api.reference.organizationUnits(organizationId, signal),
     enabled: Boolean(organizationId),
   });
 

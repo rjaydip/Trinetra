@@ -6,6 +6,7 @@ import { isApiProblem } from '../../api/client';
 import { api } from '../../api/endpoints';
 import type { CameraPatchRequest } from '../../api/models';
 import { queryKeys } from '../../api/queryKeys';
+import { useDocumentTitle } from '../../lib/useDocumentTitle';
 import { CameraForm, type CameraSelectorStates, type SelectorState } from './CameraForm';
 import './cameras.css';
 
@@ -14,17 +15,18 @@ function referenceError(error: unknown, fallback: string): string {
 }
 
 export function NewCameraPage() {
+  useDocumentTitle('Register camera');
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [organizationId, setOrganizationId] = useState('');
   const [coordinates, setCoordinates] = useState<{ latitude: number; longitude: number } | null>(null);
-  const organizations = useQuery({ queryKey: queryKeys.reference.organizations, queryFn: api.reference.organizations });
-  const geographicAreas = useQuery({ queryKey: queryKeys.reference.geographicAreas, queryFn: () => api.reference.geographicAreas() });
-  const vms = useQuery({ queryKey: queryKeys.vms.all, queryFn: api.vms.list });
+  const organizations = useQuery({ queryKey: queryKeys.reference.organizations, queryFn: ({ signal }) => api.reference.organizations(signal) });
+  const geographicAreas = useQuery({ queryKey: queryKeys.reference.geographicAreas, queryFn: ({ signal }) => api.reference.geographicAreas(undefined, signal) });
+  const vms = useQuery({ queryKey: queryKeys.vms.all, queryFn: ({ signal }) => api.vms.list(signal) });
   const organizationUnits = useQuery({
     queryKey: queryKeys.reference.organizationUnits(organizationId),
     enabled: Boolean(organizationId),
-    queryFn: () => api.reference.organizationUnits(organizationId),
+    queryFn: ({ signal }) => api.reference.organizationUnits(organizationId, signal),
   });
   const mapBbox = useMemo(() => {
     if (!coordinates) return null;
@@ -35,7 +37,7 @@ export function NewCameraPage() {
   }, [coordinates]);
   const mapContext = useQuery({
     queryKey: queryKeys.gisCameras.cameraPicker(mapBbox),
-    queryFn: () => api.gis.cameras({ bbox: mapBbox! }),
+    queryFn: ({ signal }) => api.gis.cameras({ bbox: mapBbox! }, signal),
     enabled: mapBbox !== null,
   });
   const handleCoordinatesChange = useCallback((latitude: number | null, longitude: number | null) => {

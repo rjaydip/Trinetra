@@ -148,30 +148,30 @@ export const api = {
     logout: () => request<void>('/api/v1/auth/logout', { method: 'POST' }),
   },
   cameras: {
-    list: (query: CameraListQuery) => request<CameraPage>(withQuery('/api/v1/cameras', query)),
-    get: (id: string) => request<CameraResponse>(`/api/v1/cameras/${id}`),
+    list: (query: CameraListQuery, signal?: AbortSignal) => request<CameraPage>(withQuery('/api/v1/cameras', query), {}, signal),
+    get: (id: string, signal?: AbortSignal) => request<CameraResponse>(`/api/v1/cameras/${id}`, {}, signal),
     create: (body: CameraWriteRequest) => request<CreatedResponse>('/api/v1/cameras', json(body)),
     replace: (id: string, body: CameraWriteRequest) => request<CameraResponse>(`/api/v1/cameras/${id}`, { body: JSON.stringify(body), method: 'PUT' }),
     update: (id: string, body: CameraPatchRequest) => request<CameraResponse>(`/api/v1/cameras/${id}`, { body: JSON.stringify(body), method: 'PATCH' }),
     retire: (id: string) => request<void>(`/api/v1/cameras/${id}`, { method: 'DELETE' }),
     bulkImport: (body: BulkImportRequest) => request<BulkImportResult>('/api/v1/cameras/bulk-import', json(body)),
-    health: (id: string) => request<CameraHealthResponse>(`/api/v1/cameras/${id}/health`),
-    healthHistory: (id: string, query: { from?: string; to?: string; limit?: number } = {}) => request<CameraHealthHistoryResponse>(withQuery(`/api/v1/cameras/${id}/health/history`, query)),
+    health: (id: string, signal?: AbortSignal) => request<CameraHealthResponse>(`/api/v1/cameras/${id}/health`, {}, signal),
+    healthHistory: (id: string, query: { from?: string; to?: string; limit?: number } = {}, signal?: AbortSignal) => request<CameraHealthHistoryResponse>(withQuery(`/api/v1/cameras/${id}/health/history`, query), {}, signal),
     overrideHealth: (id: string, body: HealthOverrideRequest) => request<CameraHealthResponse>(`/api/v1/cameras/${id}/health`, { body: JSON.stringify(body), method: 'PATCH' }),
-    maintenance: (id: string, query: { status?: string; limit?: number } = {}) => request<MaintenanceRecordResponse[]>(withQuery(`/api/v1/cameras/${id}/maintenance`, query)),
+    maintenance: (id: string, query: { status?: string; limit?: number } = {}, signal?: AbortSignal) => request<MaintenanceRecordResponse[]>(withQuery(`/api/v1/cameras/${id}/maintenance`, query), {}, signal),
     createMaintenance: (id: string, body: MaintenanceCreateRequest) => request<CreatedResponse>(`/api/v1/cameras/${id}/maintenance`, json(body)),
     updateMaintenance: (id: string, recordId: string, body: MaintenanceUpdateRequest) => request<MaintenanceRecordResponse>(`/api/v1/cameras/${id}/maintenance/${recordId}`, { body: JSON.stringify(body), method: 'PATCH' }),
     connectionTests: {
       create: (body: CameraConnectionTestRequest) => request<CameraConnectionTestAccepted>('/api/v1/cameras/connection-test', json(body)),
-      get: (statusUrl: string) => request<CameraConnectionTestResult>(statusUrl),
+      get: (statusUrl: string, signal?: AbortSignal) => request<CameraConnectionTestResult>(statusUrl, {}, signal),
     },
     credentials: {
-      status: (id: string) => request<CredentialExistsResponse>(`/api/v1/cameras/${id}/credential/status`),
+      status: (id: string, signal?: AbortSignal) => request<CredentialExistsResponse>(`/api/v1/cameras/${id}/credential/status`, {}, signal),
       save: (id: string, body: CredentialRequest) => request<CredentialResponse>(`/api/v1/cameras/${id}/credential`, { body: JSON.stringify(body), method: 'PUT' }),
     },
     credentialTests: {
       create: (cameraId: string) => request<CameraCredentialTestAccepted>(`/api/v1/cameras/${cameraId}/credential-test`, { method: 'POST' }),
-      get: (statusUrl: string) => request<CameraCredentialTestResult>(statusUrl),
+      get: (statusUrl: string, signal?: AbortSignal) => request<CameraCredentialTestResult>(statusUrl, {}, signal),
     },
     /** Tests the credential already saved on a created camera (post-save, authenticating check —
      * contrast with `testConnection`, which is a pre-save reachability-only probe). Polls the
@@ -207,65 +207,65 @@ export const api = {
     },
   },
   gis: {
-    cameras: (query: { bbox: string; includeSectors?: boolean; includeRetired?: boolean; organizationUnitId?: string; operationalStatus?: string; maintenanceStatus?: string }) => request<GeoJsonFeatureCollection>(withQuery('/api/v1/gis/cameras', query)),
-    cameraCoverage: (id: string) => request<GeoJsonFeature | undefined>(`/api/v1/cameras/${id}/coverage`),
-    coverage: (query: { geographicAreaId?: string; bbox?: string; organizationUnitId?: string }) => request<CoverageSummaryResponse>(withQuery('/api/v1/gis/coverage', query)),
+    cameras: (query: { bbox: string; includeSectors?: boolean; includeRetired?: boolean; organizationUnitId?: string; operationalStatus?: string; maintenanceStatus?: string }, signal?: AbortSignal) => request<GeoJsonFeatureCollection>(withQuery('/api/v1/gis/cameras', query), {}, signal),
+    cameraCoverage: (id: string, signal?: AbortSignal) => request<GeoJsonFeature | undefined>(`/api/v1/cameras/${id}/coverage`, {}, signal),
+    coverage: (query: { geographicAreaId?: string; bbox?: string; organizationUnitId?: string }, signal?: AbortSignal) => request<CoverageSummaryResponse>(withQuery('/api/v1/gis/coverage', query), {}, signal),
   },
   reference: {
-    organizations: () => fetchAllPages((page, pageSize) =>
-      request<PageResult<OrganizationResponse>>(withQuery('/api/v1/organizations', { page, pageSize }))),
-    organizationUnits: (organizationId: string) => fetchAllPages((page, pageSize) =>
-      request<PageResult<OrganizationUnitResponse>>(withQuery(`/api/v1/organizations/${organizationId}/units`, { page, pageSize }))),
-    organizationUnit: (id: string) => request<OrganizationUnitResponse>(`/api/v1/organization-units/${id}`),
-    geographicAreas: (query: { rootsOnly?: boolean; parentId?: string } = {}) => fetchAllPages((page, pageSize) =>
-      request<PageResult<GeographicAreaResponse>>(withQuery('/api/v1/geographic-areas', { ...query, page, pageSize }))),
-    geographicArea: (id: string) => request<GeographicAreaResponse>(`/api/v1/geographic-areas/${id}`),
+    organizations: (signal?: AbortSignal) => fetchAllPages((page, pageSize) =>
+      request<PageResult<OrganizationResponse>>(withQuery('/api/v1/organizations', { page, pageSize }), {}, signal)),
+    organizationUnits: (organizationId: string, signal?: AbortSignal) => fetchAllPages((page, pageSize) =>
+      request<PageResult<OrganizationUnitResponse>>(withQuery(`/api/v1/organizations/${organizationId}/units`, { page, pageSize }), {}, signal)),
+    organizationUnit: (id: string, signal?: AbortSignal) => request<OrganizationUnitResponse>(`/api/v1/organization-units/${id}`, {}, signal),
+    geographicAreas: (query: { rootsOnly?: boolean; parentId?: string } = {}, signal?: AbortSignal) => fetchAllPages((page, pageSize) =>
+      request<PageResult<GeographicAreaResponse>>(withQuery('/api/v1/geographic-areas', { ...query, page, pageSize }), {}, signal)),
+    geographicArea: (id: string, signal?: AbortSignal) => request<GeographicAreaResponse>(`/api/v1/geographic-areas/${id}`, {}, signal),
   },
   vms: {
-    list: () => request<VmsResponse[]>('/api/v1/vms'),
-    listPage: (query: { page: number; pageSize?: number }) =>
-      request<PageResult<VmsResponse>>(withQuery('/api/v1/vms', query)),
+    list: (signal?: AbortSignal) => request<VmsResponse[]>('/api/v1/vms', {}, signal),
+    listPage: (query: { page: number; pageSize?: number }, signal?: AbortSignal) =>
+      request<PageResult<VmsResponse>>(withQuery('/api/v1/vms', query), {}, signal),
     create: (body: ConnectorTargetRequest) => request<CreatedResponse>('/api/v1/vms', json(body)),
-    get: (id: string) => request<VmsResponse>(`/api/v1/vms/${id}`),
+    get: (id: string, signal?: AbortSignal) => request<VmsResponse>(`/api/v1/vms/${id}`, {}, signal),
     replace: (id: string, body: ConnectorTargetRequest) => request<void>(`/api/v1/vms/${id}`, { body: JSON.stringify(body), method: 'PUT' }),
     setState: (id: string, body: TargetStateRequest) => request<void>(`/api/v1/vms/${id}/state`, json(body)),
     pollInventory: (id: string) => request<PollInventoryResponse>(`/api/v1/vms/${id}/poll-inventory`, { method: 'POST' }),
     remove: (id: string) => request<void>(`/api/v1/vms/${id}`, { method: 'DELETE' }),
-    health: (id: string, query: { limit?: number; days?: number } = {}) => request<ConnectorHealthResponse[]>(withQuery(`/api/v1/vms/${id}/health`, query)),
-    capabilities: (id: string) => request<CapabilityResponse>(`/api/v1/vms/${id}/capabilities`),
-    cameraStatusHistory: (id: string, nativeCameraId: string, query: { from?: string; to?: string; limit?: number } = {}) => request<CameraStatusHistoryResponse>(withQuery(`/api/v1/vms/${id}/cameras/${nativeCameraId}/status-history`, query)),
-    discoveredCameras: (id: string) => request<FederatedCameraResponse[]>(`/api/v1/vms/${id}/cameras`),
+    health: (id: string, query: { limit?: number; days?: number } = {}, signal?: AbortSignal) => request<ConnectorHealthResponse[]>(withQuery(`/api/v1/vms/${id}/health`, query), {}, signal),
+    capabilities: (id: string, signal?: AbortSignal) => request<CapabilityResponse>(`/api/v1/vms/${id}/capabilities`, {}, signal),
+    cameraStatusHistory: (id: string, nativeCameraId: string, query: { from?: string; to?: string; limit?: number } = {}, signal?: AbortSignal) => request<CameraStatusHistoryResponse>(withQuery(`/api/v1/vms/${id}/cameras/${nativeCameraId}/status-history`, query), {}, signal),
+    discoveredCameras: (id: string, signal?: AbortSignal) => request<FederatedCameraResponse[]>(`/api/v1/vms/${id}/cameras`, {}, signal),
   },
   reconciliation: {
-    unreconciled: (query: { targetId?: string; cursor?: string; limit?: number } = {}) => request<UnreconciledPage>(withQuery('/api/v1/cameras/unreconciled', query)),
+    unreconciled: (query: { targetId?: string; cursor?: string; limit?: number } = {}, signal?: AbortSignal) => request<UnreconciledPage>(withQuery('/api/v1/cameras/unreconciled', query), {}, signal),
     reconcile: (cameraId: string, body: ReconcileRequest) => request<ReconcileResponse>(`/api/v1/cameras/${cameraId}/reconcile`, json(body)),
     createFromFederated: (body: CreateFromFederatedRequest) => request<CreatedResponse>('/api/v1/cameras/from-federated', json(body)),
   },
   detections: {
-    search: (query: { plateNumber?: string; targetId?: string; from?: string; to?: string; limit?: number } = {}) =>
-      request<DetectionResponse[]>(withQuery('/api/v1/detections', query)),
+    search: (query: { plateNumber?: string; targetId?: string; from?: string; to?: string; limit?: number } = {}, signal?: AbortSignal) =>
+      request<DetectionResponse[]>(withQuery('/api/v1/detections', query), {}, signal),
   },
   events: {
-    query: (query: { from: string; to: string; cameraId?: string; eventType?: string; objectReference?: string; cursor?: string; limit?: number }) =>
-      request<EventPage>(withQuery('/api/v1/events', query)),
+    query: (query: { from: string; to: string; cameraId?: string; eventType?: string; objectReference?: string; cursor?: string; limit?: number }, signal?: AbortSignal) =>
+      request<EventPage>(withQuery('/api/v1/events', query), {}, signal),
   },
   credentials: {
-    status: (id: string) => request<CredentialExistsResponse>(`/api/v1/vms/${id}/credential/status`),
+    status: (id: string, signal?: AbortSignal) => request<CredentialExistsResponse>(`/api/v1/vms/${id}/credential/status`, {}, signal),
     save: (id: string, body: CredentialRequest) => request<CredentialResponse>(`/api/v1/vms/${id}/credential`, { body: JSON.stringify(body), method: 'PUT' }),
   },
   connectionTests: {
     create: (vmsId: string) => request<ConnectionTestAccepted>(`/api/v1/vms/${vmsId}/test`, { method: 'POST' }),
-    get: (statusUrl: string) => request<ConnectionTestResult>(statusUrl),
+    get: (statusUrl: string, signal?: AbortSignal) => request<ConnectionTestResult>(statusUrl, {}, signal),
   },
   admin: {
     organizations: {
-      list: () => fetchAllPages((page, pageSize) =>
-        request<PageResult<OrganizationResponse>>(withQuery('/api/v1/organizations', { page, pageSize }))),
-      get: (id: string) => request<OrganizationResponse>(`/api/v1/organizations/${id}`),
+      list: (signal?: AbortSignal) => fetchAllPages((page, pageSize) =>
+        request<PageResult<OrganizationResponse>>(withQuery('/api/v1/organizations', { page, pageSize }), {}, signal)),
+      get: (id: string, signal?: AbortSignal) => request<OrganizationResponse>(`/api/v1/organizations/${id}`, {}, signal),
       create: (body: OrganizationRequest) => request<CreatedResponse>('/api/v1/organizations', json(body)),
       update: (id: string, body: OrganizationRequest) => request<OrganizationResponse>(`/api/v1/organizations/${id}`, { body: JSON.stringify(body), method: 'PUT' }),
-      listUnits: (id: string) => fetchAllPages((page, pageSize) =>
-        request<PageResult<OrganizationUnitResponse>>(withQuery(`/api/v1/organizations/${id}/units`, { page, pageSize }))),
+      listUnits: (id: string, signal?: AbortSignal) => fetchAllPages((page, pageSize) =>
+        request<PageResult<OrganizationUnitResponse>>(withQuery(`/api/v1/organizations/${id}/units`, { page, pageSize }), {}, signal)),
       createUnit: (id: string, body: OrganizationUnitRequest) => request<CreatedResponse>(`/api/v1/organizations/${id}/units`, json(body)),
       updateUnit: (id: string, body: OrganizationUnitRequest) => request<OrganizationUnitResponse>(`/api/v1/organization-units/${id}`, { body: JSON.stringify(body), method: 'PUT' }),
       activateUnit: (id: string) => request<void>(`/api/v1/organization-units/${id}/activate`, { method: 'POST' }),
@@ -273,26 +273,26 @@ export const api = {
       moveUnit: (id: string, body: MoveUnitRequest) => request<MoveUnitResponse>(`/api/v1/organization-units/${id}/move`, json(body)),
     },
     geography: {
-      listAreas: (query: { rootsOnly?: boolean; parentId?: string } = {}) => fetchAllPages((page, pageSize) =>
-        request<PageResult<GeographicAreaResponse>>(withQuery('/api/v1/geographic-areas', { ...query, page, pageSize }))),
-      getArea: (id: string) => request<GeographicAreaResponse>(`/api/v1/geographic-areas/${id}`),
-      listAreaChildren: (id: string) => fetchAllPages((page, pageSize) =>
-        request<PageResult<GeographicAreaResponse>>(withQuery(`/api/v1/geographic-areas/${id}/children`, { page, pageSize }))),
-      listAreaAncestors: (id: string) => request<GeographicAreaResponse[]>(`/api/v1/geographic-areas/${id}/ancestors`),
-      listAreaTypes: () => request<AreaTypeResponse[]>('/api/v1/geographic-areas/types'),
+      listAreas: (query: { rootsOnly?: boolean; parentId?: string } = {}, signal?: AbortSignal) => fetchAllPages((page, pageSize) =>
+        request<PageResult<GeographicAreaResponse>>(withQuery('/api/v1/geographic-areas', { ...query, page, pageSize }), {}, signal)),
+      getArea: (id: string, signal?: AbortSignal) => request<GeographicAreaResponse>(`/api/v1/geographic-areas/${id}`, {}, signal),
+      listAreaChildren: (id: string, signal?: AbortSignal) => fetchAllPages((page, pageSize) =>
+        request<PageResult<GeographicAreaResponse>>(withQuery(`/api/v1/geographic-areas/${id}/children`, { page, pageSize }), {}, signal)),
+      listAreaAncestors: (id: string, signal?: AbortSignal) => request<GeographicAreaResponse[]>(`/api/v1/geographic-areas/${id}/ancestors`, {}, signal),
+      listAreaTypes: (signal?: AbortSignal) => request<AreaTypeResponse[]>('/api/v1/geographic-areas/types', {}, signal),
       createArea: (body: GeographicAreaRequest) => request<CreatedResponse>('/api/v1/geographic-areas', json(body)),
       updateArea: (id: string, body: GeographicAreaRequest) => request<GeographicAreaResponse>(`/api/v1/geographic-areas/${id}`, { body: JSON.stringify(body), method: 'PUT' }),
       activateArea: (id: string) => request<void>(`/api/v1/geographic-areas/${id}/activate`, { method: 'POST' }),
       deactivateArea: (id: string, body: DeactivateRequest = {}) => request<void>(`/api/v1/geographic-areas/${id}/deactivate`, json(body)),
     },
     groups: {
-      list: () => request<AccessGroupResponse[]>('/api/v1/access-groups'),
-      listPage: (query: { page: number; pageSize?: number }) =>
-        request<PageResult<AccessGroupResponse>>(withQuery('/api/v1/access-groups', query)),
-      get: (id: string) => request<AccessGroupResponse>(`/api/v1/access-groups/${id}`),
-      members: (id: string) => request<GroupMemberResponse[]>(`/api/v1/access-groups/${id}/members`),
-      membersPage: (id: string, query: { page: number; pageSize?: number }) =>
-        request<PageResult<GroupMemberResponse>>(withQuery(`/api/v1/access-groups/${id}/members`, query)),
+      list: (signal?: AbortSignal) => request<AccessGroupResponse[]>('/api/v1/access-groups', {}, signal),
+      listPage: (query: { page: number; pageSize?: number }, signal?: AbortSignal) =>
+        request<PageResult<AccessGroupResponse>>(withQuery('/api/v1/access-groups', query), {}, signal),
+      get: (id: string, signal?: AbortSignal) => request<AccessGroupResponse>(`/api/v1/access-groups/${id}`, {}, signal),
+      members: (id: string, signal?: AbortSignal) => request<GroupMemberResponse[]>(`/api/v1/access-groups/${id}/members`, {}, signal),
+      membersPage: (id: string, query: { page: number; pageSize?: number }, signal?: AbortSignal) =>
+        request<PageResult<GroupMemberResponse>>(withQuery(`/api/v1/access-groups/${id}/members`, query), {}, signal),
       create: (body: CreateGroupRequest) => request<CreatedResponse>('/api/v1/access-groups', json(body)),
       update: (id: string, body: UpdateGroupRequest) => request<AccessGroupResponse>(`/api/v1/access-groups/${id}`, { body: JSON.stringify(body), method: 'PUT' }),
       activate: (id: string, body?: ActivateGroupRequest) => request<void>(`/api/v1/access-groups/${id}/activate`, json(body ?? {})),
@@ -301,44 +301,44 @@ export const api = {
       removeScope: (id: string, scopeId: string) => request<void>(`/api/v1/access-groups/${id}/scopes/${scopeId}`, { method: 'DELETE' }),
     },
     roles: {
-      list: (includeInactive = true) => request<RoleResponse[]>(withQuery('/api/v1/roles', { includeInactive })),
-      get: (id: string) => request<RoleResponse>(`/api/v1/roles/${id}`),
+      list: (includeInactive = true, signal?: AbortSignal) => request<RoleResponse[]>(withQuery('/api/v1/roles', { includeInactive }), {}, signal),
+      get: (id: string, signal?: AbortSignal) => request<RoleResponse>(`/api/v1/roles/${id}`, {}, signal),
       create: (body: RoleWriteRequest) => request<CreatedResponse>('/api/v1/roles', json(body)),
       update: (id: string, body: RoleWriteRequest) => request<RoleResponse>(`/api/v1/roles/${id}`, { body: JSON.stringify(body), method: 'PUT' }),
       delete: (id: string) => request<void>(`/api/v1/roles/${id}`, { method: 'DELETE' }),
-      permissions: () => request<PermissionResponse[]>('/api/v1/permissions'),
+      permissions: (signal?: AbortSignal) => request<PermissionResponse[]>('/api/v1/permissions', {}, signal),
     },
     watchlist: {
-      list: () => request<WatchlistEntryResponse[]>('/api/v1/watchlist'),
-      listPage: (query: { active?: boolean; page: number; pageSize?: number }) =>
-        request<PageResult<WatchlistEntryResponse>>(withQuery('/api/v1/watchlist', query)),
+      list: (signal?: AbortSignal) => request<WatchlistEntryResponse[]>('/api/v1/watchlist', {}, signal),
+      listPage: (query: { active?: boolean; page: number; pageSize?: number }, signal?: AbortSignal) =>
+        request<PageResult<WatchlistEntryResponse>>(withQuery('/api/v1/watchlist', query), {}, signal),
       create: (body: CreateWatchlistEntryRequest) => request<CreatedResponse>('/api/v1/watchlist', json(body)),
       deactivate: (id: string) => request<void>(`/api/v1/watchlist/${id}`, { method: 'DELETE' }),
-      listAlerts: (query: { limit?: number } = {}) => request<WatchlistAlertResponse[]>(withQuery('/api/v1/watchlist/alerts', query)),
+      listAlerts: (query: { limit?: number } = {}, signal?: AbortSignal) => request<WatchlistAlertResponse[]>(withQuery('/api/v1/watchlist/alerts', query), {}, signal),
       listAlertsPage: (query: {
         acknowledged?: boolean; plate?: string; entryId?: string; severity?: string;
         from?: string; to?: string; page: number; pageSize?: number;
-      }) => request<PageResult<WatchlistAlertResponse>>(withQuery('/api/v1/watchlist/alerts', query)),
+      }, signal?: AbortSignal) => request<PageResult<WatchlistAlertResponse>>(withQuery('/api/v1/watchlist/alerts', query), {}, signal),
       acknowledgeAlert: (id: string) => request<void>(`/api/v1/watchlist/alerts/${id}/acknowledge`, { method: 'POST' }),
     },
     apiKeys: {
-      list: () => request<ApiKeyResponse[]>('/api/v1/api-keys'),
-      listPage: (query: { page: number; pageSize?: number }) =>
-        request<PageResult<ApiKeyResponse>>(withQuery('/api/v1/api-keys', query)),
+      list: (signal?: AbortSignal) => request<ApiKeyResponse[]>('/api/v1/api-keys', {}, signal),
+      listPage: (query: { page: number; pageSize?: number }, signal?: AbortSignal) =>
+        request<PageResult<ApiKeyResponse>>(withQuery('/api/v1/api-keys', query), {}, signal),
       create: (body: CreateApiKeyRequest) => request<ApiKeyCreatedResponse>('/api/v1/api-keys', json(body)),
       revoke: (id: string) => request<void>(`/api/v1/api-keys/${id}`, { method: 'DELETE' }),
     },
     workerHealth: {
-      listPage: (query: { page: number; pageSize?: number }) =>
-        request<PageResult<AiWorkerHealthResponse>>(withQuery('/api/v1/worker-health', query)),
+      listPage: (query: { page: number; pageSize?: number }, signal?: AbortSignal) =>
+        request<PageResult<AiWorkerHealthResponse>>(withQuery('/api/v1/worker-health', query), {}, signal),
       retire: (id: string) => request<void>(`/api/v1/worker-health/${id}`, { method: 'DELETE' }),
     },
     users: {
-      listPage: (query: { page: number; pageSize?: number }) =>
-        request<PageResult<UserResponse>>(withQuery('/api/v1/users', query)),
-      get: (id: string) => request<UserResponse>(`/api/v1/users/${id}`),
-      groups: (id: string) => request<UserGroupResponse[]>(`/api/v1/users/${id}/groups`),
-      permissions: (id: string) => request<string[]>(`/api/v1/users/${id}/permissions`),
+      listPage: (query: { page: number; pageSize?: number }, signal?: AbortSignal) =>
+        request<PageResult<UserResponse>>(withQuery('/api/v1/users', query), {}, signal),
+      get: (id: string, signal?: AbortSignal) => request<UserResponse>(`/api/v1/users/${id}`, {}, signal),
+      groups: (id: string, signal?: AbortSignal) => request<UserGroupResponse[]>(`/api/v1/users/${id}/groups`, {}, signal),
+      permissions: (id: string, signal?: AbortSignal) => request<string[]>(`/api/v1/users/${id}/permissions`, {}, signal),
       create: (body: CreateUserRequest) => request<CreatedResponse>('/api/v1/users', json(body)),
       update: (id: string, body: UpdateUserRequest) => request<void>(`/api/v1/users/${id}`, { body: JSON.stringify(body), method: 'PUT' }),
       resetPassword: (id: string, body: ResetPasswordRequest) => request<void>(`/api/v1/users/${id}/password`, { body: JSON.stringify(body), method: 'POST' }),
@@ -346,5 +346,5 @@ export const api = {
       removeFromGroup: (id: string, groupId: string) => request<void>(`/api/v1/users/${id}/groups/${groupId}`, { method: 'DELETE' }),
     },
   },
-  overview: () => request<OverviewResponse>('/api/v1/overview'),
+  overview: (signal?: AbortSignal) => request<OverviewResponse>('/api/v1/overview', {}, signal),
 };

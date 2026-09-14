@@ -8,6 +8,7 @@ import { queryKeys } from '../../api/queryKeys';
 import { useAuth } from '../../auth/AuthProvider';
 import { hasPermission } from '../../auth/permissions';
 import { Button, PageState, StatusBadge } from '../../components/ui';
+import { useDocumentTitle } from '../../lib/useDocumentTitle';
 import './admin.css';
 
 function field(form: FormData, name: string) {
@@ -114,6 +115,7 @@ function PermissionSelector({
 }
 
 export function RolesPage() {
+  useDocumentTitle('Roles & permissions');
   const { session } = useAuth();
   const queryClient = useQueryClient();
   // Every write here (POST/PUT/DELETE /roles) is gated on role.manage alone — group.manage
@@ -130,19 +132,19 @@ export function RolesPage() {
 
   const roles = useQuery({
     queryKey: queryKeys.admin.roles(includeInactive),
-    queryFn: () => api.admin.roles.list(includeInactive),
+    queryFn: ({ signal }) => api.admin.roles.list(includeInactive, signal),
   });
 
   const permissions = useQuery({
     queryKey: queryKeys.admin.permissions,
-    queryFn: api.admin.roles.permissions,
+    queryFn: ({ signal }) => api.admin.roles.permissions(signal),
   });
 
   const effectiveRoleId = selectedRoleId || roles.data?.[0]?.id || '';
 
   const roleDetail = useQuery({
     queryKey: queryKeys.admin.role(effectiveRoleId),
-    queryFn: () => api.admin.roles.get(effectiveRoleId),
+    queryFn: ({ signal }) => api.admin.roles.get(effectiveRoleId, signal),
     enabled: Boolean(effectiveRoleId),
   });
 
@@ -327,6 +329,7 @@ export function RolesPage() {
                     <label>
                       Role code
                       <input
+                        autoFocus
                         name="code"
                         placeholder="e.g. DISPATCH_SUPERVISOR"
                         pattern="^[A-Za-z0-9_]{3,50}$"

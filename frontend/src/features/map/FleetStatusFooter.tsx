@@ -20,12 +20,12 @@ export function FleetStatusFooter() {
 
   const workers = useQuery({
     queryKey: queryKeys.dashboardFooter.workerHealth,
-    queryFn: () => api.admin.workerHealth.listPage({ page: 1, pageSize: 50 }),
+    queryFn: ({ signal }) => api.admin.workerHealth.listPage({ page: 1, pageSize: 50 }, signal),
     enabled: canReadWorkers,
   });
   const alerts = useQuery({
     queryKey: queryKeys.dashboardFooter.unacknowledgedAlerts,
-    queryFn: () => api.admin.watchlist.listAlertsPage({ acknowledged: false, page: 1, pageSize: 1 }),
+    queryFn: ({ signal }) => api.admin.watchlist.listAlertsPage({ acknowledged: false, page: 1, pageSize: 1 }, signal),
     enabled: canReadAlerts,
   });
 

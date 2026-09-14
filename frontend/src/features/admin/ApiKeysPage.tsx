@@ -8,6 +8,7 @@ import { queryKeys } from '../../api/queryKeys';
 import { useAuth } from '../../auth/AuthProvider';
 import { hasPermission } from '../../auth/permissions';
 import { Button, Pager, PageState, StatusBadge } from '../../components/ui';
+import { useDocumentTitle } from '../../lib/useDocumentTitle';
 import './admin.css';
 
 function field(form: FormData, name: string) {
@@ -15,6 +16,7 @@ function field(form: FormData, name: string) {
 }
 
 export function ApiKeysPage() {
+  useDocumentTitle('API keys');
   const { session } = useAuth();
   const queryClient = useQueryClient();
   const canManage = hasPermission(session, 'apikey.manage');
@@ -24,10 +26,10 @@ export function ApiKeysPage() {
 
   const keys = useQuery({
     queryKey: queryKeys.apiKeys.page(page, pageSize),
-    queryFn: () => api.admin.apiKeys.listPage({ page, pageSize }),
+    queryFn: ({ signal }) => api.admin.apiKeys.listPage({ page, pageSize }, signal),
   });
 
-  const groups = useQuery({ queryKey: queryKeys.admin.accessGroups, queryFn: api.admin.groups.list, enabled: canManage });
+  const groups = useQuery({ queryKey: queryKeys.admin.accessGroups, queryFn: ({ signal }) => api.admin.groups.list(signal), enabled: canManage });
 
   const create = useMutation({
     mutationFn: (body: CreateApiKeyRequest) => api.admin.apiKeys.create(body),

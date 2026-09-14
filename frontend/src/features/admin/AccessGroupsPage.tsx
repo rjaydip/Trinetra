@@ -8,6 +8,7 @@ import { queryKeys } from '../../api/queryKeys';
 import { useAuth } from '../../auth/AuthProvider';
 import { hasPermission } from '../../auth/permissions';
 import { Button, Pager, PageState, StatusBadge } from '../../components/ui';
+import { useDocumentTitle } from '../../lib/useDocumentTitle';
 import { TreeSelect } from '../cameras/TreeSelect';
 import './admin.css';
 
@@ -40,7 +41,7 @@ function CreateGroupForm({ roles, onCreate, error, pending }: {
   return <form aria-label="Create access group" className="admin-form" onSubmit={submit}>
     <h3>Create access group</h3>
     <p>New groups begin in draft while their scopes are assembled and reviewed.</p>
-    <label>Code<input name="code" required /></label>
+    <label>Code<input autoFocus name="code" required /></label>
     <label>Name<input name="name" required /></label>
     <label>Role<select name="roleId" required><option value="">Select a role</option>{roles.map((role) => <option key={role.id} value={role.id}>{role.name}</option>)}</select></label>
     <label>Description<textarea name="description" /></label>
@@ -61,7 +62,7 @@ function ScopeForm({ groupId, areas, organizations, onAdded }: {
   const [geographicAreaId, setGeographicAreaId] = useState('');
   const units = useQuery({
     queryKey: queryKeys.admin.scopeOrganizationUnits(organizationId),
-    queryFn: () => api.admin.organizations.listUnits(organizationId),
+    queryFn: ({ signal }) => api.admin.organizations.listUnits(organizationId, signal),
     enabled: scopeType === 'ORGANIZATION' && Boolean(organizationId),
   });
   const add = useMutation({ mutationFn: (request: AddScopeRequest) => api.admin.groups.addScope(groupId, request), onSuccess: onAdded });
@@ -194,6 +195,7 @@ function EditGroupForm({ group, roles, onSave, onCancel, pending, error }: EditG
 }
 
 export function AccessGroupsPage() {
+  useDocumentTitle('Access groups');
   const { session } = useAuth();
   const queryClient = useQueryClient();
   const canManage = hasPermission(session, 'group.manage');
@@ -206,19 +208,19 @@ export function AccessGroupsPage() {
 
   const groups = useQuery({
     queryKey: queryKeys.admin.accessGroupsPage(page, pageSize),
-    queryFn: () => api.admin.groups.listPage({ page, pageSize }),
+    queryFn: ({ signal }) => api.admin.groups.listPage({ page, pageSize }, signal),
   });
-  const detail = useQuery({ queryKey: queryKeys.admin.accessGroup(selectedId), queryFn: () => api.admin.groups.get(selectedId), enabled: Boolean(selectedId) });
+  const detail = useQuery({ queryKey: queryKeys.admin.accessGroup(selectedId), queryFn: ({ signal }) => api.admin.groups.get(selectedId, signal), enabled: Boolean(selectedId) });
   const [membersPage, setMembersPage] = useState(1);
   const membersPageSize = 20;
   const members = useQuery({
     queryKey: queryKeys.admin.accessGroupMembersPage(selectedId, membersPage, membersPageSize),
-    queryFn: () => api.admin.groups.membersPage(selectedId, { page: membersPage, pageSize: membersPageSize }),
+    queryFn: ({ signal }) => api.admin.groups.membersPage(selectedId, { page: membersPage, pageSize: membersPageSize }, signal),
     enabled: Boolean(selectedId),
   });
-  const roles = useQuery({ queryKey: queryKeys.admin.roles(), queryFn: () => api.admin.roles.list(), enabled: canManage });
-  const organizations = useQuery({ queryKey: queryKeys.admin.scopeOrganizations, queryFn: api.admin.organizations.list, enabled: canManage });
-  const areas = useQuery({ queryKey: queryKeys.admin.scopeAreas, queryFn: () => api.admin.geography.listAreas(), enabled: canManage });
+  const roles = useQuery({ queryKey: queryKeys.admin.roles(), queryFn: ({ signal }) => api.admin.roles.list(true, signal), enabled: canManage });
+  const organizations = useQuery({ queryKey: queryKeys.admin.scopeOrganizations, queryFn: ({ signal }) => api.admin.organizations.list(signal), enabled: canManage });
+  const areas = useQuery({ queryKey: queryKeys.admin.scopeAreas, queryFn: ({ signal }) => api.admin.geography.listAreas(undefined, signal), enabled: canManage });
 
   const create = useMutation({
     mutationFn: api.admin.groups.create,

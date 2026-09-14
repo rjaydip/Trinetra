@@ -5,6 +5,7 @@ import { isApiProblem } from '../../api/client';
 import { api } from '../../api/endpoints';
 import { queryKeys } from '../../api/queryKeys';
 import { StatusBadge } from '../../components/ui';
+import { useDocumentTitle } from '../../lib/useDocumentTitle';
 import { TreeSelect } from '../cameras/TreeSelect';
 import { CoverageSummary } from './CoverageSummary';
 import './reports.css';
@@ -14,22 +15,23 @@ function reportError(error: unknown): string {
 }
 
 export function ReportsPage() {
+  useDocumentTitle('Reports');
   const [organizationId, setOrganizationId] = useState('');
   const [organizationUnitId, setOrganizationUnitId] = useState('');
   const [geographicAreaId, setGeographicAreaId] = useState('');
   const [submittedScope, setSubmittedScope] = useState<{ organizationUnitId?: string; geographicAreaId?: string } | null>(null);
   const [scopeError, setScopeError] = useState<string | null>(null);
-  const overview = useQuery({ queryKey: queryKeys.overview, queryFn: api.overview });
-  const organizations = useQuery({ queryKey: queryKeys.reference.organizations, queryFn: api.reference.organizations });
+  const overview = useQuery({ queryKey: queryKeys.overview, queryFn: ({ signal }) => api.overview(signal) });
+  const organizations = useQuery({ queryKey: queryKeys.reference.organizations, queryFn: ({ signal }) => api.reference.organizations(signal) });
   const organizationUnits = useQuery({
     queryKey: queryKeys.reference.organizationUnits(organizationId),
-    queryFn: () => api.reference.organizationUnits(organizationId),
+    queryFn: ({ signal }) => api.reference.organizationUnits(organizationId, signal),
     enabled: Boolean(organizationId),
   });
-  const geographicAreas = useQuery({ queryKey: queryKeys.reference.geographicAreas, queryFn: () => api.reference.geographicAreas() });
+  const geographicAreas = useQuery({ queryKey: queryKeys.reference.geographicAreas, queryFn: ({ signal }) => api.reference.geographicAreas(undefined, signal) });
   const coverage = useQuery({
     queryKey: queryKeys.coverageSummary(submittedScope),
-    queryFn: () => api.gis.coverage(submittedScope!),
+    queryFn: ({ signal }) => api.gis.coverage(submittedScope!, signal),
     enabled: submittedScope !== null,
   });
 

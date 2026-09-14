@@ -11,7 +11,7 @@ export function CameraDetailDrawer({ cameraId, onClose }: { cameraId: string | n
   const drawer = useRef<HTMLElement>(null);
   const closeButton = useRef<HTMLButtonElement>(null);
   const previousFocus = useRef<HTMLElement | null>(null);
-  const camera = useQuery({ queryKey: queryKeys.camera.detail(cameraId!), queryFn: () => api.cameras.get(cameraId!), enabled: cameraId !== null });
+  const camera = useQuery({ queryKey: queryKeys.camera.detail(cameraId!), queryFn: ({ signal }) => api.cameras.get(cameraId!, signal), enabled: cameraId !== null });
 
   useEffect(() => {
     if (!cameraId) return undefined;

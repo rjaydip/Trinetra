@@ -1,5 +1,6 @@
 import { apiBaseUrl } from '../config/env';
 import { clearSession, readSession } from '../auth/session';
+import { toastBridge } from '../components/Toast';
 
 import type { ApiProblemShape } from './models';
 
@@ -69,13 +70,15 @@ export function errorDetail(error: unknown, fallback: string): string {
   return isApiProblem(error) ? error.detail : fallback;
 }
 
-export async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+export async function request<T>(path: string, init: RequestInit = {}, signal?: AbortSignal): Promise<T> {
   let response: Response;
-  const authorizedInit = withBearerToken(init);
+  const authorizedInit = withBearerToken(signal ? { ...init, signal } : init);
 
   try {
     response = await fetch(`${apiBaseUrl()}${path}`, authorizedInit);
-  } catch {
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'AbortError') throw err;
+    toastBridge?.error('The service could not be reached. Please try again.');
     throw new ApiProblem({
       status: 0,
       title: 'Service unavailable',
@@ -87,7 +90,10 @@ export async function request<T>(path: string, init: RequestInit = {}): Promise<
     const activeSession = readSession();
     // An in-flight request from a previous login must not expire a new login.
     if (response.status === 401 && activeSession
-      && new Headers(authorizedInit.headers).get('authorization') === `Bearer ${activeSession.token}`) clearSession();
+      && new Headers(authorizedInit.headers).get('authorization') === `Bearer ${activeSession.token}`) {
+      clearSession();
+      toastBridge?.info('Your session ended. Please sign in again.');
+    }
     throw await problemFrom(response);
   }
 

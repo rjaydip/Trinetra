@@ -16,9 +16,108 @@
   --color-success: #166534;
   --color-warning: #92400e;
   --color-danger: #b91c1c;
+  --color-primary-tint: #e0f2fe;
+  --color-primary-tint-strong: #dbeafe;
+  --color-primary-border: #93c5fd;
+  --color-primary-deep: #1e40af;
+  --color-surface-subtle: #f8fafc;
+  --color-surface-sunken: #e7edf3;
+  --color-surface-hover: #f1f5f9;
+  --color-border-subtle: #dde4ec;
+  --color-border-muted: #94a3b8;
+  --color-neutral-tint: #e2e8f0;
+  --color-success-tint: #dcfce7;
+  --color-warning-tint: #fef3c7;
+  --color-warning-tint-bg: #fff7ed;
+  --color-warning-tint-border: #fed7aa;
+  --color-danger-tint: #fee2e2;
+  --color-danger-tint-border: #fecaca;
+  /* Auth brand-panel gradient is fixed artwork, not a themed surface — it never gets a dark
+     override, so login/password pages keep the same dark hero regardless of theme. */
+  --color-brand-gradient-start: #0c4a6e;
+  --color-brand-gradient-mid: #075985;
+  --color-brand-gradient-end: #062033;
   font-family: Inter, ui-sans-serif, system-ui, sans-serif;
   color: var(--color-text);
   background: var(--color-canvas);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --color-canvas: #0f1520;
+    --color-surface: #1a2332;
+    --color-text: #e5eaf2;
+    --color-muted: #94a3b8;
+    --color-border: #334155;
+    --color-primary: #38bdf8;
+    --color-primary-hover: #7dd3fc;
+    --color-focus: #fbbf24;
+    --color-success: #4ade80;
+    --color-warning: #fbbf24;
+    --color-danger: #f87171;
+    --color-primary-tint: #0c2d42;
+    --color-primary-tint-strong: #123a56;
+    --color-primary-border: #1d4e6e;
+    --color-primary-deep: #7dd3fc;
+    --color-surface-subtle: #202b3d;
+    --color-surface-sunken: #16202e;
+    --color-surface-hover: #243145;
+    --color-border-subtle: #2b3a4f;
+    --color-border-muted: #64748b;
+    --color-neutral-tint: #2a3548;
+    --color-success-tint: #113321;
+    --color-warning-tint: #3a2a0a;
+    --color-warning-tint-bg: #33230a;
+    --color-warning-tint-border: #6b4a1a;
+    --color-danger-tint: #3a1414;
+    --color-danger-tint-border: #5c2323;
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --color-canvas: #0f1520;
+  --color-surface: #1a2332;
+  --color-text: #e5eaf2;
+  --color-muted: #94a3b8;
+  --color-border: #334155;
+  --color-primary: #38bdf8;
+  --color-primary-hover: #7dd3fc;
+  --color-focus: #fbbf24;
+  --color-success: #4ade80;
+  --color-warning: #fbbf24;
+  --color-danger: #f87171;
+  --color-primary-tint: #0c2d42;
+  --color-primary-tint-strong: #123a56;
+  --color-primary-border: #1d4e6e;
+  --color-primary-deep: #7dd3fc;
+  --color-surface-subtle: #202b3d;
+  --color-surface-sunken: #16202e;
+  --color-surface-hover: #243145;
+  --color-border-subtle: #2b3a4f;
+  --color-border-muted: #64748b;
+  --color-neutral-tint: #2a3548;
+  --color-success-tint: #113321;
+  --color-warning-tint: #3a2a0a;
+  --color-warning-tint-bg: #33230a;
+  --color-warning-tint-border: #6b4a1a;
+  --color-danger-tint: #3a1414;
+  --color-danger-tint-border: #5c2323;
+}
+
+/* Emphasized status badges use a bright solid semantic background; white text (right for the
+   light-mode dark semantic colors) loses contrast once dark mode swaps those to bright
+   readable-on-dark tones, so dark mode flips to dark text on the same bright background. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .status-badge--danger.status-badge--emphasized,
+  :root:not([data-theme="light"]) .status-badge--warning.status-badge--emphasized {
+    color: var(--color-canvas);
+  }
+}
+:root[data-theme="dark"] .status-badge--danger.status-badge--emphasized,
+:root[data-theme="dark"] .status-badge--warning.status-badge--emphasized {
+  color: var(--color-canvas);
 }
 
 * { box-sizing: border-box; }
@@ -45,7 +144,7 @@ a { color: var(--color-primary); }
 .app-sidebar__list { display: flex; flex-direction: column; gap: .1875rem; margin: 0; padding: 0; list-style: none; }
 .app-sidebar__link { display: flex; flex-direction: column; align-items: center; gap: .1875rem; padding: .375rem .125rem; color: var(--color-muted); text-align: center; text-decoration: none; border-radius: .5rem; }
 .app-sidebar__link:hover { color: var(--color-text); background: var(--color-canvas); }
-.app-sidebar__link[aria-current='page'] { color: var(--color-primary); font-weight: 700; background: #e0f2fe; }
+.app-sidebar__link[aria-current='page'] { color: var(--color-primary); font-weight: 700; background: var(--color-primary-tint); }
 .app-sidebar__icon { display: flex; flex: none; align-items: center; justify-content: center; width: 1.125rem; height: 1.125rem; }
 .app-sidebar__icon svg { display: block; width: 100%; height: 100%; overflow: visible; }
 .app-sidebar__label { overflow-wrap: normal; word-break: keep-all; font-size: .625rem; line-height: 1.15; }
@@ -112,10 +211,10 @@ a { color: var(--color-primary); }
 .button--secondary:disabled:hover { color: var(--color-primary); background: var(--color-surface); }
 .form-error { margin: 0; color: var(--color-danger); font-weight: 650; }
 .status-badge { display: inline-flex; padding: .125rem .5rem; border-radius: 99rem; font-size: .875rem; font-weight: 700; }
-.status-badge--neutral { color: var(--color-text); background: #e2e8f0; }
-.status-badge--success { color: var(--color-success); background: #dcfce7; }
-.status-badge--warning { color: var(--color-warning); background: #fef3c7; }
-.status-badge--danger { color: var(--color-danger); background: #fee2e2; }
+.status-badge--neutral { color: var(--color-text); background: var(--color-neutral-tint); }
+.status-badge--success { color: var(--color-success); background: var(--color-success-tint); }
+.status-badge--warning { color: var(--color-warning); background: var(--color-warning-tint); }
+.status-badge--danger { color: var(--color-danger); background: var(--color-danger-tint); }
 .status-badge--danger.status-badge--emphasized { color: white; background: var(--color-danger); }
 .status-badge--warning.status-badge--emphasized { color: white; background: var(--color-warning); }
 .back-link { color: var(--color-primary); font-weight: 700; width: fit-content; }
@@ -159,6 +258,8 @@ a { color: var(--color-primary); }
 
 /* Shared detail/definition-list panel, reused by admin, cameras and vms pages */
 .detail-panel { padding: 1rem; border: 1px solid var(--color-border); border-radius: .75rem; background: var(--color-surface); }
+.camera-form-draft-banner { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .75rem; padding: .75rem 1rem; margin-bottom: 1rem; border: 1px solid var(--color-border); border-radius: .5rem; background: var(--color-surface); }
+.camera-form-draft-banner__actions { display: flex; gap: .5rem; }
 .detail-panel h2 { margin-top: 0; margin-bottom: .5rem; }
 .detail-panel dl { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .75rem; margin: .25rem 0 0; }
 .detail-panel dl div { display: grid; gap: .25rem; }
@@ -183,6 +284,16 @@ a { color: var(--color-primary); }
   .detail-panel dl { grid-template-columns: 1fr; }
   .registry-pagination { align-items: stretch; flex-direction: column; }
 }
+
+.toast-stack { position: fixed; z-index: 30; right: 1rem; bottom: 1rem; display: flex; flex-direction: column-reverse; gap: .5rem; width: min(22rem, calc(100vw - 2rem)); }
+.toast-stack__group { display: flex; flex-direction: column-reverse; gap: .5rem; }
+.toast { display: flex; align-items: flex-start; gap: .5rem; padding: .75rem .875rem; background: var(--color-surface); border: 1px solid var(--color-border); border-left-width: .3125rem; border-radius: .5rem; box-shadow: 0 .5rem 1.5rem rgb(15 23 42 / 15%); }
+.toast p { flex: 1; margin: 0; font-weight: 600; }
+.toast--success { border-left-color: var(--color-success); }
+.toast--error { border-left-color: var(--color-danger); }
+.toast--info { border-left-color: var(--color-primary); }
+.toast__close { flex: none; padding: 0 .25rem; color: var(--color-muted); background: none; border: 0; border-radius: .25rem; font-size: 1.125rem; line-height: 1; cursor: pointer; }
+.toast__close:hover { color: var(--color-text); }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; }

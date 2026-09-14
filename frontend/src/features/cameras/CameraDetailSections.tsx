@@ -16,16 +16,16 @@ export function CameraDetailSections({ camera }: { camera: CameraResponse }) {
   // top of data that's already shown, not a gate on seeing the camera record itself.
   const organizationUnit = useQuery({
     queryKey: queryKeys.reference.organizationUnit(camera.organizationUnitId),
-    queryFn: () => api.reference.organizationUnit(camera.organizationUnitId),
+    queryFn: ({ signal }) => api.reference.organizationUnit(camera.organizationUnitId, signal),
   });
   const geographicArea = useQuery({
     queryKey: queryKeys.reference.geographicArea(camera.geographicAreaId ?? ''),
-    queryFn: () => api.reference.geographicArea(camera.geographicAreaId!),
+    queryFn: ({ signal }) => api.reference.geographicArea(camera.geographicAreaId!, signal),
     enabled: Boolean(camera.geographicAreaId),
   });
   const vms = useQuery({
     queryKey: queryKeys.vms.detail(camera.vmsId ?? ''),
-    queryFn: () => api.vms.get(camera.vmsId!),
+    queryFn: ({ signal }) => api.vms.get(camera.vmsId!, signal),
     enabled: Boolean(camera.vmsId),
   });
   return (

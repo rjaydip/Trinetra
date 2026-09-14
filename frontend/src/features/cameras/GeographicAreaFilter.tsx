@@ -11,7 +11,7 @@ export function GeographicAreaFilter({ geographicAreaId, onChange }: {
   geographicAreaId: string | undefined;
   onChange(geographicAreaId: string | undefined): void;
 }) {
-  const areas = useQuery({ queryKey: queryKeys.reference.geographicAreas, queryFn: () => api.reference.geographicAreas() });
+  const areas = useQuery({ queryKey: queryKeys.reference.geographicAreas, queryFn: ({ signal }) => api.reference.geographicAreas(undefined, signal) });
 
   return (
     <TreeSelect

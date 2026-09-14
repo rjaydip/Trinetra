@@ -8,6 +8,7 @@ import { queryKeys } from '../../api/queryKeys';
 import { useAuth } from '../../auth/AuthProvider';
 import { hasPermission } from '../../auth/permissions';
 import { Button, Pager, PageState, StatusBadge } from '../../components/ui';
+import { useDocumentTitle } from '../../lib/useDocumentTitle';
 import './admin.css';
 
 function field(form: FormData, name: string) {
@@ -55,10 +56,10 @@ function UserDetail({ userId, canManage, onClose }: {
   const [newPassword, setNewPassword] = useState('');
   const [groupId, setGroupId] = useState('');
 
-  const detail = useQuery({ queryKey: queryKeys.users.detail(userId), queryFn: () => api.admin.users.get(userId) });
-  const groups = useQuery({ queryKey: queryKeys.users.groups(userId), queryFn: () => api.admin.users.groups(userId) });
-  const permissions = useQuery({ queryKey: queryKeys.users.permissions(userId), queryFn: () => api.admin.users.permissions(userId) });
-  const allGroups = useQuery({ queryKey: queryKeys.admin.accessGroups, queryFn: api.admin.groups.list, enabled: canManage });
+  const detail = useQuery({ queryKey: queryKeys.users.detail(userId), queryFn: ({ signal }) => api.admin.users.get(userId, signal) });
+  const groups = useQuery({ queryKey: queryKeys.users.groups(userId), queryFn: ({ signal }) => api.admin.users.groups(userId, signal) });
+  const permissions = useQuery({ queryKey: queryKeys.users.permissions(userId), queryFn: ({ signal }) => api.admin.users.permissions(userId, signal) });
+  const allGroups = useQuery({ queryKey: queryKeys.admin.accessGroups, queryFn: ({ signal }) => api.admin.groups.list(signal), enabled: canManage });
 
   async function refresh() {
     await Promise.all([
@@ -176,6 +177,7 @@ function UserDetail({ userId, canManage, onClose }: {
 }
 
 export function UsersPage() {
+  useDocumentTitle('Users');
   const { session } = useAuth();
   const queryClient = useQueryClient();
   const canManage = hasPermission(session, 'user.manage');
@@ -185,7 +187,7 @@ export function UsersPage() {
 
   const users = useQuery({
     queryKey: queryKeys.users.page(page, pageSize),
-    queryFn: () => api.admin.users.listPage({ page, pageSize }),
+    queryFn: ({ signal }) => api.admin.users.listPage({ page, pageSize }, signal),
     enabled: !selectedId,
   });
 

@@ -195,6 +195,29 @@ const requiredForTestFields = [
   'protocol', 'ipAddress', 'port',
 ] as const satisfies readonly (keyof CameraFormValues)[];
 
+const CAMERA_DRAFT_STORAGE_KEY = 'trinetra.cameraForm.draft';
+
+/** The credential is excluded from the persisted draft — it's sealed server-side once the
+ * connection test runs, and there's no reason to also hold it in plaintext in localStorage. */
+type CameraDraftValues = Omit<CameraFormValues, 'password'>;
+
+function readCameraDraft(): CameraDraftValues | null {
+  try {
+    const raw = window.localStorage.getItem(CAMERA_DRAFT_STORAGE_KEY);
+    return raw ? (JSON.parse(raw) as CameraDraftValues) : null;
+  } catch {
+    return null;
+  }
+}
+
+function clearCameraDraft() {
+  try {
+    window.localStorage.removeItem(CAMERA_DRAFT_STORAGE_KEY);
+  } catch {
+    // localStorage unavailable (private browsing, quota) — nothing to clear.
+  }
+}
+
 interface CameraFormProps {
   organizations: OrganizationResponse[];
   organizationUnits: OrganizationUnitResponse[];
@@ -272,6 +295,12 @@ type CredentialTestState =
   | { status: 'error'; detail: string };
 
 export function CameraForm({ organizations, organizationUnits, geographicAreas, vms, selectorStates = readySelectorStates, mapFeatures, initialValues, onOrganizationChange, onCoordinatesChange, onSubmit }: CameraFormProps) {
+  // Drafts only apply to the create flow — an edit form always starts from `initialValues`
+  // (the real camera row), and restoring a stray localStorage draft over it would silently
+  // clobber the operator's view of the current record.
+  const isCreateFlow = !initialValues;
+  const [storedDraft] = useState<CameraDraftValues | null>(() => (isCreateFlow ? readCameraDraft() : null));
+  const [draftBannerVisible, setDraftBannerVisible] = useState(Boolean(storedDraft));
   const form = useForm<CameraFormValues>({ defaultValues: initialValues ?? defaults, resolver: zodResolver(cameraFormSchema) });
   const [step, setStep] = useState<'connect' | 'details'>('connect');
   const [detailsOpen, setDetailsOpen] = useState(false);
@@ -309,6 +338,39 @@ export function CameraForm({ organizations, organizationUnits, geographicAreas, 
   useEffect(() => {
     onCoordinatesChange?.(latitude, longitude);
   }, [latitude, longitude, onCoordinatesChange]);
+
+  // The "Test connection" step already creates a partial camera row server-side, so an abandoned
+  // registration is doubly costly — lost typing on top of an orphaned record. Persisting a debounced
+  // draft to localStorage (create flow only) at least saves the typing.
+  useEffect(() => {
+    if (!isCreateFlow) return undefined;
+    let saveTimeout: number | undefined;
+    const subscription = form.watch((values) => {
+      window.clearTimeout(saveTimeout);
+      saveTimeout = window.setTimeout(() => {
+        const { password: _password, ...draft } = values as CameraFormValues;
+        try {
+          window.localStorage.setItem(CAMERA_DRAFT_STORAGE_KEY, JSON.stringify(draft));
+        } catch {
+          // localStorage unavailable (private browsing, quota) — draft persistence is best-effort.
+        }
+      }, 400);
+    });
+    return () => {
+      window.clearTimeout(saveTimeout);
+      subscription.unsubscribe();
+    };
+  }, [form, isCreateFlow]);
+
+  function continueDraft() {
+    if (storedDraft) form.reset({ ...defaults, ...storedDraft });
+    setDraftBannerVisible(false);
+  }
+
+  function discardDraft() {
+    clearCameraDraft();
+    setDraftBannerVisible(false);
+  }
 
   /**
    * Creates the camera (first attempt) or saves the latest connect-step fields to the
@@ -364,10 +426,18 @@ export function CameraForm({ organizations, organizationUnits, geographicAreas, 
       if (!cameraId) return;
       try {
         await onSubmit(cameraId, toCameraPatchRequest(values));
+        if (isCreateFlow) clearCameraDraft();
       } catch (error) {
         form.setError('root', { message: isApiProblem(error) ? error.detail : 'Unable to save the camera. Please try again.' });
       }
     })}>
+      {draftBannerVisible && <div className="camera-form-draft-banner" role="status">
+        <p>You have an unfinished camera registration saved in this browser. Continue where you left off, or start over.</p>
+        <div className="camera-form-draft-banner__actions">
+          <Button type="button" onClick={continueDraft}>Continue draft</Button>
+          <button className="button button--secondary" type="button" onClick={discardDraft}>Start over</button>
+        </div>
+      </div>}
       <ol className="camera-form-steps" aria-label="Registration steps">
         <li aria-current={step === 'connect' ? 'step' : undefined}>1. Connect</li>
         <li aria-current={step === 'details' ? 'step' : undefined}>2. Camera details</li>
@@ -375,7 +445,7 @@ export function CameraForm({ organizations, organizationUnits, geographicAreas, 
       {step === 'connect' && <fieldset>
         <legend>Connect to the device</legend>
         <p className="field-help">Identify the camera and enter how to reach it on the network, then test the connection — this creates the camera and verifies its credential before you continue.</p>
-        <label>Camera code<span aria-hidden="true"> *</span><input aria-required="true" {...register('cameraCode')} {...validationProps('cameraCode')} /></label><FieldError id="cameraCode-error" message={errors.cameraCode?.message} />
+        <label>Camera code<span aria-hidden="true"> *</span><input aria-required="true" autoFocus {...register('cameraCode')} {...validationProps('cameraCode')} /></label><FieldError id="cameraCode-error" message={errors.cameraCode?.message} />
         <label>Name<span aria-hidden="true"> *</span><input aria-required="true" {...register('name')} {...validationProps('name')} /></label><FieldError id="name-error" message={errors.name?.message} />
         <label>Organization<select aria-describedby={selectorStates.organizations.state === 'ready' ? undefined : 'organizations-status'} disabled={selectorStates.organizations.state !== 'ready'} {...organizationRegistration} onChange={(event) => {
           organizationRegistration.onChange(event);
