@@ -44,14 +44,18 @@ internal static class ApiEndpointExtensions
         app.MapGisEndpoints();
         app.MapCredentialEndpoints();
         app.MapCameraCredentialEndpoints();
+        app.MapSavedCredentialEndpoints();
         app.MapCameraCredentialTestEndpoints();
         app.MapConnectionTestEndpoints();
         app.MapEventEndpoints();
+        app.MapCorrelationEndpoints();
         app.MapDetectionEndpoints();
         app.MapWatchlistEndpoints();
         app.MapWorkerHealthEndpoints();
         app.MapApiKeyEndpoints();
         app.MapAuthAuditEndpoints();
+        app.MapVideoWallEndpoints();
+        app.MapStreamSessionEndpoints();
 
         app.ValidatePermissionCoverage(
             app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Trinetra.Permissions"));

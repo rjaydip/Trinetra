@@ -22,6 +22,10 @@
 .coverage-summary__bucket dl div { display: flex; align-items: baseline; justify-content: space-between; gap: .75rem; }
 .coverage-summary__bucket dt { color: var(--color-muted); }
 .coverage-summary__bucket dd { margin: 0; font-weight: 750; }
+.coverage-gap-result { display: grid; gap: .5rem; }
+.coverage-gap-result dl { display: flex; gap: .5rem; margin: 0; }
+.coverage-gap-result dt { color: var(--color-muted); }
+.coverage-gap-result dd { margin: 0; font-weight: 750; }
 .report-empty { color: var(--color-muted); }
 .report-unavailable { border-left: .25rem solid var(--color-muted); }
 .report-unavailable h2 { margin-top: .75rem; font-size: 1.125rem; }

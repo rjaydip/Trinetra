@@ -12,6 +12,8 @@ import { CameraMap } from './CameraMap';
 import { MapFilters } from './MapFilters';
 import { DashboardSearch, FleetStatusStrip } from './DashboardData';
 import { FleetStatusFooter } from './FleetStatusFooter';
+import { LocationSearchBox } from './LocationSearchBox';
+import { MapSearchBox } from './MapSearchBox';
 import { buildMapRequest, filterMapFeatures, initialBoundsFromCameras, type Bounds, type MapFilters as MapFiltersValue } from './geo';
 
 export function MapPage() {
@@ -55,6 +57,11 @@ export function MapPage() {
           </button>
         </header>
         <DashboardSearch />
+        {/* Visible without expanding the map first — picking a result both opens the map (if it
+         * isn't already) and pans/zooms it to that camera, so search doesn't require the extra
+         * "Show full map" click just to become usable. */}
+        <MapSearchBox onLocate={(nextBounds, nextCameraId) => { setMapOpen(true); setBounds(nextBounds); setCameraId(nextCameraId); }} />
+        <LocationSearchBox onLocate={(nextBounds) => { setMapOpen(true); setBounds(nextBounds); }} />
         {mapOpen && <>
           {filters.coverage && <p className="coverage-notice">Coverage sectors are estimated planning aids; terrain and obstructions are not modelled.</p>}
           {registry.isPending ? <PageState title="Loading camera map">Finding live registry coordinates…</PageState>

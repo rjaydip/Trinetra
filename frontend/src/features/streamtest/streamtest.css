@@ -1,0 +1,11 @@
+.stream-test-page { display: grid; gap: 1.25rem; }
+.stream-test-page > header p { color: var(--color-muted); }
+.stream-test-panel { display: grid; gap: .75rem; padding: 1rem; border: 1px solid var(--color-border); border-radius: .75rem; background: var(--color-surface); }
+.stream-test-panel h2 { margin: 0; }
+.stream-test-panel > p { margin: 0; color: var(--color-muted); }
+.stream-test-panel form { display: flex; align-items: flex-end; gap: .625rem; flex-wrap: wrap; }
+.stream-test-panel label { flex: 1; min-width: 16rem; display: grid; gap: .375rem; font-weight: 600; }
+.stream-test-panel input { min-height: 2.75rem; padding: .5rem .625rem; border: 1px solid var(--color-border); border-radius: .375rem; color: var(--color-text); background: var(--color-surface); font: inherit; }
+.stream-test__player { display: grid; gap: .5rem; }
+.stream-test__player video { width: 100%; max-width: 40rem; aspect-ratio: 16 / 9; border-radius: .5rem; background: #000; object-fit: contain; }
+.stream-test__player p { margin: 0; color: var(--color-muted); }

@@ -318,23 +318,84 @@ public sealed class UserRepository
             r.SetAt))];
     }
 
+    /// <summary>
+    /// Throws <see cref="InvalidReferenceException"/> unless the given organization unit exists
+    /// and is ACTIVE. A null id passes — the field is optional HR metadata. Runs in the caller's
+    /// transaction. Mirrors <c>OrganizationRepository</c>'s home-area check; this is the same
+    /// DESCRIPTIVE-ONLY existence+ACTIVE check, never a scope check (invariant 12).
+    /// </summary>
+    private static async Task RequireActiveOrgUnitAsync(
+        NpgsqlConnection c, NpgsqlTransaction tx, Guid? unitId, string field, CancellationToken ct)
+    {
+        if (unitId is null)
+        {
+            return;
+        }
+
+        var active = await c.ExecuteScalarAsync<bool>(new CommandDefinition("""
+            SELECT EXISTS (SELECT 1 FROM federation.organization_units
+                           WHERE id = @unitId AND status = 'ACTIVE');
+            """, new { unitId }, tx, cancellationToken: ct));
+
+        if (!active)
+        {
+            throw new InvalidReferenceException(field, "does not exist or is not ACTIVE");
+        }
+    }
+
+    /// <summary>
+    /// Throws <see cref="InvalidReferenceException"/> unless the given geographic area exists
+    /// and is ACTIVE. A null id passes — the field is optional HR metadata. Mirrors
+    /// <c>GeographyRepository.RequireActiveAreaAsync</c>; DESCRIPTIVE ONLY (invariant 12).
+    /// </summary>
+    private static async Task RequireActiveGeoAreaAsync(
+        NpgsqlConnection c, NpgsqlTransaction tx, Guid? areaId, string field, CancellationToken ct)
+    {
+        if (areaId is null)
+        {
+            return;
+        }
+
+        var active = await c.ExecuteScalarAsync<bool>(new CommandDefinition("""
+            SELECT EXISTS (SELECT 1 FROM federation.geographic_areas
+                           WHERE id = @areaId AND status = 'ACTIVE');
+            """, new { areaId }, tx, cancellationToken: ct));
+
+        if (!active)
+        {
+            throw new InvalidReferenceException(field, "does not exist or is not ACTIVE");
+        }
+    }
+
     public async Task<Guid> CreateAsync(
         string username, string displayName, string? email, PasswordHash password,
-        bool mustChangePassword, bool isSystem, UnitOfWork work, CancellationToken ct)
+        bool mustChangePassword, bool isSystem, UnitOfWork work, CancellationToken ct,
+        Guid? organizationUnitId = null, Guid? geographicAreaId = null, string? designation = null)
     {
         var c = work.Connection;
+        var tx = work.Transaction;
+
+        // DESCRIPTIVE ONLY (invariant 12): existence + ACTIVE, never a scope check.
+        await RequireActiveOrgUnitAsync(c, tx, organizationUnitId, "organizationUnitId", ct)
+            .ConfigureAwait(false);
+        await RequireActiveGeoAreaAsync(c, tx, geographicAreaId, "geographicAreaId", ct)
+            .ConfigureAwait(false);
+
         return await c.ExecuteScalarAsync<Guid>(new CommandDefinition("""
             INSERT INTO federation.platform_users
                 (username, display_name, email, password_hash, password_salt,
-                 password_iterations, password_algorithm, must_change_password, is_system)
+                 password_iterations, password_algorithm, must_change_password, is_system,
+                 organization_unit_id, geographic_area_id, designation)
             VALUES (@username, @displayName, @email, @Hash, @Salt,
-                    @Iterations, @Algorithm, @mustChangePassword, @isSystem)
+                    @Iterations, @Algorithm, @mustChangePassword, @isSystem,
+                    @organizationUnitId, @geographicAreaId, @designation)
             RETURNING id;
             """, new
         {
             username, displayName, email, mustChangePassword, isSystem,
             password.Hash, password.Salt, password.Iterations, password.Algorithm,
-        }, work.Transaction, cancellationToken: ct));
+            organizationUnitId, geographicAreaId, designation,
+        }, tx, cancellationToken: ct));
     }
 
     public async Task<bool> ExistsAsync(string username, CancellationToken ct)
@@ -374,8 +435,12 @@ public sealed class UserRepository
         await using var c = await _dataSource.OpenConnectionAsync(ct);
         var rows = await c.QueryAsync<PlatformUser>(new CommandDefinition($"""
             SELECT pu.id, pu.username, pu.display_name, pu.email, pu.must_change_password,
-                   pu.status, pu.last_login_at, pu.is_system
+                   pu.status, pu.last_login_at, pu.is_system,
+                   pu.organization_unit_id, ou.name AS organization_unit_name,
+                   pu.geographic_area_id, ga.name AS geographic_area_name, pu.designation
             FROM federation.platform_users pu
+            LEFT JOIN federation.organization_units ou ON ou.id = pu.organization_unit_id
+            LEFT JOIN federation.geographic_areas ga ON ga.id = pu.geographic_area_id
             WHERE {VisibleForUserReadPredicate}
             ORDER BY pu.username;
             """, UserVisibilityParams(caller), cancellationToken: ct));
@@ -397,8 +462,12 @@ public sealed class UserRepository
             new CommandDefinition($"""
                 SELECT pu.id, pu.username, pu.display_name, pu.email, pu.must_change_password,
                        pu.status, pu.last_login_at, pu.is_system,
+                       pu.organization_unit_id, ou.name AS organization_unit_name,
+                       pu.geographic_area_id, ga.name AS geographic_area_name, pu.designation,
                        count(*) OVER() AS total_count
                 FROM federation.platform_users pu
+                LEFT JOIN federation.organization_units ou ON ou.id = pu.organization_unit_id
+                LEFT JOIN federation.geographic_areas ga ON ga.id = pu.geographic_area_id
                 WHERE {VisibleForUserReadPredicate}
                 ORDER BY pu.username
                 LIMIT @limit OFFSET @offset;
@@ -611,22 +680,45 @@ public sealed class UserRepository
     {
         await using var c = await _dataSource.OpenConnectionAsync(ct);
         return await c.QuerySingleOrDefaultAsync<PlatformUser>(new CommandDefinition("""
-            SELECT id, username, display_name, email, must_change_password,
-                   status, last_login_at, is_system
-            FROM federation.platform_users WHERE id = @id;
+            SELECT pu.id, pu.username, pu.display_name, pu.email, pu.must_change_password,
+                   pu.status, pu.last_login_at, pu.is_system,
+                   pu.organization_unit_id, ou.name AS organization_unit_name,
+                   pu.geographic_area_id, ga.name AS geographic_area_name, pu.designation
+            FROM federation.platform_users pu
+            LEFT JOIN federation.organization_units ou ON ou.id = pu.organization_unit_id
+            LEFT JOIN federation.geographic_areas ga ON ga.id = pu.geographic_area_id
+            WHERE pu.id = @id;
             """, new { id }, cancellationToken: ct));
     }
 
-    /// <summary>Updates the fields a user administrator may change. Never touches the password.</summary>
+    /// <summary>
+    /// Updates the fields a user administrator may change. Never touches the password. A full
+    /// replace, like the rest of this row: <paramref name="organizationUnitId"/>,
+    /// <paramref name="geographicAreaId"/> and <paramref name="designation"/> are HR metadata
+    /// only (DESCRIPTIVE ONLY, invariant 12) — validated for existence + ACTIVE when supplied.
+    /// </summary>
     public async Task<bool> UpdateAsync(
-        Guid id, string displayName, string? email, string status, UnitOfWork work, CancellationToken ct)
+        Guid id, string displayName, string? email, string status, UnitOfWork work, CancellationToken ct,
+        Guid? organizationUnitId = null, Guid? geographicAreaId = null, string? designation = null)
     {
         var c = work.Connection;
+        var tx = work.Transaction;
+
+        await RequireActiveOrgUnitAsync(c, tx, organizationUnitId, "organizationUnitId", ct)
+            .ConfigureAwait(false);
+        await RequireActiveGeoAreaAsync(c, tx, geographicAreaId, "geographicAreaId", ct)
+            .ConfigureAwait(false);
+
         var affected = await c.ExecuteAsync(new CommandDefinition("""
             UPDATE federation.platform_users
-            SET display_name = @displayName, email = @email, status = @status, updated_at = now()
+            SET display_name = @displayName, email = @email, status = @status,
+                organization_unit_id = @organizationUnitId, geographic_area_id = @geographicAreaId,
+                designation = @designation, updated_at = now()
             WHERE id = @id;
-            """, new { id, displayName, email, status }, work.Transaction, cancellationToken: ct));
+            """, new
+        {
+            id, displayName, email, status, organizationUnitId, geographicAreaId, designation,
+        }, tx, cancellationToken: ct));
         return affected > 0;
     }
 

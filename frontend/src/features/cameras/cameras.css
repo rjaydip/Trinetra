@@ -3,11 +3,35 @@
 .registry-page__header, .registry-page__actions { display: flex; align-items: start; justify-content: space-between; gap: .75rem; }
 .registry-page__actions { flex-wrap: wrap; justify-content: end; }
 .registry-page__actions .button { display: inline-flex; align-items: center; text-decoration: none; }
-.camera-form { display: grid; gap: 1rem; }
-.camera-form fieldset, .import-preview, .import-result { display: grid; gap: .75rem; margin: 0; padding: 1rem; border: 1px solid var(--color-border); border-radius: .75rem; background: var(--color-surface); }
-.camera-form legend, .import-preview legend { padding-inline: .25rem; font-weight: 700; }
-.camera-form label, .file-input { display: grid; gap: .375rem; font-size: .875rem; font-weight: 600; }
-.camera-form input, .camera-form select, .file-input input { min-height: 2.75rem; padding: .5rem .625rem; border: 1px solid var(--color-border); border-radius: .375rem; color: var(--color-text); background: var(--color-surface); font: inherit; }
+.camera-form, .reconcile-form { display: grid; gap: 1rem; }
+.camera-form fieldset, .import-preview, .import-result { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: .75rem 1.25rem; margin: 0; padding: 1rem; border: 1px solid var(--color-border); border-radius: .75rem; background: var(--color-surface); }
+.reconcile-form { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+/* Side-by-side fields, two per row, instead of one full-width field per row — the previous
+ * single-column layout meant a short field like "Port" or "Latitude" took the same full page
+ * width as a long one, so a form with a dozen fields ran to several page-heights of near-empty
+ * rows. Anything that must span the full row regardless (a legend, help text, the map, an error
+ * message, the checkbox) is pulled back to `grid-column: 1 / -1` below. */
+.camera-form legend, .import-preview legend { grid-column: 1 / -1; padding-inline: .25rem; font-weight: 700; }
+.camera-form label, .reconcile-form label, .file-input { display: grid; gap: .375rem; font-size: .875rem; font-weight: 600; }
+.camera-form input, .camera-form select, .camera-form textarea, .reconcile-form input, .reconcile-form select, .file-input input { min-height: 2.75rem; padding: .5rem .625rem; border: 1px solid var(--color-border); border-radius: .375rem; color: var(--color-text); background: var(--color-surface); font: inherit; }
+.camera-form textarea { min-height: 8rem; grid-column: 1 / -1; resize: vertical; font-family: var(--font-mono, monospace); font-size: .8125rem; }
+.camera-form fieldset > .form-error,
+.camera-form fieldset > .location-picker,
+.camera-form fieldset > .connection-check,
+.camera-form fieldset > .selector-status,
+.camera-form fieldset > .credential-library-picker,
+.camera-form .checkbox-label,
+.reconcile-form > .form-error,
+.reconcile-form > .tree-select { grid-column: 1 / -1; }
+@media (max-width: 40rem) {
+  .camera-form fieldset, .reconcile-form { grid-template-columns: 1fr; }
+}
+/* Overrides the two rules above for the "Save camera events" checkbox specifically: as a grid
+ * label with a 2.75rem-min-height input, the checkbox rendered as a huge square stacked in its
+ * own row, disconnected from its own text. A checkbox reads inline with its label, not stacked
+ * above it, and needs no forced min-height. */
+.camera-form .checkbox-label { display: flex; align-items: center; gap: .5rem; font-weight: 400; }
+.camera-form .checkbox-label input { min-height: 0; width: 1.125rem; height: 1.125rem; padding: 0; }
 .field-help { grid-column: 1 / -1; margin: 0; color: var(--color-muted); font-size: .875rem; }
 .camera-form-steps { display: flex; gap: 1rem; margin: 0; padding: 0; list-style: none; font-size: .875rem; font-weight: 600; color: var(--color-muted); }
 .camera-form-steps li[aria-current="step"] { color: var(--color-primary); }
@@ -25,10 +49,15 @@
 .location-picker__azimuth-handle:active { cursor: grabbing; }
 .location-picker__azimuth-handle:active::before { background: var(--color-primary-hover); }
 .location-picker__azimuth-input { max-width: 16rem; }
+.boundary-map-picker { grid-column: 1 / -1; display: grid; gap: .625rem; }
+.boundary-map-picker__map { min-height: 22rem; overflow: hidden; border: 1px solid var(--color-border); border-radius: .625rem; background: var(--color-primary-tint-strong); cursor: crosshair; }
+.boundary-map-picker__controls { display: grid; gap: .5rem; }
+.boundary-map-picker__buttons { display: flex; gap: .625rem; }
 .import-preview > fieldset { display: flex; flex-wrap: wrap; gap: 1rem; border: 0; padding: 0; }
 .import-preview > fieldset label { display: flex; align-items: center; gap: .5rem; }
 .import-preview > fieldset input { width: 1.25rem; min-height: 1.25rem; }
 .import-preview__table { display: block; }
+.import-samples { display: flex; flex-wrap: wrap; gap: .75rem; margin-block: .75rem; }
 .camera-table a { color: var(--color-primary); font-weight: 700; }
 .camera-cards { display: grid; gap: .75rem; margin: 0; padding: 0; list-style: none; }
 .camera-card { display: grid; gap: .5rem; padding: 1rem; border: 1px solid var(--color-border); border-radius: .75rem; background: var(--color-surface); }
@@ -41,6 +70,12 @@
 .camera-card dd { margin: 0; }
 .registry-page .camera-table-wrap { display: none; }
 .camera-detail-page > header { padding-bottom: 1rem; border-bottom: 1px solid var(--color-border); }
+/* Without this, the "Edit camera" link — an inline <a>, not a block — sits directly after the
+ * <h1> in normal flow; its .button padding doesn't reserve line-box height the way a block
+ * element's would, so it visually overlaps the camera code/name text above it instead of sitting
+ * beside it. */
+.camera-detail-page__header { display: flex; flex-wrap: wrap; align-items: start; justify-content: space-between; gap: .75rem; }
+.camera-detail-page__header .button { display: inline-flex; align-items: center; text-decoration: none; }
 .maintenance-records { display: grid; gap: .75rem; margin: 0; padding: 0; list-style: none; }
 .maintenance-records li { padding-top: .75rem; border-top: 1px solid var(--color-border); }
 .maintenance-records li:first-child { padding-top: 0; border-top: 0; }

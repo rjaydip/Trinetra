@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Security.Claims;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
+using Trinetra.Federation.Core.Model;
 
 namespace Trinetra.Federation.Api.Auth;
 
@@ -33,6 +34,28 @@ public static class TrinetraClaims
 
     /// <summary>Set while the user must rotate a bootstrap or reset password.</summary>
     public const string MustChangePassword = "trinetra:pwchange";
+
+    /// <summary>
+    /// The single camera id a stream-session token (<see cref="JwtTokenService.IssueStreamSession"/>)
+    /// is scoped to. Present on stream-session tokens only.
+    /// </summary>
+    public const string CameraId = "trinetra:camera-id";
+
+    /// <summary>
+    /// Which source a stream-session token's proxy requests should be served from — one of
+    /// <c>Trinetra.Federation.Core.Model.CameraVocab.StreamPreferences</c> (v1.25), copied onto
+    /// the token at mint time so <c>StreamSessionEndpoints.ProxyAsync</c> doesn't need a database
+    /// round trip on every playlist/segment request just to learn it. Present on stream-session
+    /// tokens only.
+    /// </summary>
+    public const string StreamMode = "trinetra:stream-mode";
+
+    /// <summary>
+    /// Distinguishes a token's purpose so one kind can never be replayed where another is
+    /// expected. A stream-session token carries <c>"stream-session"</c> here; an ordinary access
+    /// token has no such claim at all.
+    /// </summary>
+    public const string Purpose = "trinetra:purpose";
 
     /// <summary>
     /// The <c>platform_users.token_version</c> the access token was minted against. Checked per
@@ -203,6 +226,117 @@ public sealed class JwtTokenService
         return (Handler.CreateToken(descriptor), expires);
     }
 
+    /// <summary>
+    /// The value <see cref="TrinetraClaims.Purpose"/> carries on a stream-session token.
+    /// </summary>
+    public const string StreamSessionPurpose = "stream-session";
+
+    /// <summary>
+    /// Distinct audience for stream-session tokens (<c>docs/STREAMING-GATEWAY-PLAN.md</c> G2/G4).
+    /// Deliberately different from <see cref="JwtOptions.Audience"/> so a stream-session token
+    /// fails the ordinary bearer-token validation used everywhere else on this API (which pins
+    /// <c>ValidAudience</c> to <see cref="JwtOptions.Audience"/>) — a leaked stream token cannot
+    /// be replayed as a general-purpose access token.
+    /// </summary>
+    public const string StreamSessionAudience = "trinetra-stream";
+
+    /// <summary>
+    /// Stream-session token lifetime. A few minutes: the token exists only to get the browser's
+    /// HLS player through the handful of playlist/segment requests one viewing needs; a leaked
+    /// token should stop being useful quickly.
+    /// </summary>
+    public static readonly TimeSpan StreamSessionLifetime = TimeSpan.FromMinutes(5);
+
+    /// <summary>
+    /// Mints a short-lived token scoped to exactly one camera — <c>GET
+    /// /api/v1/streams/{cameraId}/session</c> (G2). The claim set is minimal on purpose: a camera
+    /// id and an expiry, no user or role claims a client needs to read, and
+    /// <see cref="TrinetraClaims.Purpose"/> so it can never pass for an ordinary access token
+    /// even if the audience check were somehow bypassed downstream.
+    /// </summary>
+    public (string Token, DateTimeOffset ExpiresAt) IssueStreamSession(Guid cameraId, string streamMode)
+    {
+        var expires = DateTimeOffset.UtcNow.Add(StreamSessionLifetime);
+
+        var claims = new List<Claim>
+        {
+            new(TrinetraClaims.CameraId, cameraId.ToString()),
+            new(TrinetraClaims.Purpose, StreamSessionPurpose),
+            new(TrinetraClaims.StreamMode, streamMode),
+        };
+
+        var descriptor = new SecurityTokenDescriptor
+        {
+            Issuer = _options.Issuer,
+            Audience = StreamSessionAudience,
+            Subject = new ClaimsIdentity(claims),
+            NotBefore = DateTime.UtcNow,
+            Expires = expires.UtcDateTime,
+            SigningCredentials = _signing,
+        };
+
+        return (Handler.CreateToken(descriptor), expires);
+    }
+
+    /// <summary>
+    /// Validates a stream-session token — <c>GET /api/v1/streams/validate</c> (G4, the
+    /// nginx <c>auth_request</c> target). Checks signature, issuer, the distinct
+    /// <see cref="StreamSessionAudience"/>, lifetime and the purpose claim; does <b>not</b> touch
+    /// the database or re-run the camera scope check — that already happened once, at mint time
+    /// in <see cref="IssueStreamSession"/>, and the token's short lifetime is what stands in for
+    /// re-checking it. Returns the camera id on success.
+    /// </summary>
+    public async Task<StreamSessionClaims?> ValidateStreamSessionAsync(string token, CancellationToken ct)
+    {
+        var parameters = new TokenValidationParameters
+        {
+            ValidateIssuer = true,
+            ValidIssuer = _options.Issuer,
+            ValidateAudience = true,
+            ValidAudience = StreamSessionAudience,
+            ValidateIssuerSigningKey = true,
+            IssuerSigningKeys = _validationKeys,
+            ValidateLifetime = true,
+            ValidAlgorithms = [SecurityAlgorithms.HmacSha256],
+            ClockSkew = TimeSpan.Zero,
+        };
+
+        TokenValidationResult result;
+        try
+        {
+            result = await Handler.ValidateTokenAsync(token, parameters).WaitAsync(ct);
+        }
+        catch (SecurityTokenException)
+        {
+            return null;
+        }
+
+        if (!result.IsValid)
+        {
+            return null;
+        }
+
+        var purpose = result.ClaimsIdentity?.FindFirst(TrinetraClaims.Purpose)?.Value;
+        if (!string.Equals(purpose, StreamSessionPurpose, StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        var cameraIdClaim = result.ClaimsIdentity?.FindFirst(TrinetraClaims.CameraId)?.Value;
+        if (!Guid.TryParse(cameraIdClaim, out var cameraId))
+        {
+            return null;
+        }
+
+        // Absent on a token minted before v1.25 shipped this claim — RTSP (MediaMTX) was the
+        // only mode that ever existed then, so that is the correct default for an old token to
+        // fall back to, not a validation failure.
+        var mode = result.ClaimsIdentity?.FindFirst(TrinetraClaims.StreamMode)?.Value
+            ?? CameraVocab.StreamPreferenceRtsp;
+
+        return new StreamSessionClaims(cameraId, mode);
+    }
+
     // Thread-safe and stateless; allocating one per token issued is pure waste on a path that
     // runs on every login.
     private static readonly JsonWebTokenHandler Handler = new();
@@ -236,3 +370,7 @@ public sealed class JwtTokenService
         ClockSkew = TimeSpan.Zero,
     };
 }
+
+/// <summary>What a validated stream-session token authorizes: the one camera, and which source
+/// its proxy requests should be served from — <see cref="JwtTokenService.ValidateStreamSessionAsync"/>.</summary>
+public sealed record StreamSessionClaims(Guid CameraId, string Mode);

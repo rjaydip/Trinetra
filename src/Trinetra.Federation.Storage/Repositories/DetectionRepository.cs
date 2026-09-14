@@ -20,6 +20,21 @@ public sealed record DetectionEventRow
     public string? SnapshotReference { get; init; }
 }
 
+/// <summary>Outcome of adding an operator tag to a detection (v1.26).</summary>
+public enum DetectionTagOutcome
+{
+    /// <summary>The tag was attached.</summary>
+    Added,
+
+    /// <summary>This detection already carries this tag (case-insensitive) — a no-op, not an
+    /// error; a repeated "tag as reviewed" click should not surface a conflict to the operator.</summary>
+    AlreadyTagged,
+
+    /// <summary>No such detection, or it exists but is outside the caller's org+geo scope — the
+    /// two are indistinguishable on purpose (CLAUDE.md: an out-of-scope record is 404, not 403).</summary>
+    DetectionNotFound,
+}
+
 /// <summary>Outcome of a detection ingest attempt (finding 15-L1).</summary>
 public enum DetectionIngestOutcome
 {
@@ -302,26 +317,131 @@ public sealed class DetectionRepository
         return [.. rows];
     }
 
-    /// <summary>The organization units this caller may read detections for.</summary>
+    /// <summary>
+    /// Attaches a free-form operator tag to a detection — RFP "event tagging," distinct from and
+    /// additive to <c>event_type</c>'s closed machine classification (see v1.26's own doc
+    /// comment). Confirms the detection exists and is in the caller's org+geo scope by reading
+    /// <c>detection_event</c> directly (no FK is possible across the partition boundary — same
+    /// migration's note), then denormalises that scope onto the new tag row so a later list/
+    /// delete never needs to re-join detection_event.
+    /// </summary>
+    public async Task<DetectionTagOutcome> AddTagAsync(
+        string eventId, DateTimeOffset occurredAt, string tag,
+        CallerContext caller, UnitOfWork work, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(caller);
+        ArgumentNullException.ThrowIfNull(work);
+        caller.Require("observation.write");
+
+        var unscopedOrg = caller.IsUnscopedFor("observation.write");
+        var unscopedGeo = caller.IsUnscopedForGeography("observation.write");
+
+        Guid[] units = unscopedOrg ? [] : await AuthorizedOrgUnitsAsync(work.Connection, caller, ct, "observation.write");
+        Guid[] areas = unscopedGeo ? [] : await AuthorizedAreasAsync(work.Connection, caller, ct, "observation.write");
+
+        var detection = await work.Connection.QuerySingleOrDefaultAsync<DetectionScopeRow>(
+            new CommandDefinition("""
+                SELECT organization_unit_id AS OrganizationUnitId, geographic_area_id AS GeographicAreaId
+                FROM federation.detection_event
+                WHERE event_id = @EventId AND occurred_at = @OccurredAt
+                  AND (@UnscopedOrg OR organization_unit_id = ANY (@Units))
+                  AND (@UnscopedGeo OR geographic_area_id IS NULL OR geographic_area_id = ANY (@Areas));
+                """, new { EventId = eventId, OccurredAt = occurredAt, UnscopedOrg = unscopedOrg, UnscopedGeo = unscopedGeo, Units = units, Areas = areas },
+                work.Transaction, cancellationToken: ct));
+
+        if (detection is null)
+        {
+            return DetectionTagOutcome.DetectionNotFound;
+        }
+
+        var insertedId = await work.Connection.ExecuteScalarAsync<Guid?>(new CommandDefinition("""
+            INSERT INTO federation.detection_tag
+                (detection_event_id, detection_occurred_at, tag, organization_unit_id,
+                 geographic_area_id, created_by)
+            VALUES (@EventId, @OccurredAt, @Tag, @OrganizationUnitId, @GeographicAreaId, @CreatedBy)
+            ON CONFLICT (detection_event_id, lower(tag)) DO NOTHING
+            RETURNING id;
+            """, new
+        {
+            EventId = eventId, OccurredAt = occurredAt, Tag = tag,
+            detection.OrganizationUnitId, detection.GeographicAreaId,
+            CreatedBy = caller.UserId,
+        }, work.Transaction, cancellationToken: ct));
+
+        return insertedId is null ? DetectionTagOutcome.AlreadyTagged : DetectionTagOutcome.Added;
+    }
+
+    /// <summary>Removes one tag from a detection. A caller only sees/affects tags on detections
+    /// within their own org+geo scope — enforced directly against the tag row's own denormalised
+    /// scope columns, not by re-reading detection_event.</summary>
+    public async Task<bool> RemoveTagAsync(
+        string eventId, string tag, CallerContext caller, UnitOfWork work, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(caller);
+        ArgumentNullException.ThrowIfNull(work);
+        caller.Require("observation.write");
+
+        var unscopedOrg = caller.IsUnscopedFor("observation.write");
+        var unscopedGeo = caller.IsUnscopedForGeography("observation.write");
+        Guid[] units = unscopedOrg ? [] : await AuthorizedOrgUnitsAsync(work.Connection, caller, ct, "observation.write");
+        Guid[] areas = unscopedGeo ? [] : await AuthorizedAreasAsync(work.Connection, caller, ct, "observation.write");
+
+        var deletedId = await work.Connection.ExecuteScalarAsync<Guid?>(new CommandDefinition("""
+            DELETE FROM federation.detection_tag
+            WHERE detection_event_id = @EventId AND lower(tag) = lower(@Tag)
+              AND (@UnscopedOrg OR organization_unit_id = ANY (@Units))
+              AND (@UnscopedGeo OR geographic_area_id IS NULL OR geographic_area_id = ANY (@Areas))
+            RETURNING id;
+            """, new { EventId = eventId, Tag = tag, UnscopedOrg = unscopedOrg, UnscopedGeo = unscopedGeo, Units = units, Areas = areas },
+            work.Transaction, cancellationToken: ct));
+
+        return deletedId is not null;
+    }
+
+    /// <summary>Tags for a set of detections the caller has already legitimately fetched (e.g.
+    /// via <see cref="SearchAsync"/>, which already applied the org+geo scope check) — grouped by
+    /// <c>event_id</c> for the caller to fold into each detection's own response. Not itself
+    /// scope-checked: the event ids passed in are assumed already scoped by the caller of this
+    /// method, the same "don't re-check what the caller already checked" reasoning
+    /// <c>StreamSessionEndpoints</c> documents for its own unscoped lookup.</summary>
+    public async Task<ILookup<string, string>> GetTagsForEventsAsync(
+        IReadOnlyCollection<string> eventIds, CancellationToken ct)
+    {
+        if (eventIds.Count == 0) return Array.Empty<(string, string)>().ToLookup(x => x.Item1, x => x.Item2);
+
+        await using var c = await _dataSource.OpenConnectionAsync(ct);
+        var rows = await c.QueryAsync<(string EventId, string Tag)>(new CommandDefinition("""
+            SELECT detection_event_id AS EventId, tag AS Tag
+            FROM federation.detection_tag
+            WHERE detection_event_id = ANY (@EventIds)
+            ORDER BY tag;
+            """, new { EventIds = eventIds.ToArray() }, cancellationToken: ct));
+
+        return rows.ToLookup(r => r.EventId, r => r.Tag);
+    }
+
+    /// <summary>The organization units this caller may reach for <paramref name="permission"/>
+    /// (<c>observation.read</c> for search, <c>observation.write</c> for tagging).</summary>
     private static async Task<Guid[]> AuthorizedOrgUnitsAsync(
-        NpgsqlConnection c, CallerContext caller, CancellationToken ct)
+        NpgsqlConnection c, CallerContext caller, CancellationToken ct, string permission = "observation.read")
     {
         var rows = await c.QueryAsync<Guid>(new CommandDefinition("""
             SELECT organization_unit_id FROM federation.authorized_org_units(
-                p_user_id => @UserId, p_api_key_id => @ApiKeyId, p_permission => 'observation.read');
-            """, new { caller.UserId, caller.ApiKeyId }, cancellationToken: ct));
+                p_user_id => @UserId, p_api_key_id => @ApiKeyId, p_permission => @Permission);
+            """, new { caller.UserId, caller.ApiKeyId, Permission = permission }, cancellationToken: ct));
 
         return [.. rows];
     }
 
-    /// <summary>The geographic areas this caller may read detections for.</summary>
+    /// <summary>The geographic areas this caller may reach for <paramref name="permission"/>
+    /// (<c>observation.read</c> for search, <c>observation.write</c> for tagging).</summary>
     private static async Task<Guid[]> AuthorizedAreasAsync(
-        NpgsqlConnection c, CallerContext caller, CancellationToken ct)
+        NpgsqlConnection c, CallerContext caller, CancellationToken ct, string permission = "observation.read")
     {
         var rows = await c.QueryAsync<Guid>(new CommandDefinition("""
             SELECT geographic_area_id FROM federation.authorized_geographic_areas(
-                p_user_id => @UserId, p_api_key_id => @ApiKeyId, p_permission => 'observation.read');
-            """, new { caller.UserId, caller.ApiKeyId }, cancellationToken: ct));
+                p_user_id => @UserId, p_api_key_id => @ApiKeyId, p_permission => @Permission);
+            """, new { caller.UserId, caller.ApiKeyId, Permission = permission }, cancellationToken: ct));
 
         return [.. rows];
     }
@@ -329,6 +449,12 @@ public sealed class DetectionRepository
     private sealed record CameraLookupRow
     {
         public Guid? CameraId { get; init; }
+        public Guid OrganizationUnitId { get; init; }
+        public Guid? GeographicAreaId { get; init; }
+    }
+
+    private sealed record DetectionScopeRow
+    {
         public Guid OrganizationUnitId { get; init; }
         public Guid? GeographicAreaId { get; init; }
     }

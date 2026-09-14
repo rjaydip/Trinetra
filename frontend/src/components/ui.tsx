@@ -1,4 +1,5 @@
-import { useState, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode } from 'react';
+import { useEffect, useState, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 
 export function Button({ children, ...props }: ButtonHTMLAttributes<HTMLButtonElement>) {
   return <button className="button" {...props}>{children}</button>;
@@ -39,6 +40,36 @@ export function PasswordInput({ id, ...props }: InputHTMLAttributes<HTMLInputEle
         {visible ? 'Hide' : 'Show'}
       </button>
     </div>
+  );
+}
+
+/** A small centered overlay dialog. Closes on Escape or an overlay click; `onClose` is the only
+ * way out otherwise, since a form inside decides for itself when it's done (submit, or its own
+ * Cancel button) rather than the modal guessing.
+ *
+ * Rendered through a portal into `document.body`, not inline where it's invoked — a caller that
+ * opens this from inside its own `<form>` (e.g. the "Add credential" picker inside the camera
+ * form) would otherwise put this modal's `<form>` in the DOM as a *nested* form, which HTML
+ * doesn't allow. A nested form's submit button can end up triggering the outer form's native
+ * submission instead of the inner one's React `onSubmit` — a full, un-prevented page reload
+ * instead of the save actually running. Portalling to `document.body` keeps the two forms as
+ * unrelated siblings in the DOM regardless of where the modal is opened from. */
+export function Modal({ titleId, children, onClose }: { titleId: string; children: ReactNode; onClose(): void }) {
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') onClose();
+    }
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [onClose]);
+
+  return createPortal(
+    <div className="modal-overlay" onClick={onClose}>
+      <div aria-labelledby={titleId} aria-modal="true" className="modal" role="dialog" onClick={(event) => event.stopPropagation()}>
+        {children}
+      </div>
+    </div>,
+    document.body,
   );
 }
 

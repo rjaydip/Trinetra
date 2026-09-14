@@ -17,9 +17,12 @@ PostGIS); `Federation.Storage` `CameraRepository`, `GisQueryRepository`, `Camera
 `CameraMaintenanceRepository`, `ReconciliationRepository`, shared `CameraScope`; `Federation.Api`
 `CameraEndpoints` / `CameraHealthEndpoints` / `CameraReconciliationEndpoints` / `GisEndpoints`
 (`/api/v1/cameras/*` CRUD + list + bulk-import + health + maintenance + reconcile,
-`/api/v1/gis/*` map source + per-camera coverage + aggregate; `GET /gis/gaps` is a documented
-501). Not yet done: DB-backed integration tests, and real coverage-gap analysis (needs PostGIS —
-deferred). Camera access is scoped on organization **and** geography, ANDed, via
+`/api/v1/gis/*` map source + per-camera coverage + aggregate + gaps). `GET /gis/gaps` is now
+real (`v1.19` — see the PostGIS status paragraph above): it differences the C#-computed coverage
+sectors against `geographic_areas.boundary` and 404s with "no boundary set" when the target area
+has none. Boundary data itself loads through the admin-only
+`POST /api/v1/geographic-areas/bulk-import-boundaries`. Not yet done: DB-backed integration
+tests. Camera access is scoped on organization **and** geography, ANDed, via
 `CallerContext.IsUnscopedFor` / `IsUnscopedForGeography`.
 
 **Sites removed (`v1.11`).** There is no `sites` table. A camera, VMS target and event attach
@@ -97,7 +100,37 @@ shown at the top of the Scalar page (no secret/credential/account; `SystemInfoRe
 parses the connection string in Storage). **No new endpoint, permission or schema version** —
 an earlier draft's `GET /api/v1/system/info` + `system.read` in a v1.14 were both dropped.
 
-Stack: **.NET 10 / ASP.NET Core minimal API**, PostgreSQL (no extensions — see below), Kafka,
+**Cross-system correlation engine (`v1.18`).** Model 3's `ICorrelationEngine` port
+(`docs/ARCHITECTURE-MODEL-3.md` §8) is now implemented day-one as `SqlCorrelationEngine`
+(`Federation.Storage`) — windowed SQL over `federation_event`, not Kafka: `Federation.Bus` is
+still an empty project and nothing publishes to it yet. A new `CorrelationRunner`
+`BackgroundService` inside `Trinetra.Federation.Worker` polls on a `PeriodicTimer` with a settle
+delay and an overlapping window, matching events by a seeded `correlation_rule` (time window +
+plain-trig haversine spatial radius + confidence floor + distinct-camera signal agreement — no
+PostGIS involved here) and upserting into `correlation_group` / `correlation_group_member`,
+idempotent on `(rule_id, natural_key, window_bucket)` so an overlapping re-run is a no-op.
+`GET /api/v1/correlation/groups` and `GET /api/v1/correlation/groups/{id}` (new
+`correlation.read` permission, granted like `worker.read`) are read-only — there is no rule-edit
+API in this pass, rules are system-seeded rows only. Every confidence value is documented as a
+"possible match," never certainty, per the production-posture section below.
+
+**Boundary polygons + PostGIS (`v1.19`).** The "no PostgreSQL extensions" invariant below is
+deliberately reversed, by explicit project-owner decision: `db/versions/v1.19.sql` adds
+`CREATE EXTENSION IF NOT EXISTS postgis;` and a nullable `geographic_areas.boundary
+geometry(Polygon, 4326)` (GiST-indexed) for real surveyed administrative boundaries. Coverage
+sectors (v1.6) are unaffected and stay pure C# in `Federation.Core` — `GET
+/cameras/{id}/coverage` and `GET /gis/coverage` compute and render exactly as before, with zero
+PostGIS involvement. PostGIS is used only by the new `GET /gis/gaps` (was a documented 501):
+`GisQueryRepository` converts the already-computed C# sector rings to WKT, `ST_Union`s them, and
+`ST_Difference`s against the area's `boundary`; a target area with no `boundary` set returns 404
+rather than guessing coverage either way. The write path is an admin-only bulk import,
+`POST /api/v1/geographic-areas/bulk-import-boundaries` (`geography.manage`, same synchronous
+per-row-savepoint shape as `POST /cameras/bulk-import`) — never a per-area form field. See
+`docs/DEPLOYMENT.md` §2 for the one-time PostGIS package + `CREATE EXTENSION` operator step this
+adds to the database host.
+
+Stack: **.NET 10 / ASP.NET Core minimal API**, PostgreSQL (extensions limited to PostGIS, added
+in `v1.19` for `geographic_areas.boundary` only — see above), Kafka,
 OpenSearch, deployed on **on-prem bare metal** with systemd — no Kubernetes (a root `Dockerfile`
 builds the API as an equivalent container target). Scale target is **80,000
 cameras in production**, validated against a simulator; first-phase rollout is 100+ cameras.
@@ -150,12 +183,15 @@ fails at request time, so deployment ordering is operational discipline, not som
 **A version file is never edited once applied anywhere.** Installs that ran the old text would
 silently differ from those that ran the new one. Corrections go in the next version.
 
-**No PostgreSQL extensions.** Coordinates are plain `DECIMAL(10,7)` with range CHECKs, and
-`gen_random_uuid()` is core from PostgreSQL 13. PostGIS and pgcrypto were both verified
-unnecessary and removed. Model 1's coverage sectors (`v1.6`) are computed in the application
-over plain lat/long; PostGIS is reserved for the later coverage-gap-analysis slice and is not
-installed today. Credential sealing is application-side AES-256-GCM so the database never holds
-the key.
+**PostgreSQL extensions are limited to PostGIS, added in `v1.19`.** Camera coordinates stay plain
+`DECIMAL(10,7)` with range CHECKs, and `gen_random_uuid()` is core from PostgreSQL 13 — neither
+needed an extension and neither uses one. `pgcrypto` was verified unnecessary and stays out.
+PostGIS was reserved rather than installed through `v1.18`; `v1.19` brings it in for exactly one
+column, `geographic_areas.boundary`, because coverage-gap analysis needs a real polygon to
+difference against and there is no meaningful way to do that over plain lat/long. Model 1's
+coverage sectors (`v1.6`) are unaffected — still computed in the application, still no PostGIS
+involved in producing or rendering them. Credential sealing is application-side AES-256-GCM so
+the database never holds the key.
 
 ## The Three Models
 
@@ -186,10 +222,10 @@ The whole design is organised around three subsystems that share one metadata/ev
 These constraints run across all three specs and should survive any implementation decision:
 
 - **Adapters are the only place vendor-specific code lives.** Core services, dashboard, and analytics must never branch on VMS vendor. Adapters implement the contract in `MODEL-3` (`get_cameras`, `get_streams`, `get_events`, `subscribe_events`, …) plus **capability discovery**, because no VMS supports every capability.
-- **The event bus is the seam.** Adapters and analytics publish into a common event schema; correlation, search, alerting, and GIS are all subscribers. New consumers must not require producer changes.
+- **The event bus is the seam.** Adapters and analytics publish into a common event schema; correlation, search, alerting, and GIS are all subscribers. New consumers must not require producer changes. Day-one, this "bus" is `federation_event` in PostgreSQL, not Kafka — `Federation.Bus` has no source files yet and `SqlCorrelationEngine` (`v1.18`) polls the table directly, per `ARCHITECTURE-MODEL-3.md` §8's explicit day-one/day-two split. Moving to real Kafka later must not change what a consumer sees.
 - **Video is the source; metadata is the product.** Search, correlation, and GIS operate on observation/event records, not on video. Video and snapshots are referenced (`stream_reference`, `snapshot_reference`, `video_reference`), never inlined.
 - **Credentials are references, not fields.** `credential_reference` points at a secret-management system; camera/adapter credentials never live in registry metadata or the event schema.
-- **Coverage is estimated, not measured.** Coverage sectors are derived from `azimuth` + `horizontal_fov` + `effective_range` — today computed in the application (`Federation.Core` `CoverageSector`), PostGIS later for gap analysis. Present them as a planning aid — terrain and obstructions are not modelled.
+- **Coverage is estimated, not measured.** Coverage sectors are derived from `azimuth` + `horizontal_fov` + `effective_range`, computed in the application (`Federation.Core` `CoverageSector`) — PostGIS (`v1.19`) only differences those already-computed sectors against a surveyed `geographic_areas.boundary` for gap analysis; it never computes the sector itself. Present sectors as a planning aid — terrain and obstructions are not modelled.
 - **Cross-camera identity is probabilistic.** A tracker ID is valid only within one camera. Cross-camera association (Re-ID, face similarity, ANPR chains) must carry a confidence score and must never be surfaced as certainty.
 - **Every sensitive operation is RBAC-gated, department-scoped where applicable, and audit-logged.**
 

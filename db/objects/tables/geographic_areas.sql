@@ -10,6 +10,11 @@ CREATE TABLE federation.geographic_areas (
     description text,
     status character varying(20) DEFAULT 'ACTIVE'::character varying NOT NULL,
     metadata jsonb DEFAULT '{}'::jsonb NOT NULL,
+    -- v1.19: surveyed boundary polygon (PostGIS). Nullable — most areas have no surveyed
+    -- boundary on day one; only GET /gis/gaps requires it, and reports "no boundary set" rather
+    -- than guessing when it is absent. Written only through
+    -- POST /api/v1/geographic-areas/bulk-import-boundaries, never a per-area form field.
+    boundary geometry(Polygon, 4326),
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT geographic_areas_status_check CHECK (((status)::text = ANY ((ARRAY['ACTIVE'::character varying, 'INACTIVE'::character varying])::text[])))
@@ -40,6 +45,12 @@ CREATE INDEX ix_geo_area_parent ON federation.geographic_areas USING btree (pare
 --
 
 CREATE INDEX ix_geo_area_type ON federation.geographic_areas USING btree (area_type);
+
+--
+-- Name: ix_geographic_areas_boundary; Type: INDEX; Schema: federation; Owner: -
+--
+
+CREATE INDEX ix_geographic_areas_boundary ON federation.geographic_areas USING gist (boundary);
 
 --
 -- Name: geographic_areas trg_geo_area_acyclic; Type: TRIGGER; Schema: federation; Owner: -

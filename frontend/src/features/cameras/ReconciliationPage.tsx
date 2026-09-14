@@ -179,7 +179,7 @@ function CreateFromFederatedForm({ row, onSuccess }: { row: UnreconciledCameraRe
   }
 
   return <div className="reconcile-form">
-    <label>Camera code<span aria-hidden="true"> *</span>
+    <label><span>Camera code<span aria-hidden="true"> *</span></span>
       <input aria-required="true" value={values.cameraCode} onChange={(event) => update('cameraCode', event.target.value)} />
     </label><FieldError id={`${rowKey(row)}-cameraCode-error`} message={errors.cameraCode} />
     <label>Name<input value={values.name} onChange={(event) => update('name', event.target.value)} /></label>
@@ -211,16 +211,16 @@ function CreateFromFederatedForm({ row, onSuccess }: { row: UnreconciledCameraRe
       emptyMessage="No geographic areas are available."
     />
     <FieldError id={`${rowKey(row)}-geographicAreaId-error`} message={errors.geographicAreaId} />
-    <label>Camera type<span aria-hidden="true"> *</span>
+    <label><span>Camera type<span aria-hidden="true"> *</span></span>
       <select aria-required="true" value={values.cameraType} onChange={(event) => update('cameraType', event.target.value)}>
         <option value="">Select a camera type</option>
         {cameraTypes.map((type) => <option key={type} value={type}>{type}</option>)}
       </select>
     </label><FieldError id={`${rowKey(row)}-cameraType-error`} message={errors.cameraType} />
-    <label>Latitude<span aria-hidden="true"> *</span>
+    <label><span>Latitude<span aria-hidden="true"> *</span></span>
       <input aria-required="true" inputMode="decimal" value={values.latitude} onChange={(event) => update('latitude', event.target.value)} />
     </label><FieldError id={`${rowKey(row)}-latitude-error`} message={errors.latitude} />
-    <label>Longitude<span aria-hidden="true"> *</span>
+    <label><span>Longitude<span aria-hidden="true"> *</span></span>
       <input aria-required="true" inputMode="decimal" value={values.longitude} onChange={(event) => update('longitude', event.target.value)} />
     </label><FieldError id={`${rowKey(row)}-longitude-error`} message={errors.longitude} />
     <label>Azimuth<input inputMode="decimal" value={values.azimuth} onChange={(event) => update('azimuth', event.target.value)} /></label>

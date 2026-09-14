@@ -4,21 +4,29 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { AuthProvider } from '../../auth/AuthProvider';
+import { sessionFixture } from '../../test/fixtures';
 import { DetectionsPage } from './DetectionsPage';
 
 const detection = {
   id: 'evt-1', cameraId: '11111111-1111-4111-8111-111111111111:CAM-07', registeredCameraId: null,
   eventType: 'ANPR_DETECTED', timestamp: '2026-09-12T10:00:00Z', confidence: 0.92,
-  vehicleType: 'CAR', plateNumber: 'MH12AB1234', snapshotReference: null,
+  vehicleType: 'CAR', plateNumber: 'MH12AB1234', snapshotReference: null, tags: [],
 };
 
+function signIn() {
+  sessionStorage.setItem('trinetra.auth.session', JSON.stringify(sessionFixture('operator', ['observation.read', 'observation.write'])));
+}
+
 function renderPage() {
+  signIn();
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(<QueryClientProvider client={queryClient}><DetectionsPage /></QueryClientProvider>);
+  return render(<QueryClientProvider client={queryClient}><AuthProvider><DetectionsPage /></AuthProvider></QueryClientProvider>);
 }
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  sessionStorage.clear();
 });
 
 describe('DetectionsPage', () => {

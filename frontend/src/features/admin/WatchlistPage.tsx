@@ -30,7 +30,14 @@ function EntriesSection({ canManage }: { canManage: boolean }) {
 
   const create = useMutation({
     mutationFn: (body: CreateWatchlistEntryRequest) => api.admin.watchlist.create(body),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.watchlist.allEntries }),
+    onSuccess: () => {
+      // Adding a plate backfills alerts for any prior sighting already on record, in the same
+      // transaction as creating the entry — the alerts list needs invalidating too, not just
+      // the entries list, or a newly-backfilled alert stays invisible until something else
+      // happens to refetch it.
+      queryClient.invalidateQueries({ queryKey: queryKeys.watchlist.allEntries });
+      queryClient.invalidateQueries({ queryKey: queryKeys.watchlist.allAlerts });
+    },
   });
 
   const deactivate = useMutation({
@@ -79,6 +86,15 @@ function EntriesSection({ canManage }: { canManage: boolean }) {
       </select></label>
       <label>Reason<textarea name="reason" /></label>
       {create.isError && <p className="form-error" role="alert">{errorDetail(create.error, 'The watchlist entry could not be created.')}</p>}
+      {create.isSuccess && (
+        create.data.historicalAlertsRaised > 0
+          ? <p role="status">
+            This plate was already seen {create.data.historicalAlertsRaised}
+            {create.data.historicalMatchesCapped ? '+' : ''} time{create.data.historicalAlertsRaised === 1 ? '' : 's'} before —
+            {' '}alert{create.data.historicalAlertsRaised === 1 ? '' : 's'} raised for {create.data.historicalMatchesCapped ? 'the most recent 1000 sightings' : 'each sighting'}.
+          </p>
+          : <p role="status">Added — no prior sightings of this plate on record.</p>
+      )}
       <Button disabled={create.isPending} type="submit">Add entry</Button>
     </form>}
   </section>;

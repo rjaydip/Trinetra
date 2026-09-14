@@ -23,6 +23,9 @@ function CameraIcon() {
 function VmsIcon() {
   return <Icon><rect x="3" y="4.5" width="18" height="6" rx="1.5" /><rect x="3" y="13.5" width="18" height="6" rx="1.5" /><path d="M7 7.5h.01M7 16.5h.01" /></Icon>;
 }
+function VideoWallIcon() {
+  return <Icon><rect x="3" y="4" width="8" height="8" rx="1.25" /><rect x="13" y="4" width="8" height="8" rx="1.25" /><rect x="3" y="14" width="8" height="6" rx="1.25" /><rect x="13" y="14" width="8" height="6" rx="1.25" /></Icon>;
+}
 function ReportsIcon() {
   return <Icon><path d="M4 20V11M12 20V4M20 20v-6" /></Icon>;
 }
@@ -32,8 +35,14 @@ function DetectionsIcon() {
 function EventsIcon() {
   return <Icon><path d="M18 8a6 6 0 1 0-12 0c0 5-2 6-2 6h16s-2-1-2-6" /><path d="M13.7 20a2 2 0 0 1-3.4 0" /></Icon>;
 }
+function CorrelationIcon() {
+  return <Icon><circle cx="6" cy="6.5" r="2.5" /><circle cx="18" cy="6.5" r="2.5" /><circle cx="12" cy="17.5" r="2.5" /><path d="m8 8 3 7.5M16 8l-3 7.5" /></Icon>;
+}
 function AdminIcon() {
   return <Icon><path d="M12 3 5 6v5c0 4.5 3 7.5 7 9 4-1.5 7-4.5 7-9V6z" /></Icon>;
+}
+function CredentialsIcon() {
+  return <Icon><circle cx="8" cy="15.5" r="3.5" /><path d="m10.5 13 8-8M15 5.5l2.5 2.5M18 8.5 20 6.5" /></Icon>;
 }
 
 interface NavItem {
@@ -46,10 +55,13 @@ interface NavItem {
 const primaryNavigation: NavItem[] = [
   { to: '/dashboard', label: 'Dashboard', icon: <DashboardIcon /> },
   { to: '/cameras', label: 'Camera registry', icon: <CameraIcon /> },
+  { to: '/video-wall', label: 'Video wall', icon: <VideoWallIcon /> },
   { to: '/vms', label: 'VMS integrations', icon: <VmsIcon />, permission: 'vms.read' },
+  { to: '/credentials', label: 'Credentials', icon: <CredentialsIcon />, permission: 'camera.read' },
   { to: '/reports', label: 'Reports', icon: <ReportsIcon /> },
   { to: '/detections', label: 'Detections', icon: <DetectionsIcon />, permission: 'observation.read' },
   { to: '/events', label: 'Events', icon: <EventsIcon />, permission: 'event.read' },
+  { to: '/correlation', label: 'Correlation', icon: <CorrelationIcon />, permission: 'correlation.read' },
 ];
 
 export function AppSidebar({ className = '', onNavigate }: { className?: string; onNavigate?(): void }) {

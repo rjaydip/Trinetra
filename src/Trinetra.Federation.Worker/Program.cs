@@ -6,6 +6,7 @@ using Trinetra.Federation.Core.Abstractions;
 using Trinetra.Federation.Runtime;
 using Trinetra.Federation.Storage;
 using Trinetra.Federation.Storage.Secrets;
+using Trinetra.Federation.Worker;
 
 // Connector worker host.
 //
@@ -90,6 +91,15 @@ builder.Services.AddFederationAdapters();
 builder.Services.AddSingleton<LeaseManager>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<LeaseManager>());
 builder.Services.AddHostedService<ConnectorSupervisor>();
+
+// Day-one correlation: windowed SQL polling over federation_event, behind the ICorrelationEngine
+// port. See ARCHITECTURE-MODEL-3.md §8 -- NOT a Kafka consumer, Trinetra.Federation.Bus is
+// untouched.
+builder.Services.AddOptions<CorrelationRunnerOptions>()
+    .Bind(builder.Configuration.GetSection(CorrelationRunnerOptions.SectionName))
+    .ValidateOnStart();
+builder.Services.AddSingleton<ICorrelationEngine, SqlCorrelationEngine>();
+builder.Services.AddHostedService<CorrelationRunner>();
 
 var host = builder.Build();
 

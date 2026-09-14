@@ -1,4 +1,6 @@
 using System.Globalization;
+using System.Text;
+using System.Text.Json;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Trinetra.Federation.Api.Auth;
 using Trinetra.Federation.Api.Contracts;
@@ -19,8 +21,11 @@ namespace Trinetra.Federation.Api.Endpoints;
 /// disclaimer.
 /// </para>
 /// <para>
-/// Nothing here is stored as geometry and nothing needs PostGIS. Coverage-gap analysis does —
-/// <c>GET /gis/gaps</c> returns 501 until the version that introduces it.
+/// Coverage sectors themselves are never stored as geometry and never touch PostGIS — that stays
+/// true for the feed, single-camera coverage and aggregate routes below, unchanged. Only
+/// <c>GET /gis/gaps</c> (<c>v1.19</c>) uses PostGIS, and only to difference the already-computed
+/// sector polygons against a surveyed <c>geographic_areas.boundary</c>; it 404s with "no boundary
+/// set" rather than guessing when the target area has none.
 /// </para>
 /// </remarks>
 public static class GisEndpoints
@@ -78,10 +83,18 @@ public static class GisEndpoints
 
         app.MapGet("/api/v1/gis/gaps", GapsAsync)
            .RequireAuthorization().WithTags(ApiTags.Gis).RequirePermission("gis.coverage.read")
-           .WithSummary("Coverage-gap layer — not available yet")
+           .WithSummary("Coverage-gap layer for one geographic area")
            .WithDescription(
-               "Planned for the release that introduces PostGIS and administrative boundary "
-               + "polygons. Returns 501 until then; the route exists so the contract is stable.");
+               "The part of `geographicAreaId`'s surveyed boundary that no in-scope camera's "
+               + "estimated coverage sector reaches. Sector math is unchanged — computed in C# "
+               + "exactly as `/cameras/{id}/coverage` does it; PostGIS is used only to union those "
+               + "sectors and difference them against the area's boundary. `404` when the area "
+               + "itself is absent or out of scope, and a distinct `404` (\"no boundary set for "
+               + "this area\") when the area has no surveyed boundary on file — coverage is never "
+               + "reported as fully covered or fully uncovered when the boundary is simply "
+               + "unknown. Load boundary data first with "
+               + "`POST /api/v1/geographic-areas/bulk-import-boundaries`. The response carries "
+               + "the same estimate disclaimer as every other coverage route.");
     }
 
     // -------------------------------------------------------------------
@@ -224,12 +237,104 @@ public static class GisEndpoints
         return TypedResults.Ok(new CoverageSummaryResponse(buckets));
     }
 
-    private static Results<Ok, ProblemHttpResult> GapsAsync() =>
-        TypedResults.Problem(
-            title: "Coverage-gap analysis is not available yet",
-            detail: "Planned for the release that introduces spatial querying and administrative "
-                  + "boundary polygons.",
-            statusCode: StatusCodes.Status501NotImplemented);
+    private static async Task<Results<JsonHttpResult<GeoJsonFeature>, NotFound, ProblemHttpResult>> GapsAsync(
+        Guid? geographicAreaId, GisQueryRepository gis, HttpContext http, CancellationToken ct)
+    {
+        var caller = CallerContextFactory.From(http);
+
+        if (geographicAreaId is null)
+        {
+            return Problem("geographicAreaId is required", "Supply the area to analyze.");
+        }
+
+        var status = await gis.GetAreaBoundaryStatusAsync(geographicAreaId.Value, caller, ct);
+        if (status == AreaBoundaryStatus.NotFound)
+        {
+            return TypedResults.NotFound();
+        }
+
+        if (status == AreaBoundaryStatus.NoBoundary)
+        {
+            // Never guess: an area with no surveyed boundary is neither "fully covered" nor
+            // "fully uncovered" — it is unknown, and unknown must never be presented as a fact
+            // (CLAUDE.md production posture).
+            return TypedResults.Problem(
+                title: "No boundary set for this area",
+                detail: "This geographic area has no surveyed boundary polygon on file, so "
+                      + "coverage cannot be measured against it. Load one with "
+                      + "POST /api/v1/geographic-areas/bulk-import-boundaries.",
+                statusCode: StatusCodes.Status404NotFound);
+        }
+
+        var cameras = await gis.ListForAreaAsync(geographicAreaId.Value, caller, ct);
+
+        var sectorWkts = new List<string>(cameras.Count);
+        foreach (var cam in cameras)
+        {
+            if (!CoverageSector.CanCompute(cam.Azimuth, cam.HorizontalFov, cam.EffectiveRange))
+            {
+                continue;
+            }
+
+            var ring = CoverageSector.Ring(
+                cam.Latitude, cam.Longitude,
+                cam.Azimuth!.Value, cam.HorizontalFov!.Value, cam.EffectiveRange!.Value);
+
+            if (ring.Count >= 4)
+            {
+                sectorWkts.Add(RingToWktPolygon(ring));
+            }
+        }
+
+        var geoJson = await gis.ComputeGapGeoJsonAsync(geographicAreaId.Value, sectorWkts, ct);
+
+        GeoJsonGeometry? geometry = null;
+        if (!string.IsNullOrEmpty(geoJson))
+        {
+            using var doc = JsonDocument.Parse(geoJson);
+            var root = doc.RootElement;
+            geometry = new GeoJsonGeometry(
+                root.GetProperty("type").GetString() ?? "GeometryCollection",
+                root.TryGetProperty("coordinates", out var coords)
+                    ? coords.Clone()
+                    : (object)Array.Empty<object>());
+        }
+
+        var props = new Dictionary<string, object?>
+        {
+            ["geographicAreaId"] = geographicAreaId,
+            ["cameraSectorsConsidered"] = sectorWkts.Count,
+            ["estimated"] = true,
+            ["disclaimer"] = CoverageSector.EstimateDisclaimer,
+        };
+
+        return TypedResults.Json(
+            new GeoJsonFeature("Feature", geometry, props),
+            contentType: GeoJsonMediaType);
+    }
+
+    /// <summary>
+    /// One <c>CoverageSector.Ring</c> output — <c>[lon, lat]</c> pairs, closed — as WKT
+    /// <c>POLYGON((lon lat, lon lat, …))</c>, WGS84 (SRID 4326 applied by the caller).
+    /// </summary>
+    private static string RingToWktPolygon(IReadOnlyList<double[]> ring)
+    {
+        var sb = new StringBuilder("POLYGON((");
+        for (var i = 0; i < ring.Count; i++)
+        {
+            if (i > 0)
+            {
+                sb.Append(", ");
+            }
+
+            sb.Append(ring[i][0].ToString(CultureInfo.InvariantCulture))
+              .Append(' ')
+              .Append(ring[i][1].ToString(CultureInfo.InvariantCulture));
+        }
+
+        sb.Append("))");
+        return sb.ToString();
+    }
 
     // -------------------------------------------------------------------
 

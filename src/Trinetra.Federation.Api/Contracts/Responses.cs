@@ -13,6 +13,16 @@ namespace Trinetra.Federation.Api.Contracts;
 /// <summary>Identifier of a newly created resource.</summary>
 public sealed record CreatedResponse(Guid Id);
 
+/// <summary>
+/// A newly created watchlist entry, plus how much prior detection history it was backfilled
+/// against — so a caller knows immediately whether the plate already has sightings on file,
+/// without a follow-up <c>GET /watchlist/alerts</c> round-trip. <paramref name="HistoricalMatchesCapped"/>
+/// is true when there were more prior sightings than the backfill scan looked at (the plate has
+/// a long history — treat the count as a lower bound, not exhaustive).
+/// </summary>
+public sealed record WatchlistEntryCreatedResponse(
+    Guid Id, int HistoricalAlertsRaised, bool HistoricalMatchesCapped);
+
 /// <summary>An organization: a department, institution or corporation.</summary>
 public sealed record OrganizationResponse(
     Guid Id, string Code, string Name, string OrganizationType, string? Description, string Status);
@@ -36,6 +46,14 @@ public sealed record GeographicAreaResponse(
 /// <summary>An operator-declared level in the geographic hierarchy.</summary>
 public sealed record AreaTypeResponse(string Code, string Name, int LevelOrder);
 
+/// <summary>The outcome of one row in a boundary-polygon bulk import.</summary>
+public sealed record BoundaryRowResult(
+    int Index, Guid GeographicAreaId, string Status, string? Error);
+
+/// <summary>The report for a whole boundary import — always 200, even with per-row failures.</summary>
+public sealed record BoundaryImportResult(
+    int Updated, int Failed, IReadOnlyList<BoundaryRowResult> Rows);
+
 /// <summary>An access group affected by a cross-organization unit move.</summary>
 public sealed record AffectedGroupResponse(Guid Id, string Code, int MemberCount);
 
@@ -45,10 +63,19 @@ public sealed record MoveUnitResponse(
     int CamerasFollowing, int TargetsFollowing,
     IReadOnlyList<AffectedGroupResponse> AffectedGroups);
 
-/// <summary>A platform user. Never carries password material.</summary>
+/// <summary>
+/// A platform user. Never carries password material. <see cref="OrganizationUnitId"/>,
+/// <see cref="GeographicAreaId"/> and <see cref="Designation"/> are HR/org-chart metadata —
+/// DESCRIPTIVE ONLY, never an authorization input; what this account can do comes entirely from
+/// access-group membership (invariant 12). <see cref="OrganizationUnitName"/> /
+/// <see cref="GeographicAreaName"/> are denormalized for display, null if unset or the
+/// referenced row is gone.
+/// </summary>
 public sealed record UserResponse(
     Guid Id, string Username, string DisplayName, string? Email,
-    bool MustChangePassword, string Status, DateTimeOffset? LastLoginAt, bool IsSystem);
+    bool MustChangePassword, string Status, DateTimeOffset? LastLoginAt, bool IsSystem,
+    Guid? OrganizationUnitId, string? OrganizationUnitName,
+    Guid? GeographicAreaId, string? GeographicAreaName, string? Designation);
 
 /// <summary>A group a user belongs to, with any expiry on that membership.</summary>
 public sealed record UserGroupResponse(
@@ -203,3 +230,16 @@ public sealed record DeactivationConflictResponse(
 
 /// <summary>Whether a credential is provisioned. Reports presence only, never content.</summary>
 public sealed record CredentialExistsResponse(string Reference, bool Exists);
+
+/// <summary>
+/// A short-lived, single-camera stream-session token (<c>GET /streams/{cameraId}/session</c>,
+/// G2 — <c>docs/STREAMING-GATEWAY-PLAN.md</c>). Pass <c>token</c> as
+/// <c>Authorization: Bearer {token}</c> on every HLS playlist/segment request the browser's
+/// player makes to the streaming gateway; it is never a valid bearer token against the rest of
+/// this API. <c>Mode</c> (v1.25) — the camera's own <c>streamPreference</c> — tells the player
+/// which route to actually use: <c>RTSP</c>/<c>HLS</c> both mean "play
+/// `GET /{cameraId}/{*hlsPath}` as an HLS stream" (the source behind it differs, the player
+/// doesn't need to care); <c>WEBRTC</c> means play it as WHEP instead, POSTing an SDP offer to
+/// `POST /{cameraId}/whep` with this same token.
+/// </summary>
+public sealed record StreamSessionResponse(Guid CameraId, string Token, DateTimeOffset ExpiresAt, string Mode);

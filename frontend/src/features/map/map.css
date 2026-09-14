@@ -26,6 +26,16 @@
 .dashboard-search__form label { display: grid; gap: .375rem; font-weight: 600; font-size: .875rem; }
 .dashboard-search__form input { min-height: 2.5rem; padding: .5rem .625rem; border: 1px solid var(--color-border); border-radius: .375rem; font: inherit; }
 
+.map-search { padding: 1rem; border: 1px solid var(--color-border); border-radius: .75rem; background: var(--color-surface); }
+.map-search h3 { margin: 0 0 .625rem; }
+.map-search__form { display: grid; gap: .625rem; max-width: 28rem; }
+.map-search__form label { display: grid; gap: .375rem; font-weight: 600; font-size: .875rem; }
+.map-search__form input { min-height: 2.5rem; padding: .5rem .625rem; border: 1px solid var(--color-border); border-radius: .375rem; font: inherit; }
+.map-search__form p { margin: 0; color: var(--color-muted); font-size: .8125rem; }
+.map-search__results { display: grid; gap: .25rem; margin: .625rem 0 0; padding: 0; list-style: none; }
+.map-search__result { width: 100%; padding: .5rem .625rem; text-align: left; color: var(--color-text); background: var(--color-surface-subtle); border: 1px solid var(--color-border-subtle); border-radius: .375rem; cursor: pointer; font: inherit; }
+.map-search__result:hover { background: var(--color-surface-hover); }
+
 .map-page__map-section { display: grid; gap: 1rem; padding-top: .5rem; border-top: 1px solid var(--color-border); }
 .map-page__map-header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
 .map-page__map-header h2 { margin: 0; }

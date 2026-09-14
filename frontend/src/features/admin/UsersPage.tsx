@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { type FormEvent, useState } from 'react';
+import { type FormEvent, useEffect, useState } from 'react';
 
 import { errorDetail } from '../../api/client';
 import { api } from '../../api/endpoints';
@@ -8,6 +8,7 @@ import { queryKeys } from '../../api/queryKeys';
 import { useAuth } from '../../auth/AuthProvider';
 import { hasPermission } from '../../auth/permissions';
 import { Button, Pager, PageState, StatusBadge } from '../../components/ui';
+import { TreeSelect } from '../cameras/TreeSelect';
 import { useDocumentTitle } from '../../lib/useDocumentTitle';
 import './admin.css';
 
@@ -15,11 +16,102 @@ function field(form: FormData, name: string) {
   return String(form.get(name) ?? '').trim();
 }
 
+/** A user's home organization unit / geographic area is descriptive HR metadata only — who they
+ * actually belong to and where they cover — never an access-control input; that still comes
+ * entirely from the Access Groups a user is a member of (role + scope). See the `v1.21` schema
+ * comment on `platform_users.organization_unit_id`/`geographic_area_id` for the same note
+ * server-side. Reuses `TreeSelect` (organization units are scoped to one organization at a time,
+ * same as everywhere else this hierarchy is edited — e.g. `CameraForm`, `HierarchyPage`). */
+interface OrgGeoDesignation {
+  organizationUnitId: string;
+  geographicAreaId: string;
+  designation: string;
+}
+
+function OrgGeoDesignationFields({ value, onChange, idPrefix }: {
+  value: OrgGeoDesignation;
+  onChange(next: OrgGeoDesignation): void;
+  idPrefix: string;
+}) {
+  const [organizationId, setOrganizationId] = useState('');
+
+  const organizations = useQuery({ queryKey: queryKeys.reference.organizations, queryFn: ({ signal }) => api.reference.organizations(signal) });
+  const geographicAreas = useQuery({ queryKey: queryKeys.reference.geographicAreas, queryFn: ({ signal }) => api.reference.geographicAreas(undefined, signal) });
+  const organizationUnits = useQuery({
+    queryKey: queryKeys.reference.organizationUnits(organizationId),
+    queryFn: ({ signal }) => api.reference.organizationUnits(organizationId, signal),
+    enabled: Boolean(organizationId),
+  });
+  // Editing an existing user: their saved unit may belong to an organization not yet selected
+  // above — resolve it once so the organization step (and the unit tree under it) starts
+  // pre-filled instead of forcing a re-pick of something already chosen.
+  const currentUnit = useQuery({
+    queryKey: queryKeys.reference.organizationUnit(value.organizationUnitId),
+    queryFn: ({ signal }) => api.reference.organizationUnit(value.organizationUnitId, signal),
+    enabled: Boolean(value.organizationUnitId) && !organizationId,
+  });
+
+  useEffect(() => {
+    if (currentUnit.data && !organizationId) setOrganizationId(currentUnit.data.organizationId);
+  }, [currentUnit.data, organizationId]);
+
+  return <fieldset className="org-geo-designation-fields">
+    <legend>Home assignment <span className="org-geo-designation-fields__hint">(descriptive only — access comes from group membership below, not from this)</span></legend>
+    <label htmlFor={`${idPrefix}-organizationId`}>Home organization
+      <select
+        id={`${idPrefix}-organizationId`} value={organizationId}
+        onChange={(event) => {
+          setOrganizationId(event.target.value);
+          onChange({ ...value, organizationUnitId: '' }); // the unit belonged to the previous organization.
+        }}
+      >
+        <option value="">Not set</option>
+        {(organizations.data ?? []).map((org) => <option key={org.id} value={org.id}>{org.name}</option>)}
+      </select>
+    </label>
+    <TreeSelect
+      id={`${idPrefix}-organizationUnitId`}
+      label="Home organization unit"
+      items={organizationUnits.data}
+      getParentId={(unit) => unit.parentUnitId}
+      value={value.organizationUnitId || undefined}
+      onChange={(id) => onChange({ ...value, organizationUnitId: id ?? '' })}
+      disabled={!organizationId}
+      loading={organizationUnits.isFetching}
+      error={organizationUnits.isError}
+      emptyMessage="No organization units are available for this organization."
+      placeholder="Not set"
+    />
+    <TreeSelect
+      id={`${idPrefix}-geographicAreaId`}
+      label="Home geographic area"
+      items={geographicAreas.data}
+      getParentId={(area) => area.parentAreaId}
+      value={value.geographicAreaId || undefined}
+      onChange={(id) => onChange({ ...value, geographicAreaId: id ?? '' })}
+      loading={geographicAreas.isFetching}
+      error={geographicAreas.isError}
+      emptyMessage="No geographic areas are available."
+      placeholder="Not set"
+    />
+    <label htmlFor={`${idPrefix}-designation`}>Designation
+      <input
+        id={`${idPrefix}-designation`} maxLength={150}
+        value={value.designation}
+        onChange={(event) => onChange({ ...value, designation: event.target.value })}
+        placeholder="e.g. Station Inspector"
+      />
+    </label>
+  </fieldset>;
+}
+
 function CreateUserForm({ onCreate, error, pending }: {
   onCreate(request: CreateUserRequest): void;
   error: unknown;
   pending: boolean;
 }) {
+  const [orgGeo, setOrgGeo] = useState<OrgGeoDesignation>({ organizationUnitId: '', geographicAreaId: '', designation: '' });
+
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = event.currentTarget;
@@ -30,17 +122,22 @@ function CreateUserForm({ onCreate, error, pending }: {
       displayName: field(data, 'displayName'),
       password: field(data, 'password'),
       ...(email ? { email } : {}),
+      ...(orgGeo.organizationUnitId ? { organizationUnitId: orgGeo.organizationUnitId } : {}),
+      ...(orgGeo.geographicAreaId ? { geographicAreaId: orgGeo.geographicAreaId } : {}),
+      ...(orgGeo.designation.trim() ? { designation: orgGeo.designation.trim() } : {}),
     });
     form.reset();
+    setOrgGeo({ organizationUnitId: '', geographicAreaId: '', designation: '' });
   }
 
   return <form aria-label="Create user" className="admin-form" onSubmit={submit}>
     <h3>Create user</h3>
-    <p>A new account holds no permissions until it is added to an access group.</p>
+    <p>A new account holds no permissions until it is added to an access group — the fields below are descriptive (which department/area this person belongs to), not access control.</p>
     <label>Username<input name="username" required /></label>
     <label>Display name<input name="displayName" required /></label>
     <label>Initial password<input name="password" type="password" required /></label>
     <label>Email<input name="email" type="email" /></label>
+    <OrgGeoDesignationFields idPrefix="create-user" value={orgGeo} onChange={setOrgGeo} />
     {Boolean(error) && <p className="form-error" role="alert">{errorDetail(error, 'The user could not be created.')}</p>}
     <Button disabled={pending} type="submit">Create user</Button>
   </form>;
@@ -53,6 +150,7 @@ function UserDetail({ userId, canManage, onClose }: {
 }) {
   const queryClient = useQueryClient();
   const [editing, setEditing] = useState(false);
+  const [orgGeo, setOrgGeo] = useState<OrgGeoDesignation>({ organizationUnitId: '', geographicAreaId: '', designation: '' });
   const [newPassword, setNewPassword] = useState('');
   const [groupId, setGroupId] = useState('');
 
@@ -98,14 +196,19 @@ function UserDetail({ userId, canManage, onClose }: {
   const availableGroups = (allGroups.data ?? []).filter((g) => !memberGroupIds.has(g.id));
 
   return <section className="detail-panel" aria-labelledby="user-detail-title">
-    <button className="admin-action-link" type="button" onClick={onClose}>Back to users</button>
+    <button className="button button--secondary detail-panel__back" type="button" onClick={onClose}>&larr; Back to users</button>
     <header><h3 id="user-detail-title">{user.displayName}</h3><StatusBadge tone={user.status === 'ACTIVE' ? 'success' : 'warning'}>{user.status}</StatusBadge></header>
     {editing ? (
       <form aria-label="Edit user" className="admin-form admin-form--inline" onSubmit={(event) => {
         event.preventDefault();
         const data = new FormData(event.currentTarget);
         const email = field(data, 'email');
-        update.mutate({ displayName: field(data, 'displayName'), email: email || undefined, status: field(data, 'status') });
+        update.mutate({
+          displayName: field(data, 'displayName'), email: email || undefined, status: field(data, 'status'),
+          organizationUnitId: orgGeo.organizationUnitId || undefined,
+          geographicAreaId: orgGeo.geographicAreaId || undefined,
+          designation: orgGeo.designation.trim() || undefined,
+        });
       }}>
         <label>Display name<input name="displayName" defaultValue={user.displayName} required /></label>
         <label>Email<input name="email" type="email" defaultValue={user.email ?? ''} /></label>
@@ -114,6 +217,7 @@ function UserDetail({ userId, canManage, onClose }: {
           <option value="INACTIVE">Inactive</option>
           <option value="LOCKED">Locked</option>
         </select></label>
+        <OrgGeoDesignationFields idPrefix={`edit-user-${userId}`} value={orgGeo} onChange={setOrgGeo} />
         {update.isError && <p className="form-error" role="alert">{errorDetail(update.error, 'The user could not be updated.')}</p>}
         <div className="form-actions">
           <Button disabled={update.isPending} type="submit">Save changes</Button>
@@ -124,15 +228,29 @@ function UserDetail({ userId, canManage, onClose }: {
       <dl>
         <div><dt>Username</dt><dd>{user.username}</dd></div>
         <div><dt>Email</dt><dd>{user.email ?? 'Not set'}</dd></div>
+        <div><dt>Designation</dt><dd>{user.designation ?? 'Not set'}</dd></div>
+        <div><dt>Home organization unit</dt><dd>{user.organizationUnitName ?? 'Not set'}</dd></div>
+        <div><dt>Home geographic area</dt><dd>{user.geographicAreaName ?? 'Not set'}</dd></div>
         <div><dt>Must change password</dt><dd>{user.mustChangePassword ? 'Yes' : 'No'}</dd></div>
         <div><dt>Last login</dt><dd>{user.lastLoginAt ? new Date(user.lastLoginAt).toLocaleString() : 'Never'}</dd></div>
       </dl>
     )}
-    {canManage && !editing && !user.isSystem && <Button type="button" onClick={() => setEditing(true)}>Edit user</Button>}
+    {canManage && !editing && (
+      <Button type="button" onClick={() => {
+        setOrgGeo({
+          organizationUnitId: user.organizationUnitId ?? '',
+          geographicAreaId: user.geographicAreaId ?? '',
+          designation: user.designation ?? '',
+        });
+        setEditing(true);
+      }}>
+        Edit user
+      </Button>
+    )}
 
-    {canManage && !user.isSystem && <section aria-labelledby="reset-password-title">
+    {canManage && <section aria-labelledby="reset-password-title">
       <h4 id="reset-password-title">Reset password</h4>
-      <form aria-label="Reset password" onSubmit={(event) => { event.preventDefault(); resetPassword.mutate(); }}>
+      <form aria-label="Reset password" className="admin-form admin-form--inline" onSubmit={(event) => { event.preventDefault(); resetPassword.mutate(); }}>
         <label>New password<input name="newPassword" type="password" required value={newPassword} onChange={(event) => setNewPassword(event.target.value)} /></label>
         {resetPassword.isError && <p className="form-error" role="alert">{errorDetail(resetPassword.error, 'The password could not be reset.')}</p>}
         {resetPassword.isSuccess && <p role="status">Password reset. The account must change it at next sign-in.</p>}

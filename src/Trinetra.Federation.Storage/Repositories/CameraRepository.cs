@@ -32,7 +32,8 @@ public sealed class CameraRepository
         c.serial_number, c.latitude, c.longitude, c.altitude, c.mounting_height,
         c.azimuth, c.tilt, c.horizontal_fov, c.vertical_fov, c.effective_range,
         host(c.ip_address) AS ip_address, c.port, c.protocol,
-        c.vms_id, c.stream_reference, c.credential_reference, c.installation_date,
+        c.vms_id, c.stream_reference, c.stream_preference, c.native_hls_url, c.native_webrtc_url,
+        c.credential_reference, c.installation_date,
         c.record_events,
         c.operational_status, c.connectivity_status, c.maintenance_status,
         c.last_seen_at, c.last_health_check_at, c.deleted_at
@@ -152,6 +153,83 @@ public sealed class CameraRepository
         return [.. rows.Select(r => r.ToDomain())];
     }
 
+    /// <summary>
+    /// RFP Model 1 "ageing-infrastructure reporting": buckets the caller's live, in-scope
+    /// cameras by age since <c>installation_date</c>, plus the oldest <paramref name="oldestLimit"/>
+    /// with a known date — the two things a maintenance planner actually needs (how much
+    /// equipment falls in each age band, and which specific cameras are the priority
+    /// replacement candidates). A camera with no recorded <c>installation_date</c> is its own
+    /// bucket rather than silently excluded — an unknown install date is itself something to go
+    /// fix, not something to pretend doesn't exist.
+    /// </summary>
+    public async Task<AgeingInfrastructureRow> GetAgeingInfrastructureAsync(
+        CallerContext caller, Guid? organizationUnitId, Guid? geographicAreaId,
+        int oldestLimit, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(caller);
+        caller.Require("camera.read");
+
+        await using var c = await _dataSource.OpenConnectionAsync(ct);
+
+        var args = ScopeArgs(Guid.Empty, caller, "camera.read");
+        args.Add("OrganizationUnitId", organizationUnitId);
+        args.Add("GeographicAreaId", geographicAreaId);
+        args.Add("OldestLimit", oldestLimit);
+
+        // Bucket boundaries are a fixed policy choice, not configuration — CCTV hardware is
+        // typically rated for a 5-7 year service life, so "5-10 years" and "10+ years" are the
+        // two bands worth a planner's attention; "under 3" and "3-5" separate recently-installed
+        // stock from stock approaching that window. Repeated in both statements below (a CTE
+        // can't span two separate SQL statements) rather than factored out — see AGE_BUCKET_CASE.
+        const string ageBucketCase = """
+            CASE
+                WHEN c.installation_date IS NULL THEN 'unknown'
+                WHEN c.installation_date > (CURRENT_DATE - INTERVAL '3 years') THEN 'under_3'
+                WHEN c.installation_date > (CURRENT_DATE - INTERVAL '5 years') THEN '3_to_5'
+                WHEN c.installation_date > (CURRENT_DATE - INTERVAL '10 years') THEN '5_to_10'
+                ELSE '10_plus'
+            END
+            """;
+
+        var scopedWhere = $"""
+            FROM federation.cameras c
+            WHERE c.deleted_at IS NULL
+              AND ({Scope("camera.read")})
+              AND (@OrganizationUnitId::uuid IS NULL
+                   OR c.organization_unit_id IN (
+                       SELECT id FROM federation.org_unit_descendants(@OrganizationUnitId)))
+              AND (@GeographicAreaId::uuid IS NULL
+                   OR c.geographic_area_id IN (
+                       SELECT id FROM federation.geographic_area_descendants(@GeographicAreaId)))
+            """;
+
+        using var multi = await c.QueryMultipleAsync(new CommandDefinition($"""
+            SELECT {ageBucketCase} AS Bucket, count(*)::int AS Count
+            {scopedWhere}
+            GROUP BY Bucket;
+
+            SELECT c.id AS Id, c.camera_code AS CameraCode, c.name AS Name,
+                   c.installation_date AS InstallationDate,
+                   (EXTRACT(YEAR FROM age(CURRENT_DATE, c.installation_date)))::int AS AgeYears,
+                   c.maintenance_status AS MaintenanceStatus
+            {scopedWhere}
+              AND c.installation_date IS NOT NULL
+            ORDER BY c.installation_date ASC, c.id
+            LIMIT @OldestLimit;
+            """, args, cancellationToken: ct));
+
+        var buckets = (await multi.ReadAsync<AgeBucketRow>()).ToDictionary(r => r.Bucket, r => r.Count);
+        var oldest = (await multi.ReadAsync<AgeingCameraRow>()).ToList();
+
+        return new AgeingInfrastructureRow(
+            UnderThreeYears: buckets.GetValueOrDefault("under_3"),
+            ThreeToFiveYears: buckets.GetValueOrDefault("3_to_5"),
+            FiveToTenYears: buckets.GetValueOrDefault("5_to_10"),
+            TenPlusYears: buckets.GetValueOrDefault("10_plus"),
+            UnknownInstallationDate: buckets.GetValueOrDefault("unknown"),
+            OldestCameras: oldest);
+    }
+
     /// <summary>The id of the live camera with this code the caller can reach, or null.</summary>
     public async Task<Guid?> FindLiveIdByCodeAsync(
         string code, CallerContext caller, CancellationToken ct)
@@ -200,6 +278,31 @@ public sealed class CameraRepository
             WHERE c.camera_code = @code AND c.deleted_at IS NULL
               AND ({Scope("camera.read")});
             """, args, transaction, cancellationToken: ct));
+    }
+
+    /// <summary>
+    /// Deliberately unscoped — <b>the one exception to invariant 11</b> alongside
+    /// <see cref="GetAsync(Guid,CallerContext,CancellationToken)"/>'s own mint-time check. Called
+    /// only from <c>StreamSessionEndpoints.ProxyAsync</c>/the WHEP relay routes on every
+    /// playlist/segment/signaling request for a live viewing session — the scope check already
+    /// ran once, at <c>GET /streams/{cameraId}/session</c>'s mint time
+    /// (<c>CameraRepository.GetAsync</c> there), and the stream-session token's short lifetime
+    /// stands in for re-checking it here, exactly as the class remarks on
+    /// <c>StreamSessionEndpoints</c> already document for the RTSP/MediaMTX path. Re-scoping on
+    /// every segment would also defeat the point of embedding <c>cameraId</c> straight in that
+    /// token instead of a user identity. Returns null only if the camera does not exist or is
+    /// retired — never for an out-of-scope caller, since there is no caller identity to scope
+    /// against here.
+    /// </summary>
+    public async Task<CameraStreamRouting?> GetStreamRoutingAsync(Guid cameraId, CancellationToken ct)
+    {
+        await using var c = await _dataSource.OpenConnectionAsync(ct);
+        return await c.QuerySingleOrDefaultAsync<CameraStreamRouting>(new CommandDefinition("""
+            SELECT stream_preference AS StreamPreference, native_hls_url AS NativeHlsUrl,
+                   native_webrtc_url AS NativeWebrtcUrl, credential_reference AS CredentialReference
+            FROM federation.cameras
+            WHERE id = @cameraId AND deleted_at IS NULL;
+            """, new { cameraId }, cancellationToken: ct));
     }
 
     // -------------------------------------------------------------------
@@ -252,6 +355,8 @@ public sealed class CameraRepository
                 vertical_fov = @VerticalFov, effective_range = @EffectiveRange,
                 ip_address = @IpAddress::inet, port = @Port, protocol = @Protocol,
                 vms_id = @VmsId, stream_reference = @StreamReference,
+                stream_preference = @StreamPreference, native_hls_url = @NativeHlsUrl,
+                native_webrtc_url = @NativeWebrtcUrl,
                 credential_reference = @CredentialReference, installation_date = @InstallationDate,
                 record_events = @RecordEvents,
                 operational_status = @OperationalStatus, connectivity_status = @ConnectivityStatus,
@@ -477,7 +582,8 @@ public sealed class CameraRepository
         camera_code, name, organization_unit_id, geographic_area_id, manufacturer, model, camera_type,
         serial_number, latitude, longitude, altitude, mounting_height, azimuth, tilt,
         horizontal_fov, vertical_fov, effective_range, ip_address, port, protocol,
-        vms_id, stream_reference, credential_reference, installation_date, record_events,
+        vms_id, stream_reference, stream_preference, native_hls_url, native_webrtc_url,
+        credential_reference, installation_date, record_events,
         operational_status, connectivity_status, maintenance_status
         """;
 
@@ -485,7 +591,8 @@ public sealed class CameraRepository
         @Code, @Name, @OrganizationUnitId, @GeographicAreaId, @Manufacturer, @Model, @CameraType,
         @SerialNumber, @Latitude, @Longitude, @Altitude, @MountingHeight, @Azimuth, @Tilt,
         @HorizontalFov, @VerticalFov, @EffectiveRange, @IpAddress::inet, @Port, @Protocol,
-        @VmsId, @StreamReference, @CredentialReference, @InstallationDate, @RecordEvents,
+        @VmsId, @StreamReference, @StreamPreference, @NativeHlsUrl, @NativeWebrtcUrl,
+        @CredentialReference, @InstallationDate, @RecordEvents,
         @OperationalStatus, @ConnectivityStatus, @MaintenanceStatus
         """;
 
@@ -496,6 +603,7 @@ public sealed class CameraRepository
         cam.Latitude, cam.Longitude, cam.Altitude, cam.MountingHeight,
         cam.Azimuth, cam.Tilt, cam.HorizontalFov, cam.VerticalFov, cam.EffectiveRange,
         cam.IpAddress, cam.Port, cam.Protocol, cam.VmsId, cam.StreamReference,
+        cam.StreamPreference, cam.NativeHlsUrl, cam.NativeWebrtcUrl,
         cam.CredentialReference,
         InstallationDate = cam.InstallationDate is { } d ? d.ToDateTime(TimeOnly.MinValue) : (DateTime?)null,
         cam.RecordEvents,
@@ -532,6 +640,9 @@ public sealed class CameraRepository
         public string? Protocol { get; init; }
         public Guid? VmsId { get; init; }
         public string? StreamReference { get; init; }
+        public string StreamPreference { get; init; } = CameraVocab.StreamPreferenceRtsp;
+        public string? NativeHlsUrl { get; init; }
+        public string? NativeWebrtcUrl { get; init; }
         public string? CredentialReference { get; init; }
         public DateTime? InstallationDate { get; init; }
         public bool RecordEvents { get; init; } = true;
@@ -567,6 +678,9 @@ public sealed class CameraRepository
             Protocol = Protocol,
             VmsId = VmsId,
             StreamReference = StreamReference,
+            StreamPreference = StreamPreference,
+            NativeHlsUrl = NativeHlsUrl,
+            NativeWebrtcUrl = NativeWebrtcUrl,
             CredentialReference = CredentialReference,
             InstallationDate = InstallationDate is { } d ? DateOnly.FromDateTime(d) : null,
             RecordEvents = RecordEvents,
@@ -578,6 +692,17 @@ public sealed class CameraRepository
             DeletedAt = DeletedAt,
         };
     }
+}
+
+/// <summary>The little a live streaming request needs to know to proxy a camera's feed —
+/// <see cref="CameraRepository.GetStreamRoutingAsync"/>'s result. Never includes secret
+/// material, only the reference to resolve one if needed.</summary>
+public sealed record CameraStreamRouting
+{
+    public string StreamPreference { get; init; } = CameraVocab.StreamPreferenceRtsp;
+    public string? NativeHlsUrl { get; init; }
+    public string? NativeWebrtcUrl { get; init; }
+    public string? CredentialReference { get; init; }
 }
 
 /// <summary>A geographic bounding box: an inclusive lon/lat rectangle.</summary>
@@ -597,6 +722,33 @@ public readonly record struct CameraQuery(
     string? MaintenanceStatus,
     string? Query,
     BoundingBox? Bbox);
+
+/// <summary>One row of <see cref="CameraRepository.GetAgeingInfrastructureAsync"/>'s internal
+/// bucket-count query.</summary>
+public sealed record AgeBucketRow
+{
+    public string Bucket { get; init; } = "";
+    public int Count { get; init; }
+}
+
+/// <summary>One of the oldest cameras with a known installation date — the priority-attention
+/// list <see cref="CameraRepository.GetAgeingInfrastructureAsync"/> returns alongside the bucket
+/// counts.</summary>
+public sealed record AgeingCameraRow
+{
+    public Guid Id { get; init; }
+    public string CameraCode { get; init; } = "";
+    public string Name { get; init; } = "";
+    public DateTime InstallationDate { get; init; }
+    public int AgeYears { get; init; }
+    public string MaintenanceStatus { get; init; } = "";
+}
+
+/// <summary><see cref="CameraRepository.GetAgeingInfrastructureAsync"/>'s result: bucket counts
+/// plus the oldest cameras with a known installation date.</summary>
+public sealed record AgeingInfrastructureRow(
+    int UnderThreeYears, int ThreeToFiveYears, int FiveToTenYears, int TenPlusYears,
+    int UnknownInstallationDate, IReadOnlyList<AgeingCameraRow> OldestCameras);
 
 /// <summary>
 /// A resolved partial update: the <c>SET</c> fragments to apply and their parameter values.

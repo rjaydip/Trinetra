@@ -385,6 +385,65 @@ public sealed class GeographyRepository
         return ActivateResult.Activated;
     }
 
+    /// <summary>
+    /// Sets or replaces one area's surveyed boundary polygon (<c>v1.19</c>). Called only from the
+    /// admin-only bulk import — never a per-area form field.
+    /// </summary>
+    /// <remarks>
+    /// Exactly one of <paramref name="wkt"/> / <paramref name="geoJson"/> must be supplied — the
+    /// caller validates that before calling. Malformed WKT/GeoJSON text raises a
+    /// <see cref="Npgsql.PostgresException"/> from the parse itself, which the caller catches per
+    /// row, matching the camera bulk-import's per-row isolation.
+    /// </remarks>
+    public async Task<BoundaryImportOutcome> SetBoundaryAsync(
+        Guid areaId, string? wkt, string? geoJson, CallerContext caller, UnitOfWork work,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(caller);
+        caller.Require("geography.manage");
+
+        var c = work.Connection;
+
+        var exists = await c.ExecuteScalarAsync<bool>(new CommandDefinition("""
+            SELECT EXISTS (SELECT 1 FROM federation.geographic_areas WHERE id = @AreaId);
+            """, new { AreaId = areaId }, work.Transaction, cancellationToken: ct))
+            .ConfigureAwait(false);
+
+        if (!exists)
+        {
+            return BoundaryImportOutcome.NotFound;
+        }
+
+        if (!Geo(caller, "geography.manage"))
+        {
+            await RequireAreaAsync(c, work.Transaction, caller, areaId, ct).ConfigureAwait(false);
+        }
+
+        var geomExpr = wkt is not null
+            ? "ST_GeomFromText(@Geom, 4326)"
+            : "ST_SetSRID(ST_GeomFromGeoJSON(@Geom), 4326)";
+        var geomParam = wkt ?? geoJson;
+
+        var geometryType = await c.ExecuteScalarAsync<string?>(new CommandDefinition(
+            $"SELECT ST_GeometryType({geomExpr});",
+            new { Geom = geomParam }, work.Transaction, cancellationToken: ct))
+            .ConfigureAwait(false);
+
+        if (geometryType != "ST_Polygon")
+        {
+            return BoundaryImportOutcome.InvalidGeometry;
+        }
+
+        await c.ExecuteAsync(new CommandDefinition($"""
+            UPDATE federation.geographic_areas
+            SET boundary = {geomExpr}, updated_at = now()
+            WHERE id = @AreaId;
+            """, new { Geom = geomParam, AreaId = areaId }, work.Transaction, cancellationToken: ct))
+            .ConfigureAwait(false);
+
+        return BoundaryImportOutcome.Updated;
+    }
+
     /// <summary>Operator-defined level names, used to render and validate the hierarchy.</summary>
     public async Task<IReadOnlyList<(string Code, string Name, int LevelOrder)>> ListAreaTypesAsync(
         CancellationToken ct)
@@ -457,4 +516,17 @@ public sealed class GeographyRepository
             throw new InvalidReferenceException(field, "does not exist or is not ACTIVE");
         }
     }
+}
+
+/// <summary>The outcome of one <see cref="GeographyRepository.SetBoundaryAsync"/> call.</summary>
+public enum BoundaryImportOutcome
+{
+    /// <summary>The area does not exist.</summary>
+    NotFound,
+
+    /// <summary>The supplied WKT/GeoJSON parsed but is not a single <c>Polygon</c>.</summary>
+    InvalidGeometry,
+
+    /// <summary><c>boundary</c> was set.</summary>
+    Updated,
 }

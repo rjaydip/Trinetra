@@ -9,6 +9,7 @@
 
 export const queryKeys = {
   overview: ['overview'] as const,
+  ageingInfrastructure: ['ageing-infrastructure'] as const,
 
   vms: {
     all: ['vms'] as const,
@@ -29,6 +30,10 @@ export const queryKeys = {
     mapBootstrap: ['cameras', 'map-bootstrap'] as const,
     dashboardSearch: (query: string) => ['cameras', 'dashboard-search', query] as const,
     attentionList: ['cameras', 'attention-list'] as const,
+  },
+
+  credentialLibrary: {
+    all: ['credential-library'] as const,
   },
 
   dashboardFooter: {
@@ -116,8 +121,19 @@ export const queryKeys = {
   coverageSummary: (scope: { organizationUnitId?: string; geographicAreaId?: string } | null) =>
     ['coverage-summary', scope] as const,
 
+  coverageGaps: (geographicAreaId: string | null) => ['coverage-gaps', geographicAreaId] as const,
+
+  correlationGroups: (from: string | undefined, to: string | undefined) => ['correlation', 'groups', from, to] as const,
+
   detections: (plateNumber: string, targetId: string, from: string | undefined, to: string | undefined) =>
     ['detections', plateNumber, targetId, from, to] as const,
+
+  videoWall: {
+    picker: (q: string) => ['video-wall', 'picker', q] as const,
+    preferences: ['video-wall', 'preferences'] as const,
+  },
+
+  streamSession: (cameraId: string) => ['stream-session', cameraId] as const,
 
   events: (
     from: string | null, to: string | null, cameraId: string, eventType: string,

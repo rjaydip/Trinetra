@@ -29,9 +29,12 @@ internal static class ApiTags
     public const string Gis = "GIS";
     public const string Credentials = "Credentials";
     public const string Events = "Events";
+    public const string Correlation = "Correlation";
     public const string Detections = "Detections";
     public const string Watchlist = "Watchlist";
     public const string WorkerHealth = "Worker health";
+    public const string VideoWall = "Video wall";
+    public const string Streaming = "Streaming";
 
     /// <summary>Tag name to group description, in the order the document should present them.</summary>
     public static IReadOnlyList<(string Name, string Description)> Ordered { get; } =
@@ -114,6 +117,16 @@ internal static class ApiTags
             + "is by opaque cursor, never offset. Wide historical and free-text search belongs to "
             + "OpenSearch and is not served here."),
 
+        (Correlation,
+            "Cross-camera possible matches: the same object reference (a plate, a person "
+            + "reference, a track) seen by two or more cameras within a rule's time window. "
+            + "Computed by a background windowed-SQL pass over the hot event tier, not on "
+            + "request (architecture §8) — `GET /correlation/groups` reads what the last pass "
+            + "found. **`confidence` is always a possible-match score, never certainty** — "
+            + "cross-camera identity is probabilistic. Rule configuration (time window, spatial "
+            + "radius, confidence floor, required signal agreement) is system-seeded; there is "
+            + "no write route in this pass."),
+
         (Detections,
             "Vehicle/plate/OCR detections, submitted by the standalone AI worker "
             + "(`ai-worker/`, Python) rather than produced inside this API. `POST /detections` is "
@@ -130,5 +143,22 @@ internal static class ApiTags
             "Liveness for AI-worker processes (`ai-worker/monitoring/heartbeat.py`). Separate "
             + "from the connector-worker `worker_node` registry: an AI worker owns a static "
             + "camera partition rather than a lease, so it has its own lifecycle here."),
+
+        (VideoWall,
+            "A caller's own video-wall grid layout — tile count and which camera sits in each "
+            + "tile — saved server-side so it follows them across devices. A personal UI "
+            + "preference, not department-scoped domain data: every route here operates on the "
+            + "caller's own row only, needs no permission beyond being authenticated, and is not "
+            + "audited."),
+
+        (Streaming,
+            "Live HLS viewing (`docs/STREAMING-GATEWAY-PLAN.md`). `GET /{cameraId}/session` runs "
+            + "the ordinary `camera.read` + org/geo scope check once and mints a short-lived, "
+            + "single-camera stream-session token; the browser's HLS player then presents that "
+            + "token on every playlist/segment request to the nginx-fronted streaming gateway. "
+            + "`GET /validate` is what nginx's `auth_request` calls before proxying each of those "
+            + "requests through to MediaMTX — it checks only the token's cryptographic validity, "
+            + "not scope again, because the scope check already happened once at mint time and "
+            + "the token is short-lived."),
     ];
 }

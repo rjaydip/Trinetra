@@ -1,0 +1,61 @@
+[Unit]
+Description=Trinetra streaming gateway path provisioner
+Documentation=file:///opt/trinetra/docs/STREAMING-GATEWAY-PLAN.md
+After=network-online.target trinetra-mediamtx.service
+Wants=network-online.target
+BindsTo=trinetra-mediamtx.service
+
+# Keeps MediaMTX's runtime path list in sync with the camera registry -- see
+# deploy/mediamtx/provision_paths.py's own docstring for the full reconciliation loop. BindsTo
+# (not just After): this process is useless without MediaMTX up, and MediaMTX losing its
+# provisioner means new/rotated cameras silently stop appearing, so the two are tied together
+# rather than left to drift independently.
+
+[Service]
+Type=simple
+
+User=trinetra-mediamtx
+Group=trinetra-mediamtx
+WorkingDirectory=/opt/trinetra/mediamtx
+ExecStart=/opt/trinetra/mediamtx/.venv/bin/python3 /opt/trinetra/mediamtx/provision_paths.py
+
+EnvironmentFile=/etc/trinetra/mediamtx-provisioner.env
+
+Restart=on-failure
+RestartSec=10
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+TimeoutStopSec=15
+KillSignal=SIGTERM
+
+# --- Hardening --------------------------------------------------------------
+# Same service account as trinetra-mediamtx.service: this process is the one that actually
+# calls GET /api/v1/cameras/{id}/credential/resolve and holds each resolved RTSP credential in
+# memory just long enough to hand it to MediaMTX's config API -- never written to disk (see the
+# script's own docstring).
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+RemoveIPC=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=trinetra-mediamtx-provisioner
+
+[Install]
+WantedBy=multi-user.target

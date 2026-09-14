@@ -62,6 +62,17 @@ public static class CameraEndpoints
               + "response whose `nextCursor` is null is the last page. `limit` defaults to 50, "
               + "clamped to 200.");
 
+        group.MapGet("/reports/ageing-infrastructure", AgeingInfrastructureAsync)
+          .RequirePermission("camera.read")
+          .WithSummary("Ageing-infrastructure report: cameras bucketed by installation age")
+          .WithDescription(
+              "Every in-scope, live camera bucketed by years since `installationDate` — "
+              + "`under_3`, `3_to_5`, `5_to_10`, `10_plus`, and `unknown` for a camera with no "
+              + "recorded date — plus the oldest cameras with a known date (`oldestLimit`, "
+              + "default 25, capped at 200), for prioritising replacement. Filter with "
+              + "`organizationUnitId`/`geographicAreaId` (both include descendants), same as "
+              + "`GET /cameras`.");
+
         group.MapPost("/bulk-import", BulkImportAsync)
           .RequirePermission("camera.import")
           .WithSummary("Register or update many cameras in one call")
@@ -197,6 +208,49 @@ public static class CameraEndpoints
         }
 
         return TypedResults.Ok(new CameraPage([.. items.Select(ToResponse)], next));
+    }
+
+    private const int DefaultOldestLimit = 25;
+    private const int MaxOldestLimit = 200;
+
+    private static readonly (string Bucket, string Label)[] AgeingBucketOrder =
+    [
+        ("under_3", "Under 3 years"),
+        ("3_to_5", "3–5 years"),
+        ("5_to_10", "5–10 years"),
+        ("10_plus", "10+ years"),
+        ("unknown", "Unknown installation date"),
+    ];
+
+    private static async Task<Ok<AgeingInfrastructureResponse>> AgeingInfrastructureAsync(
+        Guid? organizationUnitId, Guid? geographicAreaId, int? oldestLimit,
+        CameraRepository repo, HttpContext http, CancellationToken ct)
+    {
+        var caller = CallerContextFactory.From(http);
+
+        var row = await repo.GetAgeingInfrastructureAsync(
+            caller, organizationUnitId, geographicAreaId,
+            Math.Clamp(oldestLimit ?? DefaultOldestLimit, 1, MaxOldestLimit), ct);
+
+        var counts = new Dictionary<string, int>
+        {
+            ["under_3"] = row.UnderThreeYears,
+            ["3_to_5"] = row.ThreeToFiveYears,
+            ["5_to_10"] = row.FiveToTenYears,
+            ["10_plus"] = row.TenPlusYears,
+            ["unknown"] = row.UnknownInstallationDate,
+        };
+
+        var buckets = AgeingBucketOrder
+            .Select(b => new AgeingInfrastructureBucketResponse(b.Bucket, b.Label, counts[b.Bucket]))
+            .ToList();
+        var total = counts.Values.Sum();
+
+        return TypedResults.Ok(new AgeingInfrastructureResponse(
+            total, buckets,
+            [.. row.OldestCameras.Select(c => new AgeingCameraSummaryResponse(
+                c.Id, c.CameraCode, c.Name, DateOnly.FromDateTime(c.InstallationDate),
+                c.AgeYears, c.MaintenanceStatus))]));
     }
 
     internal static async Task<Results<Ok<BulkImportResult>, ProblemHttpResult>> BulkImportAsync(
@@ -525,6 +579,12 @@ public static class CameraEndpoints
             errors.Add($"protocol must be one of: {string.Join(", ", CameraVocab.Protocols)}.");
         }
 
+        var streamPreference = Upper(r.StreamPreference) ?? CameraVocab.StreamPreferenceRtsp;
+        if (!CameraVocab.StreamPreferences.Contains(streamPreference))
+        {
+            errors.Add($"streamPreference must be one of: {string.Join(", ", CameraVocab.StreamPreferences)}.");
+        }
+
         var op = Upper(r.OperationalStatus) ?? CameraStatus.OperationalUnknown;
         var conn = Upper(r.ConnectivityStatus) ?? CameraStatus.ConnectivityUnknown;
         var maint = Upper(r.MaintenanceStatus) ?? CameraStatus.MaintenanceNormal;
@@ -581,6 +641,9 @@ public static class CameraEndpoints
             Protocol = protocol,
             VmsId = r.VmsId,
             StreamReference = Trim(r.StreamReference),
+            StreamPreference = streamPreference,
+            NativeHlsUrl = Trim(r.NativeHlsUrl),
+            NativeWebrtcUrl = Trim(r.NativeWebrtcUrl),
             CredentialReference = Trim(r.CredentialReference),
             InstallationDate = r.InstallationDate,
             RecordEvents = r.RecordEvents,
@@ -678,6 +741,21 @@ public static class CameraEndpoints
                     break;
                 case "streamReference":
                     built.Set("stream_reference", "p_stream", NullableString(prop.Value, "streamReference", errors, 512));
+                    break;
+                case "streamPreference":
+                    var pref = Upper(prop.Value.GetString());
+                    if (pref is null || !CameraVocab.StreamPreferences.Contains(pref))
+                    {
+                        errors.Add($"streamPreference must be one of: {string.Join(", ", CameraVocab.StreamPreferences)}.");
+                    }
+
+                    built.Set("stream_preference", "p_stream_pref", pref);
+                    break;
+                case "nativeHlsUrl":
+                    built.Set("native_hls_url", "p_native_hls", NullableString(prop.Value, "nativeHlsUrl", errors, 2048));
+                    break;
+                case "nativeWebrtcUrl":
+                    built.Set("native_webrtc_url", "p_native_webrtc", NullableString(prop.Value, "nativeWebrtcUrl", errors, 2048));
                     break;
                 case "credentialReference":
                     built.Set("credential_reference", "p_cred", NullableString(prop.Value, "credentialReference", errors, 255));
@@ -958,7 +1036,8 @@ public static class CameraEndpoints
         c.Latitude, c.Longitude, c.Manufacturer, c.Model, c.SerialNumber,
         c.Altitude, c.MountingHeight, c.Azimuth, c.Tilt, c.HorizontalFov,
         c.VerticalFov, c.EffectiveRange, c.IpAddress, c.Port, c.Protocol,
-        c.VmsId, c.StreamReference, c.CredentialReference, c.InstallationDate,
+        c.VmsId, c.StreamReference, c.StreamPreference, c.NativeHlsUrl, c.NativeWebrtcUrl,
+        c.CredentialReference, c.InstallationDate,
         c.RecordEvents,
         c.OperationalStatus, c.ConnectivityStatus, c.MaintenanceStatus,
         CoverageSector.CanCompute(c.Azimuth, c.HorizontalFov, c.EffectiveRange),

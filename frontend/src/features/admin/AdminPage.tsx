@@ -7,7 +7,7 @@ import { PageState } from '../../components/ui';
 import './admin.css';
 
 export const supportedAdminReadPermissions = [
-  'organization.read', 'geography.read', 'group.read', 'user.read', 'apikey.read', 'worker.read', 'alert.read',
+  'organization.read', 'geography.read', 'geography.manage', 'group.read', 'user.read', 'apikey.read', 'worker.read', 'alert.read',
 ] as const;
 
 export function RequireAnyAdminPermission({ permissions, children }: { permissions: readonly string[]; children: ReactNode }) {
@@ -63,6 +63,12 @@ const adminDestinations = [
     label: 'Watchlist',
     description: 'Flagged plates and the alerts they raise.',
     permissions: ['alert.read'],
+  },
+  {
+    to: '/admin/boundaries',
+    label: 'Geographic boundaries',
+    description: 'Load surveyed boundary polygons for coverage-gap analysis.',
+    permissions: ['geography.manage'],
   },
 ];
 

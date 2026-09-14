@@ -53,17 +53,20 @@ internal static class ApiInfrastructureExtensions
         services.AddScoped<CameraConnectionTestRepository>();
         services.AddScoped<CameraCredentialTestRepository>();
         services.AddScoped<EventQueryRepository>();
+        services.AddScoped<CorrelationRepository>();
         services.AddScoped<ApiKeyRepository>();
         services.AddScoped<RefreshTokenRepository>();
         services.AddScoped<AuthAuditRepository>();
         services.AddSingleton<MaintenanceRepository>();
         services.AddScoped<SecretWriter>();
+        services.AddScoped<SavedCredentialRepository>();
         services.AddScoped<AccessGroupRepository>();
         services.AddScoped<RoleRepository>();
         services.AddScoped<DetectionRepository>();
         services.AddScoped<WatchlistRepository>();
         services.AddScoped<AiWorkerHealthRepository>();
         services.AddScoped<SystemInfoRepository>();
+        services.AddScoped<VideoWallPreferenceRepository>();
         services.AddSingleton<EvidenceStorage>();
 
         services.AddFederationAdapters();

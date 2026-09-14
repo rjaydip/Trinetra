@@ -2,17 +2,39 @@ import { useQuery } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 
+import type { CameraResponse } from '../../api/models';
 import { api } from '../../api/endpoints';
 import { isApiProblem } from '../../api/client';
 import { queryKeys } from '../../api/queryKeys';
 import { useAuth } from '../../auth/AuthProvider';
 import { hasPermission } from '../../auth/permissions';
 import { PageState } from '../../components/ui';
+import { downloadText } from '../../lib/downloadText';
 import { useDocumentTitle } from '../../lib/useDocumentTitle';
 import { CameraCards } from './CameraCards';
 import { CameraFilters, type RegistryFilters } from './CameraFilters';
 import { CameraTable } from './CameraTable';
+import { exportCamerasToCsv, loadImportReferenceData } from './import';
 import './cameras.css';
+
+/** Hard ceiling on a single export — a safety valve against an unbounded fetch loop at the
+ * 80,000-camera production target, not a limit anyone doing a normal filtered export should ever
+ * hit. Comfortably above the whole first-phase rollout (100+ cameras) with a lot of headroom. */
+const MaxExportRows = 20_000;
+const ExportPageSize = 200;
+
+/** Every camera matching `filters` (not just the current page), paging through the registry's
+ * own cursor-based `GET /cameras` until it runs out or hits `MaxExportRows`. */
+async function fetchAllMatching(filters: RegistryFilters): Promise<CameraResponse[]> {
+  const items: CameraResponse[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await api.cameras.list({ ...filters, cursor, limit: ExportPageSize });
+    items.push(...page.items);
+    cursor = page.nextCursor ?? undefined;
+  } while (cursor && items.length < MaxExportRows);
+  return items;
+}
 
 const filterNames: Array<keyof RegistryFilters> = [
   'q', 'cameraType', 'organizationUnitId', 'geographicAreaId',
@@ -50,6 +72,8 @@ export function RegistryPage() {
   // doesn't hold up at the 80k-camera target). Cleared whenever committed filters change, same
   // as the cursor param itself.
   const [cursorStack, setCursorStack] = useState<string[]>([]);
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
 
   useEffect(() => {
     if (draftSignature !== committedSignature) setDraftFilters(committedFilters);
@@ -86,6 +110,30 @@ export function RegistryPage() {
     setDraftFilters({});
   }
 
+  /** Exports every camera matching the currently *committed* filters (not just this page) as
+   * CSV, in the same organization-unit/geographic-area-by-name shape the CSV bulk importer reads
+   * back — RFP "role-based search/filter/export": scoped by whatever this page's own search/
+   * filter/permissions already produced, no separate export permission or endpoint needed. */
+  async function exportCsv() {
+    setExportError(null);
+    setExporting(true);
+    try {
+      const [cameras, reference] = await Promise.all([
+        fetchAllMatching(committedFilters),
+        loadImportReferenceData(),
+      ]);
+      if (cameras.length === 0) {
+        setExportError('No cameras match the current filters — nothing to export.');
+        return;
+      }
+      downloadText(exportCamerasToCsv(cameras, reference), 'text/csv', 'trinetra-camera-registry-export.csv');
+    } catch (reason) {
+      setExportError(isApiProblem(reason) ? reason.detail : 'Could not export the camera registry.');
+    } finally {
+      setExporting(false);
+    }
+  }
+
   function nextPage() {
     if (filtersPending || !registry.data?.nextCursor) return;
     setCursorStack((stack) => [...stack, search.get('cursor') ?? '']);
@@ -106,7 +154,8 @@ export function RegistryPage() {
 
   return (
     <section className="registry-page" aria-labelledby="camera-registry-title">
-      <header className="registry-page__header"><div><p className="eyebrow">Live registry</p><h1 id="camera-registry-title">Camera registry</h1></div><div className="registry-page__actions">{hasPermission(session, 'camera.reconcile') && <Link className="button button--secondary" to="/cameras/reconciliation">Reconcile</Link>}{hasPermission(session, 'camera.import') && <Link className="button button--secondary" to="/cameras/import">Bulk import</Link>}{hasPermission(session, 'camera.create') && <Link className="button" to="/cameras/new">Register camera</Link>}</div></header>
+      <header className="registry-page__header"><div><p className="eyebrow">Live registry</p><h1 id="camera-registry-title">Camera registry</h1></div><div className="registry-page__actions">{hasPermission(session, 'camera.read') && <button className="button button--secondary" disabled={exporting} onClick={() => { void exportCsv(); }} type="button">{exporting ? 'Exporting…' : 'Export CSV'}</button>}{hasPermission(session, 'camera.reconcile') && <Link className="button button--secondary" to="/cameras/reconciliation">Reconcile</Link>}{hasPermission(session, 'camera.import') && <Link className="button button--secondary" to="/cameras/import">Bulk import</Link>}{hasPermission(session, 'camera.create') && <Link className="button" to="/cameras/new">Register camera</Link>}</div></header>
+      {exportError && <p className="form-error" role="alert">{exportError}</p>}
       <CameraFilters filters={draftFilters} onChange={setFilter} onClear={clearFilters} />
       <div aria-label="Registry results" role="region" aria-busy={registry.isFetching}>
       {registry.isPending ? <PageState title="Loading camera registry">Retrieving authorized camera records…</PageState>

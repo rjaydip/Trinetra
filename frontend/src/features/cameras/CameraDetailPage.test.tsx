@@ -72,6 +72,22 @@ describe('CameraDetailPage', () => {
     expect(screen.queryByText(/credential reference/i)).not.toBeInTheDocument();
   });
 
+  it('shows an edit link only when the session holds camera.update', async () => {
+    signIn(['camera.health.read', 'camera.update']);
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL) => String(input).endsWith(cameraId) ? Response.json(camera()) : new Response(null, { status: 403 }));
+    renderApp(`/cameras/${cameraId}`);
+    await screen.findByRole('heading', { name: 'North Gate' });
+    expect(screen.getByRole('link', { name: /edit camera/i })).toHaveAttribute('href', `/cameras/${cameraId}/edit`);
+  });
+
+  it('hides the edit link without camera.update', async () => {
+    signIn(['camera.health.read']);
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL) => String(input).endsWith(cameraId) ? Response.json(camera()) : new Response(null, { status: 403 }));
+    renderApp(`/cameras/${cameraId}`);
+    await screen.findByRole('heading', { name: 'North Gate' });
+    expect(screen.queryByRole('link', { name: /edit camera/i })).not.toBeInTheDocument();
+  });
+
   it.each(['loaded', 'empty', 'forbidden'] as const)('renders the backend health-history %s state', async (state) => {
     signIn();
     vi.stubGlobal('fetch', async (input: RequestInfo | URL) => {

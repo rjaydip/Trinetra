@@ -1,0 +1,7 @@
+.correlation-dashboard { display: grid; gap: 1.25rem; }
+.correlation-dashboard > header h1 { margin: .25rem 0 0; }
+.correlation-dashboard > header > p:last-child { color: var(--color-muted); }
+.correlation-groups__toggle { white-space: nowrap; }
+.correlation-groups__detail-row td { padding-top: 0; background: var(--color-surface-sunken, var(--color-surface)); }
+.correlation-dashboard__feed { display: grid; gap: .625rem; margin: 0; padding: 0; list-style: none; }
+.correlation-dashboard__feed li { display: flex; align-items: center; gap: .625rem; padding: .625rem .75rem; border: 1px solid var(--color-border); border-radius: .5rem; }

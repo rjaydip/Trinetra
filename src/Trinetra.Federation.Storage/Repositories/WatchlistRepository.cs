@@ -7,6 +7,13 @@ namespace Trinetra.Federation.Storage.Repositories;
 /// <summary>The outcome of acknowledging an alert: whose org owns it, and whether it was already done.</summary>
 public sealed record AlertAcknowledgement(Guid OrganizationUnitId, bool AlreadyAcknowledged);
 
+/// <summary>One prior detection found to match a plate newly added to the watchlist.</summary>
+public sealed record HistoricalMatch
+{
+    public string EventId { get; init; } = "";
+    public DateTimeOffset OccurredAt { get; init; }
+}
+
 /// <summary>A raised watchlist alert, joined with the entry and detection that produced it.</summary>
 public sealed record WatchlistAlertRow
 {
@@ -163,6 +170,38 @@ public sealed class WatchlistRepository
             work.Transaction, cancellationToken: ct));
 
         return row?.ToDomain();
+    }
+
+    /// <summary>
+    /// Every prior detection (already in <c>detection_event</c>) whose plate matches any of
+    /// <paramref name="plateVariants"/>, within the entry's own organization unit. Used to
+    /// backfill alerts when a plate is newly added to the watchlist, so history already on file
+    /// is not silently missed (only future ingests trigger <see cref="FindActiveMatchAsync"/>).
+    /// Capped at <paramref name="cap"/> — a plate with more prior sightings than that is itself a
+    /// signal worth surfacing as "capped" rather than silently truncated.
+    /// </summary>
+    public async Task<IReadOnlyList<HistoricalMatch>> FindHistoricalMatchesAsync(
+        Guid organizationUnitId, IReadOnlySet<string> plateVariants, int cap, UnitOfWork work,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(work);
+
+        if (plateVariants.Count == 0)
+        {
+            return [];
+        }
+
+        var rows = await work.Connection.QueryAsync<HistoricalMatch>(new CommandDefinition("""
+            SELECT event_id AS EventId, occurred_at AS OccurredAt
+            FROM federation.detection_event
+            WHERE organization_unit_id = @organizationUnitId
+              AND plate_number_normalized = ANY(@plateVariants)
+            ORDER BY occurred_at DESC
+            LIMIT @cap;
+            """, new { organizationUnitId, plateVariants = plateVariants.ToArray(), cap },
+            work.Transaction, cancellationToken: ct));
+
+        return [.. rows];
     }
 
     /// <summary>

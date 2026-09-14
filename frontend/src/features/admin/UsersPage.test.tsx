@@ -106,3 +106,56 @@ it('creates a user account', async () => {
   const create = requests.find((request) => request.path === '/api/v1/users' && request.method === 'POST');
   expect(create?.body).toMatchObject({ username: 'newuser', displayName: 'New User', password: 'Sup3rSecret!' });
 });
+
+it('sets a home organization unit, geographic area and designation when creating a user — descriptive metadata, not access control', async () => {
+  const orgId = '30000000-0000-4000-8000-000000000010';
+  const unitId = '30000000-0000-4000-8000-000000000011';
+  const areaId = '30000000-0000-4000-8000-000000000012';
+  const requests: Array<{ path: string; method: string; body?: Record<string, unknown> }> = [];
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = new URL(String(input)).pathname;
+    requests.push({
+      path, method: init?.method ?? 'GET',
+      body: typeof init?.body === 'string' ? JSON.parse(init.body) as Record<string, unknown> : undefined,
+    });
+    if (path === '/api/v1/users' && init?.method === 'POST') return Response.json({ id: userId }, { status: 201 });
+    if (path === '/api/v1/users') return Response.json({ items: [], page: 1, pageSize: 20, total: 0, totalPages: 0 });
+    if (path === '/api/v1/organizations') {
+      return Response.json({ items: [{ id: orgId, name: 'State Police', code: 'SP' }], page: 1, pageSize: 200, total: 1, totalPages: 1 });
+    }
+    if (path === `/api/v1/organizations/${orgId}/units`) {
+      return Response.json({
+        items: [{ id: unitId, organizationId: orgId, parentUnitId: null, code: 'HQ', name: 'Headquarters', unitType: 'DEPARTMENT', status: 'ACTIVE' }],
+        page: 1, pageSize: 200, total: 1, totalPages: 1,
+      });
+    }
+    if (path === '/api/v1/geographic-areas') {
+      return Response.json({
+        items: [{ id: areaId, parentAreaId: null, code: 'CTY', name: 'City Zone', areaType: 'CITY', status: 'ACTIVE' }],
+        page: 1, pageSize: 200, total: 1, totalPages: 1,
+      });
+    }
+    return new Response(null, { status: 404 });
+  }));
+
+  renderUsers(['user.read', 'user.manage']);
+
+  await screen.findByRole('heading', { name: /create user/i });
+  await userEvent.type(screen.getByLabelText(/username/i), 'newuser');
+  await userEvent.type(screen.getByLabelText(/display name/i), 'New User');
+  await userEvent.type(screen.getByLabelText(/initial password/i), 'Sup3rSecret!');
+
+  await userEvent.selectOptions(screen.getByLabelText(/home organization$/i), orgId);
+  await userEvent.click(screen.getByRole('combobox', { name: /home organization unit/i }));
+  await userEvent.click(await screen.findByRole('button', { name: /Headquarters \(HQ\)/ }));
+  await userEvent.click(screen.getByRole('combobox', { name: /home geographic area/i }));
+  await userEvent.click(await screen.findByRole('button', { name: /City Zone \(CTY\)/ }));
+  await userEvent.type(screen.getByLabelText(/designation/i), 'Station Inspector');
+
+  await userEvent.click(screen.getByRole('button', { name: /^create user$/i }));
+
+  const create = requests.find((request) => request.path === '/api/v1/users' && request.method === 'POST');
+  expect(create?.body).toMatchObject({
+    organizationUnitId: unitId, geographicAreaId: areaId, designation: 'Station Inspector',
+  });
+});

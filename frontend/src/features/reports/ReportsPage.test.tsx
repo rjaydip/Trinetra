@@ -16,6 +16,18 @@ function renderApp(path: string) {
   );
 }
 
+const emptyAgeingReport = {
+  totalCameras: 0,
+  buckets: [
+    { bucket: 'under_3', label: 'Under 3 years', count: 0 },
+    { bucket: '3_to_5', label: '3–5 years', count: 0 },
+    { bucket: '5_to_10', label: '5–10 years', count: 0 },
+    { bucket: '10_plus', label: '10+ years', count: 0 },
+    { bucket: 'unknown', label: 'Unknown installation date', count: 0 },
+  ],
+  oldestCameras: [] as unknown[],
+};
+
 function signIn() {
   sessionStorage.setItem('trinetra.auth.session', JSON.stringify({
     token: 'reports-token',
@@ -38,25 +50,43 @@ describe('ReportsPage', () => {
         targets: 10, activeTargets: 8, quarantinedTargets: 2, cameras: 12, unreachableCameras: 3,
       });
       if (url.pathname === '/api/v1/organizations' || url.pathname === '/api/v1/geographic-areas') return Response.json(pageEnvelope([]));
+      if (url.pathname === '/api/v1/cameras/reports/ageing-infrastructure') return Response.json({
+        totalCameras: 0,
+        buckets: [
+          { bucket: 'under_3', label: 'Under 3 years', count: 0 },
+          { bucket: '3_to_5', label: '3–5 years', count: 0 },
+          { bucket: '5_to_10', label: '5–10 years', count: 0 },
+          { bucket: '10_plus', label: '10+ years', count: 0 },
+          { bucket: 'unknown', label: 'Unknown installation date', count: 0 },
+        ],
+        oldestCameras: [],
+      });
       return new Response(null, { status: 404 });
     });
 
     renderApp('/reports');
 
-    expect(await screen.findByText(/coverage-gap analysis is not available yet/i)).toBeVisible();
+    expect(await screen.findByText(/choose a geographic area above/i)).toBeVisible();
     expect(screen.queryByText(/^0 gaps$/i)).not.toBeInTheDocument();
-    expect(screen.getByText(/ageing infrastructure reporting is not available yet/i)).toBeVisible();
+    expect(await screen.findByText(/no camera has a recorded installation date yet/i)).toBeVisible();
   });
 
-  it('renders backend fleet totals and selected coverage buckets without calling gaps', async () => {
+  it('renders backend fleet totals, selected coverage buckets, and the matching gap analysis', async () => {
     signIn();
     const fetch = vi.fn(async (input: RequestInfo | URL) => {
       const url = new URL(String(input));
+      if (url.pathname === '/api/v1/cameras/reports/ageing-infrastructure') return Response.json(emptyAgeingReport);
       if (url.pathname === '/api/v1/overview') {
         return Response.json({ targets: 10, activeTargets: 8, quarantinedTargets: 2, cameras: 12, unreachableCameras: 3 });
       }
       if (url.pathname === '/api/v1/gis/coverage') {
         return Response.json({ buckets: { operationalStatus: { ACTIVE: 9, INACTIVE: 3 } } });
+      }
+      if (url.pathname === '/api/v1/gis/gaps') {
+        return Response.json({
+          type: 'Feature', geometry: null,
+          properties: { geographicAreaId: 'c0a80101-0000-4000-8000-000000000030', cameraSectorsConsidered: 4, estimated: true, disclaimer: 'Estimated planning aid only.' },
+        });
       }
       if (url.pathname === '/api/v1/geographic-areas') {
         return Response.json(pageEnvelope([{ id: 'c0a80101-0000-4000-8000-000000000030', parentAreaId: null, code: 'MUM', name: 'Mumbai', areaType: 'CITY', status: 'ACTIVE' }]));
@@ -79,8 +109,10 @@ describe('ReportsPage', () => {
     expect(await screen.findByText('ACTIVE')).toBeVisible();
     expect(screen.getByText('9')).toBeVisible();
     expect(fetch.mock.calls.map(([input]) => String(input))).toContainEqual(expect.stringContaining('geographicAreaId=c0a80101-0000-4000-8000-000000000030'));
+    expect(await screen.findByText(/no gap found/i)).toBeVisible();
+    expect(screen.getByText('4')).toBeVisible();
+    expect(fetch.mock.calls.map(([input]) => String(input))).toContainEqual(expect.stringContaining('/api/v1/gis/gaps?geographicAreaId=c0a80101-0000-4000-8000-000000000030'));
     expect(screen.queryByLabelText(/coverage bounding box/i)).not.toBeInTheDocument();
-    await waitFor(() => expect(fetch.mock.calls.map(([input]) => String(input))).not.toContainEqual(expect.stringContaining('/api/v1/gis/gaps')));
     expect(screen.getAllByText(/estimated planning aid/i)).not.toHaveLength(0);
   });
 
@@ -88,6 +120,7 @@ describe('ReportsPage', () => {
     signIn();
     vi.stubGlobal('fetch', async (input: RequestInfo | URL) => {
       const url = new URL(String(input));
+      if (url.pathname === '/api/v1/cameras/reports/ageing-infrastructure') return Response.json(emptyAgeingReport);
       if (url.pathname === '/api/v1/overview') return Response.json({
         targets: 10, activeTargets: 8, quarantinedTargets: 2, cameras: 12, unreachableCameras: 3,
       });
@@ -111,6 +144,7 @@ describe('ReportsPage', () => {
     signIn();
     const fetch = vi.fn(async (input: RequestInfo | URL) => {
       const url = new URL(String(input));
+      if (url.pathname === '/api/v1/cameras/reports/ageing-infrastructure') return Response.json(emptyAgeingReport);
       if (url.pathname === '/api/v1/overview') return Response.json({
         targets: 10, activeTargets: 8, quarantinedTargets: 2, cameras: 12, unreachableCameras: 3,
       });
@@ -147,6 +181,7 @@ describe('ReportsPage', () => {
     signIn();
     vi.stubGlobal('fetch', async (input: RequestInfo | URL) => {
       const url = new URL(String(input));
+      if (url.pathname === '/api/v1/cameras/reports/ageing-infrastructure') return Response.json(emptyAgeingReport);
       if (url.pathname === '/api/v1/overview') return Response.json({
         targets: 10, activeTargets: 8, quarantinedTargets: 2, cameras: 12, unreachableCameras: 3,
       });
@@ -165,6 +200,7 @@ describe('ReportsPage', () => {
     signIn();
     vi.stubGlobal('fetch', async (input: RequestInfo | URL) => {
       const url = new URL(String(input));
+      if (url.pathname === '/api/v1/cameras/reports/ageing-infrastructure') return Response.json(emptyAgeingReport);
       if (url.pathname === '/api/v1/overview') {
         return Response.json({ type: 'about:blank', title: 'Forbidden', status: 403, detail: "This action requires the 'vms.read' permission." }, { status: 403 });
       }
@@ -184,6 +220,7 @@ describe('ReportsPage', () => {
     signIn();
     const fetch = vi.fn(async (input: RequestInfo | URL) => {
       const url = new URL(String(input));
+      if (url.pathname === '/api/v1/cameras/reports/ageing-infrastructure') return Response.json(emptyAgeingReport);
       if (url.pathname === '/api/v1/overview') return Response.json({
         targets: 10, activeTargets: 8, quarantinedTargets: 2, cameras: 12, unreachableCameras: 3,
       });
