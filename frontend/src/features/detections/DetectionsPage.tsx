@@ -5,6 +5,7 @@ import { errorDetail } from '../../api/client';
 import { api } from '../../api/endpoints';
 import { queryKeys } from '../../api/queryKeys';
 import { PageState } from '../../components/ui';
+import { useDocumentTitle } from '../../lib/useDocumentTitle';
 
 function isoOrUndefined(value: string): string | undefined {
   if (!value) return undefined;
@@ -17,20 +18,21 @@ function isoOrUndefined(value: string): string | undefined {
  * the standalone AI worker's own job (`POST /detections`), never a UI action.
  */
 export function DetectionsPage() {
+  useDocumentTitle('Detections');
   const [plateNumber, setPlateNumber] = useState('');
   const [targetId, setTargetId] = useState('');
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
 
-  const targets = useQuery({ queryKey: queryKeys.vms.all, queryFn: api.vms.list });
+  const targets = useQuery({ queryKey: queryKeys.vms.all, queryFn: ({ signal }) => api.vms.list(signal) });
   const detections = useQuery({
     queryKey: queryKeys.detections(plateNumber, targetId, from, to),
-    queryFn: () => api.detections.search({
+    queryFn: ({ signal }) => api.detections.search({
       plateNumber: plateNumber.trim() || undefined,
       targetId: targetId || undefined,
       from: isoOrUndefined(from),
       to: isoOrUndefined(to),
-    }),
+    }, signal),
   });
 
   return <section className="detections-page" aria-labelledby="detections-title">

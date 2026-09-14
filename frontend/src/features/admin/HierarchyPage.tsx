@@ -16,6 +16,7 @@ import { queryKeys } from '../../api/queryKeys';
 import { useAuth } from '../../auth/AuthProvider';
 import { hasPermission } from '../../auth/permissions';
 import { Button, PageState, StatusBadge } from '../../components/ui';
+import { useDocumentTitle } from '../../lib/useDocumentTitle';
 import { buildTree, type TreeNode } from '../../lib/tree';
 import './admin.css';
 
@@ -276,7 +277,7 @@ function MoveUnitControl({
 
   const targetUnits = useQuery({
     queryKey: queryKeys.admin.organizationUnits(targetOrganizationId),
-    queryFn: () => api.admin.organizations.listUnits(targetOrganizationId),
+    queryFn: ({ signal }) => api.admin.organizations.listUnits(targetOrganizationId, signal),
     enabled: Boolean(targetOrganizationId),
   });
 
@@ -347,6 +348,7 @@ function MoveUnitControl({
 }
 
 export function HierarchyPage() {
+  useDocumentTitle('Organization & geography');
   const { session } = useAuth();
   const queryClient = useQueryClient();
   const canReadOrganizations = hasPermission(session, 'organization.read');
@@ -373,14 +375,14 @@ export function HierarchyPage() {
   const [addAreaParentId, setAddAreaParentId] = useState<string | 'root' | null>(null);
 
   const organizations = useQuery({
-    queryKey: queryKeys.admin.organizations, queryFn: api.admin.organizations.list, enabled: showOrganizationDomain,
+    queryKey: queryKeys.admin.organizations, queryFn: ({ signal }) => api.admin.organizations.list(signal), enabled: showOrganizationDomain,
   });
   const effectiveOrganizationId = organizationId || organizations.data?.[0]?.id || '';
   const currentOrg = organizations.data?.find((o) => o.id === effectiveOrganizationId);
 
   const units = useQuery({
     queryKey: queryKeys.admin.organizationUnits(effectiveOrganizationId),
-    queryFn: () => api.admin.organizations.listUnits(effectiveOrganizationId),
+    queryFn: ({ signal }) => api.admin.organizations.listUnits(effectiveOrganizationId, signal),
     enabled: showOrganizationDomain && Boolean(effectiveOrganizationId),
   });
   const unitList = units.data ?? [];
@@ -388,14 +390,14 @@ export function HierarchyPage() {
   const currentUnit = unitList.find((u) => u.id === effectiveUnitId);
 
   const areas = useQuery({
-    queryKey: queryKeys.admin.geographicAreas, queryFn: () => api.admin.geography.listAreas(), enabled: showGeographyDomain,
+    queryKey: queryKeys.admin.geographicAreas, queryFn: ({ signal }) => api.admin.geography.listAreas(undefined, signal), enabled: showGeographyDomain,
   });
   const areaList = areas.data ?? [];
   const effectiveAreaId = selectedAreaId || areaList[0]?.id || '';
   const currentArea = areaList.find((a) => a.id === effectiveAreaId);
 
   const areaTypes = useQuery({
-    queryKey: queryKeys.admin.geographicAreaTypes, queryFn: api.admin.geography.listAreaTypes, enabled: showGeographyDomain && canManageGeography,
+    queryKey: queryKeys.admin.geographicAreaTypes, queryFn: ({ signal }) => api.admin.geography.listAreaTypes(signal), enabled: showGeographyDomain && canManageGeography,
   });
 
   // Mutations for creation

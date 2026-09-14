@@ -4,10 +4,12 @@ import { useNavigate } from 'react-router-dom';
 import './auth.css';
 import { isApiProblem } from '../api/client';
 import { Button, PasswordInput } from '../components/ui';
+import { useDocumentTitle } from '../lib/useDocumentTitle';
 import { AuthBrandPanel } from './AuthBrandPanel';
 import { useAuth } from './AuthProvider';
 
 export function PasswordPage() {
+  useDocumentTitle('Change password');
   const { changePassword } = useAuth();
   const navigate = useNavigate();
   const [currentPassword, setCurrentPassword] = useState('');

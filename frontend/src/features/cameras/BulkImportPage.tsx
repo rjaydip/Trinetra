@@ -6,6 +6,7 @@ import { api } from '../../api/endpoints';
 import type { BulkImportRequest, BulkImportResult } from '../../api/models';
 import { queryKeys } from '../../api/queryKeys';
 import { Button } from '../../components/ui';
+import { useDocumentTitle } from '../../lib/useDocumentTitle';
 import { createSampleImport, parseBulkImport } from './import';
 import './cameras.css';
 
@@ -24,6 +25,7 @@ function readJsonFile(file: File): Promise<string> {
 }
 
 export function BulkImportPage() {
+  useDocumentTitle('Bulk import cameras');
   const queryClient = useQueryClient();
   const [request, setRequest] = useState<BulkImportRequest | null>(null);
   const [fileName, setFileName] = useState<string | null>(null);

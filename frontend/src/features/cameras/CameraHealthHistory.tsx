@@ -8,7 +8,7 @@ import { hasPermission } from '../../auth/permissions';
 export function CameraHealthHistory({ cameraId }: { cameraId: string }) {
   const { session } = useAuth();
   const permitted = hasPermission(session, 'camera.health.read');
-  const history = useQuery({ queryKey: queryKeys.camera.healthHistory(cameraId), queryFn: () => api.cameras.healthHistory(cameraId), enabled: permitted });
+  const history = useQuery({ queryKey: queryKeys.camera.healthHistory(cameraId), queryFn: ({ signal }) => api.cameras.healthHistory(cameraId, undefined, signal), enabled: permitted });
   const unavailable = !permitted || (isApiProblem(history.error) && history.error.status === 403);
 
   return <section className="detail-panel" aria-labelledby="camera-health-history-heading">

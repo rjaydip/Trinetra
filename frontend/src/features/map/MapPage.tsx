@@ -5,6 +5,7 @@ import './map.css';
 import { api } from '../../api/endpoints';
 import { queryKeys } from '../../api/queryKeys';
 import { PageState } from '../../components/ui';
+import { useDocumentTitle } from '../../lib/useDocumentTitle';
 import { AttentionList } from './AttentionList';
 import { CameraDetailDrawer } from './CameraDetailDrawer';
 import { CameraMap } from './CameraMap';
@@ -14,11 +15,12 @@ import { FleetStatusFooter } from './FleetStatusFooter';
 import { buildMapRequest, filterMapFeatures, initialBoundsFromCameras, type Bounds, type MapFilters as MapFiltersValue } from './geo';
 
 export function MapPage() {
+  useDocumentTitle('Dashboard');
   const [filters, setFilters] = useState<MapFiltersValue>({});
   const [bounds, setBounds] = useState<Bounds | null>(null);
   const [cameraId, setCameraId] = useState<string | null>(null);
   const [mapOpen, setMapOpen] = useState(false);
-  const registry = useQuery({ queryKey: queryKeys.cameras.mapBootstrap, queryFn: () => api.cameras.list({ limit: 100 }), enabled: mapOpen });
+  const registry = useQuery({ queryKey: queryKeys.cameras.mapBootstrap, queryFn: ({ signal }) => api.cameras.list({ limit: 100 }, signal), enabled: mapOpen });
   const initialBounds = useMemo(() => registry.data && initialBoundsFromCameras(registry.data.items), [registry.data]);
 
   useEffect(() => { if (initialBounds && !bounds) setBounds(initialBounds); }, [bounds, initialBounds]);
@@ -26,13 +28,13 @@ export function MapPage() {
   const request = bounds && buildMapRequest(bounds, filters);
   const map = useQuery({
     queryKey: queryKeys.gisCameras.feed(request?.toString()),
-    queryFn: () => api.gis.cameras({
+    queryFn: ({ signal }) => api.gis.cameras({
       bbox: request!.get('bbox')!,
       includeSectors: request!.get('includeSectors') === 'true' || undefined,
       organizationUnitId: request!.get('organizationUnitId') ?? undefined,
       operationalStatus: request!.get('operationalStatus') ?? undefined,
       maintenanceStatus: request!.get('maintenanceStatus') ?? undefined,
-    }),
+    }, signal),
     enabled: request !== null,
   });
   const features = useMemo(() => map.data ? filterMapFeatures(map.data, filters) : { type: 'FeatureCollection' as const, features: [] }, [filters, map.data]);

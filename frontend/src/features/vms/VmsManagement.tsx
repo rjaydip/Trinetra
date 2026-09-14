@@ -97,14 +97,14 @@ export function VmsEditForm({ target, onSuccess }: {
 
   const currentUnit = useQuery({
     queryKey: queryKeys.reference.organizationUnit(target.organizationUnitId),
-    queryFn: () => api.reference.organizationUnit(target.organizationUnitId),
+    queryFn: ({ signal }) => api.reference.organizationUnit(target.organizationUnitId, signal),
   });
   const organizationUnits = useQuery({
     queryKey: queryKeys.reference.organizationUnits(currentUnit.data?.organizationId ?? ''),
-    queryFn: () => api.reference.organizationUnits(currentUnit.data!.organizationId),
+    queryFn: ({ signal }) => api.reference.organizationUnits(currentUnit.data!.organizationId, signal),
     enabled: Boolean(currentUnit.data),
   });
-  const geographicAreas = useQuery({ queryKey: queryKeys.reference.geographicAreas, queryFn: () => api.reference.geographicAreas() });
+  const geographicAreas = useQuery({ queryKey: queryKeys.reference.geographicAreas, queryFn: ({ signal }) => api.reference.geographicAreas(undefined, signal) });
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -179,7 +179,7 @@ export function VmsEditForm({ target, onSuccess }: {
 
 /** `GET /vms/{id}/health` — what the workers have actually observed, newest first. */
 export function VmsHealthPanel({ vmsId }: { vmsId: string }) {
-  const health = useQuery({ queryKey: queryKeys.vms.health(vmsId), queryFn: () => api.vms.health(vmsId) });
+  const health = useQuery({ queryKey: queryKeys.vms.health(vmsId), queryFn: ({ signal }) => api.vms.health(vmsId, undefined, signal) });
 
   if (health.isPending) return <p>Loading health history…</p>;
   if (health.isError) return <p className="form-error">{errorDetail(health.error, 'Health history could not be loaded.')}</p>;
@@ -209,7 +209,7 @@ const capabilityBits: Array<[number, string]> = [
 
 /** `GET /vms/{id}/capabilities` — served from the stored matrix, never by probing the device. */
 export function VmsCapabilitiesPanel({ vmsId }: { vmsId: string }) {
-  const capabilities = useQuery({ queryKey: queryKeys.vms.capabilities(vmsId), queryFn: () => api.vms.capabilities(vmsId) });
+  const capabilities = useQuery({ queryKey: queryKeys.vms.capabilities(vmsId), queryFn: ({ signal }) => api.vms.capabilities(vmsId, signal) });
 
   if (capabilities.isPending) return <p>Loading capabilities…</p>;
   if (capabilities.isError) {

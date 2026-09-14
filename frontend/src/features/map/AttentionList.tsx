@@ -18,7 +18,7 @@ const ATTENTION_LIMIT = 10;
 export function AttentionList() {
   const unreachable = useQuery({
     queryKey: queryKeys.cameras.attentionList,
-    queryFn: () => api.cameras.list({ connectivityStatus: 'DISCONNECTED', limit: 200 }),
+    queryFn: ({ signal }) => api.cameras.list({ connectivityStatus: 'DISCONNECTED', limit: 200 }, signal),
   });
 
   return <section aria-labelledby="attention-list-heading">

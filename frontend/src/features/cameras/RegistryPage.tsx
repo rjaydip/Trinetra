@@ -8,6 +8,7 @@ import { queryKeys } from '../../api/queryKeys';
 import { useAuth } from '../../auth/AuthProvider';
 import { hasPermission } from '../../auth/permissions';
 import { PageState } from '../../components/ui';
+import { useDocumentTitle } from '../../lib/useDocumentTitle';
 import { CameraCards } from './CameraCards';
 import { CameraFilters, type RegistryFilters } from './CameraFilters';
 import { CameraTable } from './CameraTable';
@@ -36,6 +37,7 @@ function filterSignature(filters: RegistryFilters) {
 }
 
 export function RegistryPage() {
+  useDocumentTitle('Camera registry');
   const { session } = useAuth();
   const [search, setSearch] = useSearchParams();
   const committedFilters = filtersFromSearch(search);
@@ -73,7 +75,7 @@ export function RegistryPage() {
   }, [committedSignature, draftFilters, draftSignature, search, setSearch]);
 
   const request = { ...committedFilters, cursor: search.get('cursor') || undefined, limit: 50 };
-  const registry = useQuery({ queryKey: queryKeys.cameras.registry(search.toString()), queryFn: () => api.cameras.list(request) });
+  const registry = useQuery({ queryKey: queryKeys.cameras.registry(search.toString()), queryFn: ({ signal }) => api.cameras.list(request, signal) });
   const filtersPending = draftSignature !== committedSignature;
 
   function setFilter(name: keyof RegistryFilters, value: string | boolean | undefined) {

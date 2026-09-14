@@ -9,6 +9,7 @@ import { queryKeys } from '../../api/queryKeys';
 import { useAuth } from '../../auth/AuthProvider';
 import { hasPermission } from '../../auth/permissions';
 import { Button, PageState } from '../../components/ui';
+import { useDocumentTitle } from '../../lib/useDocumentTitle';
 import { cameraTypes, roundCoordinate } from './cameraVocabulary';
 import { TreeSelect } from './TreeSelect';
 import './cameras.css';
@@ -29,7 +30,7 @@ function FieldError({ id, message }: { id: string; message?: string }) {
 function OrganizationUnitName({ id }: { id: string }) {
   const result = useQuery({
     queryKey: queryKeys.reference.organizationUnit(id),
-    queryFn: () => api.reference.organizationUnit(id),
+    queryFn: ({ signal }) => api.reference.organizationUnit(id, signal),
   });
   return <>{result.data?.name ?? id}</>;
 }
@@ -38,7 +39,7 @@ function OrganizationUnitName({ id }: { id: string }) {
 function GeographicAreaName({ id }: { id: string }) {
   const result = useQuery({
     queryKey: queryKeys.reference.geographicArea(id),
-    queryFn: () => api.reference.geographicArea(id),
+    queryFn: ({ signal }) => api.reference.geographicArea(id, signal),
   });
   return <>{result.data?.name ?? id}</>;
 }
@@ -48,7 +49,7 @@ function LinkExistingForm({ row, onSuccess }: { row: UnreconciledCameraResponse;
   const [query, setQuery] = useState('');
   const results = useQuery({
     queryKey: queryKeys.cameras.search(query),
-    queryFn: () => api.cameras.list({ q: query, limit: 5 }),
+    queryFn: ({ signal }) => api.cameras.list({ q: query, limit: 5 }, signal),
     enabled: query.trim().length >= 2,
   });
   const mutation = useMutation({
@@ -161,14 +162,14 @@ function CreateFromFederatedForm({ row, onSuccess }: { row: UnreconciledCameraRe
   // still needs to pick a sibling under the same organization, not type a bare UUID.
   const reportedUnit = useQuery({
     queryKey: queryKeys.reference.organizationUnit(row.organizationUnitId),
-    queryFn: () => api.reference.organizationUnit(row.organizationUnitId),
+    queryFn: ({ signal }) => api.reference.organizationUnit(row.organizationUnitId, signal),
   });
   const organizationUnits = useQuery({
     queryKey: queryKeys.reference.organizationUnits(reportedUnit.data?.organizationId ?? ''),
-    queryFn: () => api.reference.organizationUnits(reportedUnit.data!.organizationId),
+    queryFn: ({ signal }) => api.reference.organizationUnits(reportedUnit.data!.organizationId, signal),
     enabled: Boolean(reportedUnit.data),
   });
-  const geographicAreas = useQuery({ queryKey: queryKeys.reference.geographicAreas, queryFn: () => api.reference.geographicAreas() });
+  const geographicAreas = useQuery({ queryKey: queryKeys.reference.geographicAreas, queryFn: ({ signal }) => api.reference.geographicAreas(undefined, signal) });
 
   function submit() {
     const nextErrors = validateCreateValues(values);
@@ -231,6 +232,7 @@ function CreateFromFederatedForm({ row, onSuccess }: { row: UnreconciledCameraRe
 }
 
 export function ReconciliationPage() {
+  useDocumentTitle('Reconciliation backlog');
   const { session } = useAuth();
   const queryClient = useQueryClient();
   const canCreate = hasPermission(session, 'camera.create');
@@ -239,10 +241,10 @@ export function ReconciliationPage() {
   const [expandedRow, setExpandedRow] = useState('');
   const [mode, setMode] = useState<'link' | 'create' | ''>('');
 
-  const targets = useQuery({ queryKey: queryKeys.vms.all, queryFn: api.vms.list });
+  const targets = useQuery({ queryKey: queryKeys.vms.all, queryFn: ({ signal }) => api.vms.list(signal) });
   const unreconciled = useQuery({
     queryKey: queryKeys.reconciliation.unreconciled(targetId, cursor),
-    queryFn: () => api.reconciliation.unreconciled({ targetId: targetId || undefined, cursor }),
+    queryFn: ({ signal }) => api.reconciliation.unreconciled({ targetId: targetId || undefined, cursor }, signal),
   });
 
   function changeTarget(nextTargetId: string) {

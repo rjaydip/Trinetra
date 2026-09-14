@@ -16,7 +16,7 @@
 .location-picker { display: grid; gap: .75rem; padding-top: .25rem; }
 .location-picker h3, .location-picker p { margin: 0; }
 .location-picker > div:first-child p { margin-top: .25rem; color: var(--color-muted); font-size: .875rem; }
-.location-picker__canvas { min-height: 20rem; overflow: hidden; border: 1px solid var(--color-border); border-radius: .625rem; background: #dbeafe; }
+.location-picker__canvas { min-height: 20rem; overflow: hidden; border: 1px solid var(--color-border); border-radius: .625rem; background: var(--color-primary-tint-strong); }
 .location-picker__marker { position: relative; width: 1.75rem; height: 1.75rem; }
 .location-picker__pin { position: absolute; z-index: 1; inset: 0; border: .1875rem solid white; border-radius: 50% 50% 50% 0; background: var(--color-danger); box-shadow: 0 .125rem .375rem rgb(15 23 42 / 35%); transform: rotate(-45deg); }
 .location-picker__azimuth-arm { position: absolute; z-index: 0; left: 50%; bottom: 50%; width: .125rem; height: 3.5rem; background: var(--color-primary); transform-origin: bottom center; }
@@ -93,7 +93,7 @@
 .tree-select__chevron--open { transform: rotate(90deg); }
 .tree-select__label { flex: 1; padding: .375rem .5rem; color: var(--color-text); text-align: left; background: none; border: 0; border-radius: .25rem; cursor: pointer; font: inherit; font-weight: 500; }
 .tree-select__label:hover { background: var(--color-canvas); }
-.tree-select__label[aria-current='true'] { color: var(--color-primary); font-weight: 700; background: #e0f2fe; }
+.tree-select__label[aria-current='true'] { color: var(--color-primary); font-weight: 700; background: var(--color-primary-tint); }
 .tree-select__code { color: var(--color-muted); font-weight: 400; }
 
 @media (max-width: 42rem) {

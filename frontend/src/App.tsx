@@ -8,6 +8,7 @@ import { PasswordPage } from './auth/PasswordPage';
 import { RequireAuth } from './auth/RequireAuth';
 import { RequirePermission } from './auth/RequirePermission';
 import { AppShell } from './components/AppShell';
+import { ToastProvider } from './components/Toast';
 import { PageState } from './components/ui';
 import { AdminPage, RequireAnyAdminPermission, supportedAdminReadPermissions } from './features/admin/AdminPage';
 
@@ -34,7 +35,13 @@ export function App() {
   const { session } = useAuth();
   // A new issued session owns a fresh cache and fresh feature state. The key is
   // never rendered or sent to the server; it is not an authorization decision.
-  return <SessionApplication key={session?.token ?? 'signed-out'} />;
+  // ToastProvider sits outside that remount so a toast fired during the transition
+  // (e.g. the session-expiry toast itself) survives it.
+  return (
+    <ToastProvider>
+      <SessionApplication key={session?.token ?? 'signed-out'} />
+    </ToastProvider>
+  );
 }
 
 function SessionApplication() {

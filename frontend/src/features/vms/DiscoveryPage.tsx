@@ -13,6 +13,7 @@ import type {
 } from '../../api/models';
 import { queryKeys } from '../../api/queryKeys';
 import { Button, PageState, StatusBadge } from '../../components/ui';
+import { useDocumentTitle } from '../../lib/useDocumentTitle';
 import { LocationPicker } from '../cameras/LocationPicker';
 import { TreeSelect } from '../cameras/TreeSelect';
 import { cameraTypes } from '../cameras/cameraVocabulary';
@@ -55,7 +56,7 @@ function ReferenceError({ children, retry }: { children: string; retry(): void }
 function StatusHistoryPanel({ vmsId, row }: { vmsId: string; row: FederatedCameraResponse }) {
   const history = useQuery({
     queryKey: queryKeys.vms.cameraStatusHistory(vmsId, row.nativeCameraId),
-    queryFn: () => api.vms.cameraStatusHistory(vmsId, row.nativeCameraId),
+    queryFn: ({ signal }) => api.vms.cameraStatusHistory(vmsId, row.nativeCameraId, undefined, signal),
   });
 
   if (history.isPending) return <p>Loading status history…</p>;
@@ -111,7 +112,7 @@ function DiscoveryRow({
   const linked = row.cameraId !== null;
   const organizationUnits = useQuery({
     queryKey: queryKeys.reference.organizationUnits(organizationId),
-    queryFn: () => api.reference.organizationUnits(organizationId),
+    queryFn: ({ signal }) => api.reference.organizationUnits(organizationId, signal),
     enabled: Boolean(organizationId),
   });
   const latitude = validCoordinate(enrichment.latitude, -90, 90);
@@ -119,7 +120,7 @@ function DiscoveryRow({
   const mapBbox = selected && latitude !== null && longitude !== null ? boundedBbox(latitude, longitude) : null;
   const mapContext = useQuery({
     queryKey: queryKeys.gisCameras.vmsDiscoveryPicker(row.nativeCameraId, mapBbox),
-    queryFn: () => api.gis.cameras({ bbox: mapBbox! }),
+    queryFn: ({ signal }) => api.gis.cameras({ bbox: mapBbox! }, signal),
     enabled: mapBbox !== null,
   });
   const mapFeatures: GeoJsonFeatureCollection | undefined = mapContext.data;
@@ -223,10 +224,11 @@ export function DiscoveryPage() {
 
 function DiscoveryWorkspace({ vmsId }: { vmsId: string }) {
   const queryClient = useQueryClient();
-  const target = useQuery({ queryKey: queryKeys.vms.detail(vmsId), queryFn: () => api.vms.get(vmsId), enabled: Boolean(vmsId) });
-  const cameras = useQuery({ queryKey: queryKeys.vms.discoveredCameras(vmsId), queryFn: () => api.vms.discoveredCameras(vmsId), enabled: Boolean(vmsId) });
-  const organizations = useQuery({ queryKey: queryKeys.reference.organizations, queryFn: api.reference.organizations });
-  const geographicAreas = useQuery({ queryKey: queryKeys.reference.geographicAreas, queryFn: () => api.reference.geographicAreas() });
+  const target = useQuery({ queryKey: queryKeys.vms.detail(vmsId), queryFn: ({ signal }) => api.vms.get(vmsId, signal), enabled: Boolean(vmsId) });
+  useDocumentTitle(target.data ? `Import cameras from ${target.data.displayName}` : 'VMS discovery');
+  const cameras = useQuery({ queryKey: queryKeys.vms.discoveredCameras(vmsId), queryFn: ({ signal }) => api.vms.discoveredCameras(vmsId, signal), enabled: Boolean(vmsId) });
+  const organizations = useQuery({ queryKey: queryKeys.reference.organizations, queryFn: ({ signal }) => api.reference.organizations(signal) });
+  const geographicAreas = useQuery({ queryKey: queryKeys.reference.geographicAreas, queryFn: ({ signal }) => api.reference.geographicAreas(undefined, signal) });
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [enrichments, setEnrichments] = useState<Record<string, DiscoveredCameraEnrichment>>({});

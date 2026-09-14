@@ -5,6 +5,7 @@ import { errorDetail } from '../../api/client';
 import { api } from '../../api/endpoints';
 import { queryKeys } from '../../api/queryKeys';
 import { PageState, StatusBadge } from '../../components/ui';
+import { useDocumentTitle } from '../../lib/useDocumentTitle';
 
 function toDateTimeLocal(date: Date): string {
   const pad = (n: number) => String(n).padStart(2, '0');
@@ -26,6 +27,7 @@ const defaultFrom = () => toDateTimeLocal(new Date(Date.now() - 60 * 60 * 1000))
  * takes the database down). This page supplies a sensible default window instead.
  */
 export function EventsPage() {
+  useDocumentTitle('Events');
   const [from, setFrom] = useState(defaultFrom);
   const [to, setTo] = useState(defaultTo);
   const [cameraId, setCameraId] = useState('');
@@ -39,13 +41,13 @@ export function EventsPage() {
 
   const events = useQuery({
     queryKey: queryKeys.events(fromIso, toIso, cameraId, eventType, objectReference, cursor),
-    queryFn: () => api.events.query({
+    queryFn: ({ signal }) => api.events.query({
       from: fromIso!, to: toIso!,
       cameraId: cameraId.trim() || undefined,
       eventType: eventType.trim() || undefined,
       objectReference: objectReference.trim() || undefined,
       cursor,
-    }),
+    }, signal),
     enabled: rangeValid,
   });
 

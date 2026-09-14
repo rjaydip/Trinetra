@@ -24,7 +24,7 @@
 .selector-status { grid-column: 1 / -1; padding: .625rem .75rem; color: var(--color-muted); background: var(--color-canvas); border-left: .25rem solid var(--color-border); }
 .selector-status p { margin: 0; }
 .selector-status .button { margin-top: .5rem; }
-.save-confirmation { padding: .75rem; color: var(--color-success); background: #f0fdf4; border-left: .25rem solid var(--color-success); }
+.save-confirmation { padding: .75rem; color: var(--color-success); background: var(--color-success-tint); border-left: .25rem solid var(--color-success); }
 .vms-detail-page > header { padding-bottom: 1rem; border-bottom: 1px solid var(--color-border); }
 .vms-detail-page > header p:last-child { margin-bottom: 0; color: var(--color-muted); }
 .credential-panel { display: grid; gap: 1rem; }

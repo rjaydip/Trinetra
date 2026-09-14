@@ -8,6 +8,7 @@ import { queryKeys } from '../../api/queryKeys';
 import { useAuth } from '../../auth/AuthProvider';
 import { hasPermission } from '../../auth/permissions';
 import { Button, Pager, PageState, StatusBadge } from '../../components/ui';
+import { useDocumentTitle } from '../../lib/useDocumentTitle';
 import { OrganizationUnitFilter } from '../cameras/OrganizationUnitFilter';
 import './admin.css';
 
@@ -24,7 +25,7 @@ function EntriesSection({ canManage }: { canManage: boolean }) {
 
   const entries = useQuery({
     queryKey: queryKeys.watchlist.entriesPage(true, page, pageSize),
-    queryFn: () => api.admin.watchlist.listPage({ active: true, page, pageSize }),
+    queryFn: ({ signal }) => api.admin.watchlist.listPage({ active: true, page, pageSize }, signal),
   });
 
   const create = useMutation({
@@ -90,7 +91,7 @@ function AlertsSection({ canAcknowledge }: { canAcknowledge: boolean }) {
 
   const alerts = useQuery({
     queryKey: queryKeys.watchlist.alertsPage(false, page, pageSize),
-    queryFn: () => api.admin.watchlist.listAlertsPage({ acknowledged: false, page, pageSize }),
+    queryFn: ({ signal }) => api.admin.watchlist.listAlertsPage({ acknowledged: false, page, pageSize }, signal),
   });
 
   const acknowledge = useMutation({
@@ -116,6 +117,7 @@ function AlertsSection({ canAcknowledge }: { canAcknowledge: boolean }) {
 }
 
 export function WatchlistPage() {
+  useDocumentTitle('Watchlist');
   const { session } = useAuth();
   const canManage = hasPermission(session, 'watchlist.manage');
   const canAcknowledge = hasPermission(session, 'alert.acknowledge');

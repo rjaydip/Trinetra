@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom';
 
 import { useAuth } from '../../auth/AuthProvider';
@@ -73,6 +73,9 @@ export function AdminPage() {
     destination.permissions.some((permission) => hasPermission(session, permission))
   ));
   const isLanding = location.pathname.replace(/\/$/, '') === '/admin';
+  // Only set a title when landing directly on /admin — an active sub-route owns its own title,
+  // and this effect running after the child's (parent effects fire after children) would clobber it.
+  useEffect(() => { if (isLanding) document.title = 'Administration · Trinetra Registry'; }, [isLanding]);
 
   return <section className="admin-page" aria-labelledby="admin-title">
     <header className="admin-page__header">

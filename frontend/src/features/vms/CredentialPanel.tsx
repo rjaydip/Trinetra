@@ -97,12 +97,12 @@ export function CredentialPanel({ vmsId, permissions }: { vmsId: string; permiss
 
   const credentialStatus = useQuery({
     queryKey: queryKeys.vms.credentialStatus(vmsId),
-    queryFn: () => api.credentials.status(vmsId),
+    queryFn: ({ signal }) => api.credentials.status(vmsId, signal),
   });
   const connectionTest = useQuery({
     queryKey: queryKeys.vms.connectionTest(vmsId, testId),
     enabled: Boolean(testStatusUrl),
-    queryFn: async () => sanitizeTestResult(await api.connectionTests.get(testStatusUrl)),
+    queryFn: async ({ signal }) => sanitizeTestResult(await api.connectionTests.get(testStatusUrl, signal)),
     retry: false,
     refetchInterval: (query) => testInProgress(query.state.data?.status) ? 1_000 : false,
   });

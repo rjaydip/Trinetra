@@ -9,7 +9,7 @@ import './map.css';
 
 /** The 3-second "is my fleet healthy" read — the first thing an operator sees after login. */
 export function FleetStatusStrip() {
-  const overview = useQuery({ queryKey: queryKeys.overview, queryFn: api.overview });
+  const overview = useQuery({ queryKey: queryKeys.overview, queryFn: ({ signal }) => api.overview(signal) });
 
   if (overview.isPending) return <section aria-labelledby="dashboard-fleet-heading"><h2 id="dashboard-fleet-heading">Fleet status</h2><p role="status">Loading fleet summary…</p></section>;
   if (overview.isError) {
@@ -53,7 +53,7 @@ export function FleetStatusStrip() {
 export function DashboardSearch() {
   const [draft, setDraft] = useState('');
   const [query, setQuery] = useState('');
-  const results = useQuery({ queryKey: queryKeys.cameras.dashboardSearch(query), queryFn: () => api.cameras.list({ q: query, limit: 10 }), enabled: Boolean(query) });
+  const results = useQuery({ queryKey: queryKeys.cameras.dashboardSearch(query), queryFn: ({ signal }) => api.cameras.list({ q: query, limit: 10 }, signal), enabled: Boolean(query) });
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const next = draft.trim();

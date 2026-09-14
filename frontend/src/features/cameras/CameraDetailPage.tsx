@@ -6,6 +6,7 @@ import { api } from '../../api/endpoints';
 import type { MaintenanceRecordResponse } from '../../api/models';
 import { queryKeys } from '../../api/queryKeys';
 import { PageState, StatusBadge } from '../../components/ui';
+import { useDocumentTitle } from '../../lib/useDocumentTitle';
 import { CameraDetailSections } from './CameraDetailSections';
 import { CameraHealthHistory } from './CameraHealthHistory';
 import { statusTone } from './statusTone';
@@ -32,9 +33,10 @@ function MaintenanceList({ records }: { records: MaintenanceRecordResponse[] }) 
 
 export function CameraDetailPage() {
   const { cameraId } = useParams();
-  const camera = useQuery({ queryKey: queryKeys.camera.detail(cameraId!), queryFn: () => api.cameras.get(cameraId!), enabled: Boolean(cameraId) });
-  const health = useQuery({ queryKey: queryKeys.camera.health(cameraId!), queryFn: () => api.cameras.health(cameraId!), enabled: Boolean(camera.data) });
-  const maintenance = useQuery({ queryKey: queryKeys.camera.maintenance(cameraId!), queryFn: () => api.cameras.maintenance(cameraId!), enabled: Boolean(camera.data) });
+  const camera = useQuery({ queryKey: queryKeys.camera.detail(cameraId!), queryFn: ({ signal }) => api.cameras.get(cameraId!, signal), enabled: Boolean(cameraId) });
+  const health = useQuery({ queryKey: queryKeys.camera.health(cameraId!), queryFn: ({ signal }) => api.cameras.health(cameraId!, signal), enabled: Boolean(camera.data) });
+  const maintenance = useQuery({ queryKey: queryKeys.camera.maintenance(cameraId!), queryFn: ({ signal }) => api.cameras.maintenance(cameraId!, undefined, signal), enabled: Boolean(camera.data) });
+  useDocumentTitle(camera.data?.cameraCode ?? 'Camera detail');
 
   if (camera.isPending) return <PageState title="Loading camera details">Retrieving the current registry record…</PageState>;
   if (camera.isError || !camera.data) return <PageState title="Couldn&apos;t load camera details">Return to the registry and select a camera again.</PageState>;

@@ -9,6 +9,7 @@ import { queryKeys } from '../../api/queryKeys';
 import { useAuth } from '../../auth/AuthProvider';
 import { hasPermission } from '../../auth/permissions';
 import { Button, Pager, PageState, StatusBadge } from '../../components/ui';
+import { useDocumentTitle } from '../../lib/useDocumentTitle';
 import type { SelectorState } from '../cameras/CameraForm';
 import { CredentialPanel } from './CredentialPanel';
 import { VmsCapabilitiesPanel, VmsDeleteControl, VmsEditForm, VmsHealthPanel, VmsStateControl } from './VmsManagement';
@@ -31,7 +32,8 @@ function selectorState(query: {
 
 function VmsDetail({ vmsId }: { vmsId: string }) {
   const { session } = useAuth();
-  const target = useQuery({ queryKey: queryKeys.vms.detail(vmsId), queryFn: () => api.vms.get(vmsId) });
+  const target = useQuery({ queryKey: queryKeys.vms.detail(vmsId), queryFn: ({ signal }) => api.vms.get(vmsId, signal) });
+  useDocumentTitle(target.data?.displayName ?? 'VMS detail');
   const permissions = ['vms.read', 'credential.write', 'integration.manage'].filter((permission) => hasPermission(session, permission));
   const canImportCameras = hasPermission(session, 'camera.import');
   const canUpdate = hasPermission(session, 'vms.update');
@@ -43,13 +45,13 @@ function VmsDetail({ vmsId }: { vmsId: string }) {
   });
   const organizationUnit = useQuery({
     queryKey: queryKeys.reference.organizationUnit(target.data?.organizationUnitId ?? ''),
-    queryFn: () => api.reference.organizationUnit(target.data!.organizationUnitId),
+    queryFn: ({ signal }) => api.reference.organizationUnit(target.data!.organizationUnitId, signal),
     enabled: Boolean(target.data?.organizationUnitId),
   });
   const geographicAreaId = target.data?.geographicAreaId;
   const geographicArea = useQuery({
     queryKey: queryKeys.reference.geographicArea(geographicAreaId ?? ''),
-    queryFn: () => api.reference.geographicArea(geographicAreaId!),
+    queryFn: ({ signal }) => api.reference.geographicArea(geographicAreaId!, signal),
     enabled: Boolean(geographicAreaId),
   });
 
@@ -118,6 +120,7 @@ function VmsDetail({ vmsId }: { vmsId: string }) {
 }
 
 export function VmsPage() {
+  useDocumentTitle('VMS integrations');
   const { vmsId } = useParams();
   const { session } = useAuth();
   const queryClient = useQueryClient();
@@ -128,14 +131,14 @@ export function VmsPage() {
   const pageSize = 20;
   const vmsList = useQuery({
     queryKey: queryKeys.vms.page(page, pageSize),
-    queryFn: () => api.vms.listPage({ page, pageSize }),
+    queryFn: ({ signal }) => api.vms.listPage({ page, pageSize }, signal),
     enabled: !vmsId,
   });
-  const organizations = useQuery({ queryKey: queryKeys.reference.organizations, queryFn: api.reference.organizations, enabled: canCreate && !vmsId });
-  const geographicAreas = useQuery({ queryKey: queryKeys.reference.geographicAreas, queryFn: () => api.reference.geographicAreas(), enabled: canCreate && !vmsId });
+  const organizations = useQuery({ queryKey: queryKeys.reference.organizations, queryFn: ({ signal }) => api.reference.organizations(signal), enabled: canCreate && !vmsId });
+  const geographicAreas = useQuery({ queryKey: queryKeys.reference.geographicAreas, queryFn: ({ signal }) => api.reference.geographicAreas(undefined, signal), enabled: canCreate && !vmsId });
   const organizationUnits = useQuery({
     queryKey: queryKeys.reference.organizationUnits(organizationId),
-    queryFn: () => api.reference.organizationUnits(organizationId),
+    queryFn: ({ signal }) => api.reference.organizationUnits(organizationId, signal),
     enabled: canCreate && !vmsId && Boolean(organizationId),
   });
   const create = useMutation({
