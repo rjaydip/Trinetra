@@ -6,12 +6,15 @@ import type {
   CameraCredentialTestAccepted,
   CameraCredentialTestResult,
   AccessGroupResponse,
+  AgeingInfrastructureResponse,
   ActivateGroupRequest,
   AddScopeRequest,
   AiWorkerHealthResponse,
   ApiKeyCreatedResponse,
   ApiKeyResponse,
   AreaTypeResponse,
+  BoundaryImportRequest,
+  BoundaryImportResult,
   AssignGroupRequest,
   AuthResponse,
   BulkImportRequest,
@@ -30,6 +33,8 @@ import type {
   ConnectionTestResult,
   ConnectorHealthResponse,
   ConnectorTargetRequest,
+  CorrelationGroupDetail,
+  CorrelationGroupSummary,
   CoverageSummaryResponse,
   CreateApiKeyRequest,
   CreateFromFederatedRequest,
@@ -42,8 +47,10 @@ import type {
   CreatedResponse,
   DeactivateRequest,
   DetectionResponse,
+  DetectionTagRequest,
   EventPage,
   FederatedCameraResponse,
+  GapAnalysisResponse,
   GeoJsonFeature,
   GeoJsonFeatureCollection,
   GeographicAreaResponse,
@@ -69,14 +76,20 @@ import type {
   ResetPasswordRequest,
   RoleResponse,
   RoleWriteRequest,
+  SavedCredentialRequest,
+  SavedCredentialResponse,
+  SavedCredentialUpdateRequest,
+  StreamSessionResponse,
   TargetStateRequest,
   UnreconciledPage,
   UpdateGroupRequest,
   UpdateUserRequest,
   UserGroupResponse,
   UserResponse,
+  VideoWallPreferences,
   VmsResponse,
   WatchlistAlertResponse,
+  WatchlistEntryCreatedResponse,
   WatchlistEntryResponse,
 } from './models';
 
@@ -155,6 +168,8 @@ export const api = {
     update: (id: string, body: CameraPatchRequest) => request<CameraResponse>(`/api/v1/cameras/${id}`, { body: JSON.stringify(body), method: 'PATCH' }),
     retire: (id: string) => request<void>(`/api/v1/cameras/${id}`, { method: 'DELETE' }),
     bulkImport: (body: BulkImportRequest) => request<BulkImportResult>('/api/v1/cameras/bulk-import', json(body)),
+    ageingInfrastructure: (query: { organizationUnitId?: string; geographicAreaId?: string; oldestLimit?: number } = {}, signal?: AbortSignal) =>
+      request<AgeingInfrastructureResponse>(withQuery('/api/v1/cameras/reports/ageing-infrastructure', query), {}, signal),
     health: (id: string, signal?: AbortSignal) => request<CameraHealthResponse>(`/api/v1/cameras/${id}/health`, {}, signal),
     healthHistory: (id: string, query: { from?: string; to?: string; limit?: number } = {}, signal?: AbortSignal) => request<CameraHealthHistoryResponse>(withQuery(`/api/v1/cameras/${id}/health/history`, query), {}, signal),
     overrideHealth: (id: string, body: HealthOverrideRequest) => request<CameraHealthResponse>(`/api/v1/cameras/${id}/health`, { body: JSON.stringify(body), method: 'PATCH' }),
@@ -210,6 +225,7 @@ export const api = {
     cameras: (query: { bbox: string; includeSectors?: boolean; includeRetired?: boolean; organizationUnitId?: string; operationalStatus?: string; maintenanceStatus?: string }, signal?: AbortSignal) => request<GeoJsonFeatureCollection>(withQuery('/api/v1/gis/cameras', query), {}, signal),
     cameraCoverage: (id: string, signal?: AbortSignal) => request<GeoJsonFeature | undefined>(`/api/v1/cameras/${id}/coverage`, {}, signal),
     coverage: (query: { geographicAreaId?: string; bbox?: string; organizationUnitId?: string }, signal?: AbortSignal) => request<CoverageSummaryResponse>(withQuery('/api/v1/gis/coverage', query), {}, signal),
+    gaps: (geographicAreaId: string, signal?: AbortSignal) => request<GapAnalysisResponse>(withQuery('/api/v1/gis/gaps', { geographicAreaId }), {}, signal),
   },
   reference: {
     organizations: (signal?: AbortSignal) => fetchAllPages((page, pageSize) =>
@@ -244,10 +260,19 @@ export const api = {
   detections: {
     search: (query: { plateNumber?: string; targetId?: string; from?: string; to?: string; limit?: number } = {}, signal?: AbortSignal) =>
       request<DetectionResponse[]>(withQuery('/api/v1/detections', query), {}, signal),
+    addTag: (eventId: string, body: DetectionTagRequest) => request<void>(`/api/v1/detections/${eventId}/tags`, json(body)),
+    removeTag: (eventId: string, tag: string) => request<void>(`/api/v1/detections/${eventId}/tags/${encodeURIComponent(tag)}`, { method: 'DELETE' }),
   },
   events: {
     query: (query: { from: string; to: string; cameraId?: string; eventType?: string; objectReference?: string; cursor?: string; limit?: number }, signal?: AbortSignal) =>
       request<EventPage>(withQuery('/api/v1/events', query), {}, signal),
+  },
+  correlation: {
+    /** Groups whose activity overlaps `from`/`to` (default: last 24h, max 7 days), newest
+     * activity first. Unpaginated call returns the plain array (capped at 500). */
+    groups: (query: { from?: string; to?: string } = {}, signal?: AbortSignal) =>
+      request<CorrelationGroupSummary[]>(withQuery('/api/v1/correlation/groups', query), {}, signal),
+    get: (id: string, signal?: AbortSignal) => request<CorrelationGroupDetail>(`/api/v1/correlation/groups/${id}`, {}, signal),
   },
   credentials: {
     status: (id: string, signal?: AbortSignal) => request<CredentialExistsResponse>(`/api/v1/vms/${id}/credential/status`, {}, signal),
@@ -256,6 +281,15 @@ export const api = {
   connectionTests: {
     create: (vmsId: string) => request<ConnectionTestAccepted>(`/api/v1/vms/${vmsId}/test`, { method: 'POST' }),
     get: (statusUrl: string, signal?: AbortSignal) => request<ConnectionTestResult>(statusUrl, {}, signal),
+  },
+  /** The saved-credential library: reusable named credentials a camera can point at instead of
+   * having its own username/password re-typed. Metadata only — never secret material. */
+  credentialLibrary: {
+    list: (signal?: AbortSignal) => request<SavedCredentialResponse[]>('/api/v1/credential-library', {}, signal),
+    get: (id: string, signal?: AbortSignal) => request<SavedCredentialResponse>(`/api/v1/credential-library/${id}`, {}, signal),
+    create: (body: SavedCredentialRequest) => request<SavedCredentialResponse>('/api/v1/credential-library', json(body)),
+    update: (id: string, body: SavedCredentialUpdateRequest) => request<SavedCredentialResponse>(`/api/v1/credential-library/${id}`, { body: JSON.stringify(body), method: 'PUT' }),
+    delete: (id: string) => request<void>(`/api/v1/credential-library/${id}`, { method: 'DELETE' }),
   },
   admin: {
     organizations: {
@@ -284,6 +318,9 @@ export const api = {
       updateArea: (id: string, body: GeographicAreaRequest) => request<GeographicAreaResponse>(`/api/v1/geographic-areas/${id}`, { body: JSON.stringify(body), method: 'PUT' }),
       activateArea: (id: string) => request<void>(`/api/v1/geographic-areas/${id}/activate`, { method: 'POST' }),
       deactivateArea: (id: string, body: DeactivateRequest = {}) => request<void>(`/api/v1/geographic-areas/${id}/deactivate`, json(body)),
+      /** Attaches a surveyed boundary `Polygon` to each area (1-200 rows), replacing any prior
+       * one — what `GET /gis/gaps` needs before it can analyze an area. `geography.manage`. */
+      bulkImportBoundaries: (body: BoundaryImportRequest) => request<BoundaryImportResult>('/api/v1/geographic-areas/bulk-import-boundaries', json(body)),
     },
     groups: {
       list: (signal?: AbortSignal) => request<AccessGroupResponse[]>('/api/v1/access-groups', {}, signal),
@@ -312,7 +349,7 @@ export const api = {
       list: (signal?: AbortSignal) => request<WatchlistEntryResponse[]>('/api/v1/watchlist', {}, signal),
       listPage: (query: { active?: boolean; page: number; pageSize?: number }, signal?: AbortSignal) =>
         request<PageResult<WatchlistEntryResponse>>(withQuery('/api/v1/watchlist', query), {}, signal),
-      create: (body: CreateWatchlistEntryRequest) => request<CreatedResponse>('/api/v1/watchlist', json(body)),
+      create: (body: CreateWatchlistEntryRequest) => request<WatchlistEntryCreatedResponse>('/api/v1/watchlist', json(body)),
       deactivate: (id: string) => request<void>(`/api/v1/watchlist/${id}`, { method: 'DELETE' }),
       listAlerts: (query: { limit?: number } = {}, signal?: AbortSignal) => request<WatchlistAlertResponse[]>(withQuery('/api/v1/watchlist/alerts', query), {}, signal),
       listAlertsPage: (query: {
@@ -345,6 +382,47 @@ export const api = {
       addToGroup: (id: string, body: AssignGroupRequest) => request<void>(`/api/v1/users/${id}/groups`, json(body)),
       removeFromGroup: (id: string, groupId: string) => request<void>(`/api/v1/users/${id}/groups/${groupId}`, { method: 'DELETE' }),
     },
+  },
+  videoWall: {
+    /** 404 means the caller has never saved a layout — treated as "nothing saved" by the caller,
+     * not surfaced as an error. */
+    get: (signal?: AbortSignal) => request<VideoWallPreferences>('/api/v1/video-wall/preferences', {}, signal),
+    save: (body: VideoWallPreferences) => request<VideoWallPreferences>('/api/v1/video-wall/preferences', { body: JSON.stringify(body), method: 'PUT' }),
+    clear: () => request<void>('/api/v1/video-wall/preferences', { method: 'DELETE' }),
+  },
+  streams: {
+    /** Mints a short-lived, single-camera HLS session token. 404 means the caller lacks
+     * `camera.read` for this camera or it doesn't exist — treated as "no live feed", not an error. */
+    session: (cameraId: string, signal?: AbortSignal) => request<StreamSessionResponse>(`/api/v1/streams/${cameraId}/session`, {}, signal),
+    /** Relays a WHEP SDP offer to a WEBRTC-mode camera's own native endpoint
+     * (`StreamSessionEndpoints.WhepOfferAsync`) and returns the device's SDP answer plus the
+     * relayed session-teardown path (this API's own, already rewritten from the device's
+     * `Location` — pass it straight to `whepTeardown`).
+     *
+     * Deliberately bypasses `request()`: this isn't the platform login session, it's the
+     * short-lived, single-camera stream-session token from `session()` above, sent as its own
+     * `Authorization: Bearer`, and the body/response are raw SDP text, not JSON — none of which
+     * `request()`'s JSON-in/JSON-out, platform-bearer-token contract fits. A relative path (not
+     * `apiBaseUrl()`) for the same reason `LiveVideoTile`'s HLS requests are relative — same-origin
+     * keeps this on the path the streaming gateway's cookie/session handling assumes. */
+    whepOffer: async (cameraId: string, streamToken: string, offerSdp: string, signal?: AbortSignal) => {
+      const response = await fetch(`/api/v1/streams/${cameraId}/whep`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/sdp', authorization: `Bearer ${streamToken}` },
+        body: offerSdp,
+        signal,
+      });
+      if (!response.ok) {
+        throw new Error(`WHEP offer failed with status ${response.status}`);
+      }
+      return { answerSdp: await response.text(), teardownPath: response.headers.get('location') };
+    },
+    /** Best-effort teardown of a session `whepOffer` started — see
+     * `StreamSessionEndpoints.WhepTeardownAsync`'s own remarks on why a failure here is not
+     * escalated: the device closing the peer connection on its own idle timeout is an accepted
+     * outcome. */
+    whepTeardown: (teardownPath: string, streamToken: string) =>
+      fetch(teardownPath, { method: 'DELETE', headers: { authorization: `Bearer ${streamToken}` } }).catch(() => undefined),
   },
   overview: (signal?: AbortSignal) => request<OverviewResponse>('/api/v1/overview', {}, signal),
 };

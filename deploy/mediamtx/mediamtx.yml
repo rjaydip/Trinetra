@@ -1,0 +1,77 @@
+# MediaMTX base config for the Trinetra streaming gateway (docs/STREAMING-GATEWAY-PLAN.md, G3).
+#
+# `paths` is deliberately absent here: with 100+ cameras (and a target of 80,000), hand-typed
+# per-camera path entries in this file do not scale and would need a restart on every camera
+# added/removed/re-credentialed. Instead `provision_paths.py` (this directory) discovers cameras
+# from Federation.Api, resolves each one's credential via
+# `GET /api/v1/cameras/{id}/credential/resolve` (G1, STREAMING_GATEWAY machine role), and adds/
+# updates/removes paths at runtime through MediaMTX's own HTTP config API (bound to localhost
+# only, see `api*` below) — never by editing this file or restarting MediaMTX.
+#
+# Every path below is on-demand (`sourceOnDemand: true` is set per-path by the provisioner, not
+# here): MediaMTX only opens the RTSP connection to a camera when a viewer actually requests that
+# stream, and closes it when the last viewer leaves. The unit of cost here is concurrent
+# viewers, not camera count — see STREAMING-GATEWAY-PLAN.md §1.
+
+# --- HLS output -----------------------------------------------------------
+# Bound to localhost: Federation.Api (G4) is the only thing that talks to MediaMTX directly,
+# validating a short-lived per-camera stream token before proxying a byte here. MediaMTX itself
+# has no concept of this platform's RBAC and must never be reachable from outside this host.
+hls: yes
+hlsAddress: 127.0.0.1:8888
+hlsAllowOrigins: [] # Federation.Api sets the real CORS/access headers; MediaMTX's own HTTP surface is not public.
+
+# fmp4, not mpegts: MPEG-TS HLS only ever supports H.264. Plenty of cameras (including the first
+# one tested against this gateway) emit H.265/HEVC instead, which MPEG-TS HLS rejects outright
+# ("the MPEG-TS variant of HLS supports H264 video only" — MediaMTX destroys the muxer and every
+# playlist/segment request 500s until this is fixed). fmp4 remuxes both H.264 and H.265 without
+# re-encoding — still no transcode cost (STREAMING-GATEWAY-PLAN.md §1's remux-not-transcode
+# argument holds for either codec) — the tradeoff is playback support: H.265-over-HLS-fMP4 has
+# solid support on Safari/recent Chrome on Apple Silicon, patchier elsewhere (older
+# Chrome/Firefox, non-Apple-Silicon Windows without a paid OS codec). If a target browser can't
+# decode HEVC at all, the fix is a transcode step (ffmpeg H.265->H.264, republished as its own
+# MediaMTX path) — not a MediaMTX config change — and is deliberately not built by default, since
+# it costs real CPU per concurrently-viewed HEVC camera and most deployments will have a mix of
+# codecs across their camera fleet, not a uniform one.
+hlsVariant: fmp4
+hlsSegmentDuration: 1s
+hlsSegmentCount: 4
+
+# --- RTSP/RTMP/WebRTC listeners: off ---------------------------------------
+# This deployment only needs HLS out. Every other MediaMTX-native protocol/listener is disabled
+# so the gateway host exposes exactly one thing.
+rtsp: no
+rtmp: no
+webrtc: no
+srt: no
+
+# --- Runtime config API: localhost only ------------------------------------
+# provision-paths.py calls this to add/patch/remove paths as cameras come and go. Never expose
+# this port outside the host — it can rewrite every path's source, including embedded RTSP
+# credentials.
+api: yes
+apiAddress: 127.0.0.1:9997
+
+# --- Metrics: localhost only (G6) -------------------------------------------
+# Concurrent-stream count AND per-reader bitrate both matter for capacity planning
+# (STREAMING-GATEWAY-PLAN.md §1/§6 — bandwidth scales with viewer count, not camera count).
+metrics: yes
+metricsAddress: 127.0.0.1:9998
+
+# --- Logging -----------------------------------------------------------
+logLevel: info
+logDestinations: [stdout] # journald via systemd, matching trinetra-worker's own convention.
+
+# --- Defaults applied to every dynamically-provisioned path ----------------
+pathDefaults:
+  sourceOnDemand: yes
+  sourceOnDemandStartTimeout: 10s
+  sourceOnDemandCloseAfter: 30s # camera connection closes shortly after the last viewer leaves.
+
+
+# No `paths:` entries here, including no `all_others` catch-all: every real path is added
+# dynamically by provision_paths.py with its own explicit `source:` (an RTSP URL), which is what
+# makes `pathDefaults.sourceOnDemand` above apply to it. An `all_others` stanza with no `source:`
+# defaults to a "publisher" path (something pushes to it), and `sourceOnDemand` is meaningless for
+# that case — MediaMTX refuses to start if pathDefaults sets it while such a stanza exists. Leaving
+# `paths:` absent entirely (not even an empty map) is deliberate, not an oversight.

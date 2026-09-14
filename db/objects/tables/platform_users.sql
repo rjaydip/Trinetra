@@ -19,6 +19,9 @@ CREATE TABLE federation.platform_users (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     token_version integer DEFAULT 0 NOT NULL,
+    organization_unit_id uuid,
+    geographic_area_id uuid,
+    designation character varying(150),
     CONSTRAINT platform_users_status_check CHECK (((status)::text = ANY ((ARRAY['ACTIVE'::character varying, 'INACTIVE'::character varying, 'LOCKED'::character varying])::text[])))
 );
 
@@ -35,3 +38,35 @@ ALTER TABLE ONLY federation.platform_users
 
 ALTER TABLE ONLY federation.platform_users
     ADD CONSTRAINT platform_users_username_key UNIQUE (username);
+
+--
+-- Name: platform_users platform_users_organization_unit_id_fkey; Type: FK CONSTRAINT; Schema: federation; Owner: -
+--
+
+ALTER TABLE ONLY federation.platform_users
+    ADD CONSTRAINT platform_users_organization_unit_id_fkey FOREIGN KEY (organization_unit_id) REFERENCES federation.organization_units(id);
+
+--
+-- Name: platform_users platform_users_geographic_area_id_fkey; Type: FK CONSTRAINT; Schema: federation; Owner: -
+--
+
+ALTER TABLE ONLY federation.platform_users
+    ADD CONSTRAINT platform_users_geographic_area_id_fkey FOREIGN KEY (geographic_area_id) REFERENCES federation.geographic_areas(id);
+
+--
+-- Name: COLUMN platform_users.organization_unit_id; Type: COMMENT; Schema: federation; Owner: -
+--
+
+COMMENT ON COLUMN federation.platform_users.organization_unit_id IS 'DESCRIPTIVE ONLY. The home organization unit this person belongs to, for display and reporting. Never an authorization input: not read by has_permission, authorized_org_units, authorized_geographic_areas, unscoped_permissions or any scope predicate. Access is granted entirely through access_groups (invariant 12).';
+
+--
+-- Name: COLUMN platform_users.geographic_area_id; Type: COMMENT; Schema: federation; Owner: -
+--
+
+COMMENT ON COLUMN federation.platform_users.geographic_area_id IS 'DESCRIPTIVE ONLY. The home/coverage geographic area for this person, for display and reporting. Never an authorization input: not read by has_permission, authorized_org_units, authorized_geographic_areas, unscoped_permissions or any scope predicate. Organization and geography are independent scope dimensions (invariant 12).';
+
+--
+-- Name: COLUMN platform_users.designation; Type: COMMENT; Schema: federation; Owner: -
+--
+
+COMMENT ON COLUMN federation.platform_users.designation IS 'DESCRIPTIVE ONLY. Free-text job title, not a controlled vocabulary and not an authorization input.';

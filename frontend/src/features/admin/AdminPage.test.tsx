@@ -115,4 +115,20 @@ describe('admin route guards', () => {
     expect(screen.queryByRole('heading', { name: /^watchlist$/i })).not.toBeInTheDocument();
     expect(fetch).not.toHaveBeenCalled();
   });
+
+  it('guards geographic boundaries with geography.manage', async () => {
+    renderApp('/admin/boundaries', ['geography.read']);
+
+    expect(await screen.findByRole('heading', { name: /action unavailable/i })).toBeVisible();
+    expect(screen.queryByRole('heading', { name: /geographic boundaries/i })).not.toBeInTheDocument();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('renders the boundary import form for a caller with geography.manage', async () => {
+    renderApp('/admin/boundaries', ['geography.manage']);
+
+    expect(await screen.findByRole('heading', { name: /geographic boundaries/i })).toBeVisible();
+    expect(screen.getByRole('heading', { name: /add one boundary/i })).toBeVisible();
+    expect(screen.getByRole('heading', { name: /bulk upload/i })).toBeVisible();
+  });
 });

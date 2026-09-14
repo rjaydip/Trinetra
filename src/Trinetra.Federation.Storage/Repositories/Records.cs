@@ -57,6 +57,21 @@ public sealed record PlatformUser
     public string Status { get; init; } = "ACTIVE";
     public DateTimeOffset? LastLoginAt { get; init; }
     public bool IsSystem { get; init; }
+
+    /// <summary>
+    /// HR/org-chart metadata — which unit this person belongs to, which area they cover, and
+    /// their job title. DESCRIPTIVE ONLY: never an authorization input. Access is granted
+    /// entirely through access-group membership (role + org/geo scopes), never from these
+    /// fields — same pattern as <see cref="OrganizationUnit.GeographicAreaId"/> (invariant 12).
+    /// <see cref="OrganizationUnitName"/> / <see cref="GeographicAreaName"/> are denormalized for
+    /// display, null when unset or when the referenced row is gone.
+    /// </summary>
+    public Guid? OrganizationUnitId { get; init; }
+
+    public string? OrganizationUnitName { get; init; }
+    public Guid? GeographicAreaId { get; init; }
+    public string? GeographicAreaName { get; init; }
+    public string? Designation { get; init; }
 }
 
 /// <summary>A reusable bundle of one role and the scopes it applies within.</summary>

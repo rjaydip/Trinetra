@@ -51,6 +51,18 @@ public sealed record GeographicAreaRequest(
     string Code, string Name, string AreaType,
     Guid? ParentAreaId = null, string? Description = null, string? Status = null);
 
+/// <summary>
+/// One row of a boundary-polygon bulk import. Exactly one of <see cref="Wkt"/> /
+/// <see cref="GeoJson"/> is required — WKT for a survey tool's native export, GeoJSON for a
+/// browser-drawn polygon; either must describe a single WGS84 <c>Polygon</c> (no SRID prefix
+/// needed — 4326 is assumed and applied server-side).
+/// </summary>
+public sealed record BoundaryImportItem(
+    Guid GeographicAreaId, string? Wkt = null, string? GeoJson = null);
+
+/// <summary>A boundary-import batch. <see cref="Items"/> is 1..200 rows.</summary>
+public sealed record BoundaryImportRequest(IReadOnlyList<BoundaryImportItem> Items);
+
 /// <summary>Deactivation with an explicit resolution for active children.</summary>
 /// <remarks>
 /// <c>ChildStrategy</c> has no default on purpose. Silently cascading can deactivate hundreds of
@@ -110,6 +122,47 @@ public sealed record CredentialResponse(string CredentialReference, DateTimeOffs
 public sealed record ResolvedCredentialResponse(
     string CredentialReference, string? Username, string? Password, string? Token);
 
+/// <summary>
+/// Creates a reusable named credential in the saved-credential library (v1.23). Write-only, same
+/// as <see cref="CredentialRequest"/> — nothing here is ever echoed back.
+/// </summary>
+public sealed record SavedCredentialRequest(
+    string Name, string? Description = null, string? Username = null, string? Password = null, string? Token = null);
+
+/// <summary>
+/// Rotates or renames a saved credential (v1.24). Supplying a password or a token reseals the
+/// <b>same</b> <c>credentialReference</c> every camera pointed at this entry already carries —
+/// that is the entire point of the shared-reference design (v1.23's remarks): rotating here
+/// rotates it for every camera using it, with no per-camera write needed. Supplying neither
+/// leaves the sealed secret untouched and only updates the name/description. Username, if
+/// supplied, is stored alongside whichever of password/token was also supplied — it cannot be
+/// changed on its own without also resupplying a password or token, the same rule
+/// <see cref="CredentialRequest"/> already applies.
+/// </summary>
+public sealed record SavedCredentialUpdateRequest(
+    string? Name = null, string? Description = null, string? Username = null, string? Password = null, string? Token = null);
+
+/// <summary>One camera pointed at a saved credential's reference (v1.24 <c>GET /{id}</c> usedBy).</summary>
+public sealed record SavedCredentialUsedByResponse(Guid Id, string CameraCode, string Name);
+
+/// <summary>
+/// A saved-credential library entry as the picker in the camera form lists it. Metadata only —
+/// <c>CredentialReference</c> is the pointer a camera's own <c>credentialReference</c> field is
+/// set to in order to share this entry's sealed secret; it is not secret material itself.
+/// </summary>
+/// <remarks>
+/// <see cref="UsageCount"/> is a true total (every camera pointed at this reference, regardless
+/// of the caller's own scope) so an operator rotating or deleting a widely-shared credential
+/// always sees the real blast radius; <see cref="UsedBy"/> — populated only on <c>GET /{id}</c>,
+/// null on the list route, matching <c>RoleResponse</c>'s own <c>usageCount</c>/<c>usedBy</c>
+/// split — is filtered to cameras the caller can actually see, the same scope
+/// <c>GET /cameras/{id}</c> itself enforces.
+/// </remarks>
+public sealed record SavedCredentialResponse(
+    Guid Id, string Name, string? Description, string CredentialReference,
+    DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt, int UsageCount,
+    IReadOnlyList<SavedCredentialUsedByResponse>? UsedBy = null);
+
 /// <summary>One page of events, with the cursor for the next.</summary>
 /// <remarks>
 /// Keyset pagination, never OFFSET: a deep offset on a table taking hundreds of millions of rows
@@ -128,6 +181,40 @@ public sealed record EventSummary(
     string? ObjectReference,
     double? Confidence);
 
+// ---- Correlation ------------------------------------------------------------
+
+/// <summary>
+/// One cross-camera possible match. <c>confidence</c> is a possible-match score in [0,1] and is
+/// never certainty — cross-camera identity is probabilistic (CLAUDE.md production posture).
+/// </summary>
+public sealed record CorrelationGroupSummary(
+    Guid Id,
+    string RuleCode,
+    string NaturalKey,
+    DateTimeOffset WindowBucket,
+    double Confidence,
+    int MemberCount,
+    DateTimeOffset FirstOccurredAt,
+    DateTimeOffset LastOccurredAt,
+    DateTimeOffset CreatedAt);
+
+/// <summary>One member event of a correlation group, as returned in the group detail.</summary>
+public sealed record CorrelationGroupMember(
+    string FederationEventId,
+    DateTimeOffset OccurredAt,
+    string CameraId,
+    Guid SourceVmsId,
+    Guid OrganizationUnitId,
+    Guid? GeographicAreaId);
+
+/// <summary>
+/// A correlation group with its member events. <c>confidence</c> on <c>group</c> is a
+/// possible-match score, never certainty. <c>members</c> is filtered to what the caller is
+/// scoped to reach; the group itself is visible once at least one member is reachable.
+/// </summary>
+public sealed record CorrelationGroupDetail(
+    CorrelationGroupSummary Group, IReadOnlyList<CorrelationGroupMember> Members);
+
 public sealed record ConnectionTestAccepted(Guid TestId, string Status, string StatusUrl);
 
 public sealed record ConnectionTestResult(
@@ -137,11 +224,26 @@ public sealed record ConnectionTestResult(
 
 // ---- Users and groups ------------------------------------------------------
 
+/// <summary>
+/// <see cref="OrganizationUnitId"/>, <see cref="GeographicAreaId"/> and
+/// <see cref="Designation"/> are HR/org-chart metadata — DESCRIPTIVE ONLY, never an
+/// authorization input. Validated for existence + ACTIVE when supplied; access itself is
+/// granted entirely through group membership, never through these fields (invariant 12).
+/// </summary>
 public sealed record CreateUserRequest(
-    string Username, string DisplayName, string Password, string? Email = null);
+    string Username, string DisplayName, string Password, string? Email = null,
+    Guid? OrganizationUnitId = null, Guid? GeographicAreaId = null, string? Designation = null);
 
+/// <summary>
+/// A full replace, like every other field here: a field left out of the body clears it, the
+/// same as an explicit <c>null</c> — there is no separate "leave unchanged" signal.
+/// <see cref="OrganizationUnitId"/>, <see cref="GeographicAreaId"/> and
+/// <see cref="Designation"/> are HR/org-chart metadata — DESCRIPTIVE ONLY, never an
+/// authorization input (invariant 12).
+/// </summary>
 public sealed record UpdateUserRequest(
-    string DisplayName, string? Email = null, string? Status = null);
+    string DisplayName, string? Email = null, string? Status = null,
+    Guid? OrganizationUnitId = null, Guid? GeographicAreaId = null, string? Designation = null);
 
 public sealed record ResetPasswordRequest(string NewPassword);
 
@@ -197,10 +299,20 @@ public sealed record DetectionEventRequest(
     IReadOnlyDictionary<string, string>? Evidence = null);
 
 /// <summary>A stored detection, projected for search results.</summary>
+/// <summary><c>Tags</c> are free-form operator tags (v1.26) — distinct from <c>EventType</c>'s
+/// closed machine classification. Empty, never null, when the detection carries none.</summary>
 public sealed record DetectionResponse(
     string Id, string CameraId, Guid? RegisteredCameraId, string EventType,
     DateTimeOffset Timestamp, double? Confidence,
-    string? VehicleType, string? PlateNumber, string? SnapshotReference);
+    string? VehicleType, string? PlateNumber, string? SnapshotReference,
+    IReadOnlyList<string> Tags);
+
+/// <summary>Attaches one free-form operator tag to a detection. <c>occurredAt</c> is required —
+/// <c>detection_event</c>'s primary key is <c>(occurred_at, event_id)</c>, so both together
+/// identify the detection (see v1.26's own doc comment on why there's no simpler key). Every
+/// search result already carries its own <c>timestamp</c>, so a caller tagging a detection it
+/// just searched for always has this on hand.</summary>
+public sealed record DetectionTagRequest(DateTimeOffset OccurredAt, string Tag);
 
 public sealed record CreateWatchlistEntryRequest(
     Guid OrganizationUnitId, string PlateNumber, string? Reason = null, string Severity = "Medium");

@@ -14,20 +14,26 @@ import { AdminPage, RequireAnyAdminPermission, supportedAdminReadPermissions } f
 
 const AccessGroupsPage = lazy(() => import('./features/admin/AccessGroupsPage').then((m) => ({ default: m.AccessGroupsPage })));
 const ApiKeysPage = lazy(() => import('./features/admin/ApiKeysPage').then((m) => ({ default: m.ApiKeysPage })));
+const BoundaryImportPage = lazy(() => import('./features/admin/BoundaryImportPage').then((m) => ({ default: m.BoundaryImportPage })));
 const HierarchyPage = lazy(() => import('./features/admin/HierarchyPage').then((m) => ({ default: m.HierarchyPage })));
 const RolesPage = lazy(() => import('./features/admin/RolesPage').then((m) => ({ default: m.RolesPage })));
 const UsersPage = lazy(() => import('./features/admin/UsersPage').then((m) => ({ default: m.UsersPage })));
 const WatchlistPage = lazy(() => import('./features/admin/WatchlistPage').then((m) => ({ default: m.WatchlistPage })));
 const WorkerHealthPage = lazy(() => import('./features/admin/WorkerHealthPage').then((m) => ({ default: m.WorkerHealthPage })));
 const CameraDetailPage = lazy(() => import('./features/cameras/CameraDetailPage').then((m) => ({ default: m.CameraDetailPage })));
+const EditCameraPage = lazy(() => import('./features/cameras/EditCameraPage').then((m) => ({ default: m.EditCameraPage })));
 const BulkImportPage = lazy(() => import('./features/cameras/BulkImportPage').then((m) => ({ default: m.BulkImportPage })));
+const CredentialLibraryPage = lazy(() => import('./features/credentials/CredentialLibraryPage').then((m) => ({ default: m.CredentialLibraryPage })));
+const StreamTestPage = lazy(() => import('./features/streamtest/StreamTestPage').then((m) => ({ default: m.StreamTestPage })));
 const NewCameraPage = lazy(() => import('./features/cameras/NewCameraPage').then((m) => ({ default: m.NewCameraPage })));
 const ReconciliationPage = lazy(() => import('./features/cameras/ReconciliationPage').then((m) => ({ default: m.ReconciliationPage })));
 const RegistryPage = lazy(() => import('./features/cameras/RegistryPage').then((m) => ({ default: m.RegistryPage })));
+const CorrelationDashboardPage = lazy(() => import('./features/correlation/CorrelationDashboardPage').then((m) => ({ default: m.CorrelationDashboardPage })));
 const DetectionsPage = lazy(() => import('./features/detections/DetectionsPage').then((m) => ({ default: m.DetectionsPage })));
 const EventsPage = lazy(() => import('./features/events/EventsPage').then((m) => ({ default: m.EventsPage })));
 const MapPage = lazy(() => import('./features/map/MapPage').then((m) => ({ default: m.MapPage })));
 const ReportsPage = lazy(() => import('./features/reports/ReportsPage').then((m) => ({ default: m.ReportsPage })));
+const VideoWallPage = lazy(() => import('./features/videowall/VideoWallPage').then((m) => ({ default: m.VideoWallPage })));
 const DiscoveryPage = lazy(() => import('./features/vms/DiscoveryPage').then((m) => ({ default: m.DiscoveryPage })));
 const VmsPage = lazy(() => import('./features/vms/VmsPage').then((m) => ({ default: m.VmsPage })));
 
@@ -64,12 +70,17 @@ function SessionApplication() {
             <Route path="/dashboard" element={<MapPage />} />
             <Route path="/reports" element={<ReportsPage />} />
             <Route path="/cameras" element={<RegistryPage />} />
+            <Route path="/video-wall" element={<VideoWallPage />} />
             <Route path="/cameras/new" element={<RequirePermission permission="camera.create"><NewCameraPage /></RequirePermission>} />
             <Route path="/cameras/import" element={<RequirePermission permission="camera.import"><BulkImportPage /></RequirePermission>} />
             <Route path="/cameras/reconciliation" element={<RequirePermission permission="camera.reconcile"><ReconciliationPage /></RequirePermission>} />
+            <Route path="/credentials" element={<RequirePermission permission="camera.read"><CredentialLibraryPage /></RequirePermission>} />
+            <Route path="/stream-test" element={<StreamTestPage />} />
             <Route path="/detections" element={<RequirePermission permission="observation.read"><DetectionsPage /></RequirePermission>} />
             <Route path="/events" element={<RequirePermission permission="event.read"><EventsPage /></RequirePermission>} />
+            <Route path="/correlation" element={<RequirePermission permission="correlation.read"><CorrelationDashboardPage /></RequirePermission>} />
             <Route path="/cameras/:cameraId" element={<CameraDetailPage />} />
+            <Route path="/cameras/:cameraId/edit" element={<RequirePermission permission="camera.update"><EditCameraPage /></RequirePermission>} />
             <Route path="/vms" element={<RequirePermission permission="vms.read"><VmsPage /></RequirePermission>} />
             <Route path="/vms/:vmsId" element={<RequirePermission permission="vms.read"><VmsPage /></RequirePermission>} />
             <Route path="/vms/:vmsId/discovery" element={<RequirePermission permission="vms.read"><RequirePermission permission="camera.import"><DiscoveryPage /></RequirePermission></RequirePermission>} />
@@ -81,6 +92,7 @@ function SessionApplication() {
               <Route path="api-keys" element={<RequirePermission permission="apikey.read"><ApiKeysPage /></RequirePermission>} />
               <Route path="worker-health" element={<RequirePermission permission="worker.read"><WorkerHealthPage /></RequirePermission>} />
               <Route path="watchlist" element={<RequirePermission permission="alert.read"><WatchlistPage /></RequirePermission>} />
+              <Route path="boundaries" element={<RequirePermission permission="geography.manage"><BoundaryImportPage /></RequirePermission>} />
             </Route>
             <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Route>

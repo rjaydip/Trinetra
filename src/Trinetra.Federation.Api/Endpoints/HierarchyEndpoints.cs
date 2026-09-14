@@ -16,6 +16,9 @@ public static class HierarchyEndpoints
     /// <summary>Offered back to the caller when a deactivation is refused.</summary>
     private static readonly string[] Resolutions = ["cascade", "reparent"];
 
+    /// <summary>Hard cap on one boundary-import batch — heavier per-row payload than a camera row.</summary>
+    private const int MaxBoundaryRows = 200;
+
     public static void MapHierarchyEndpoints(this IEndpointRouteBuilder app)
     {
         MapOrganizations(app);
@@ -228,6 +231,19 @@ public static class HierarchyEndpoints
               + "is a new parent that is not ACTIVE, and one whose level is not coarser than this "
               + "area's. Re-parenting to root needs unscoped `geography.manage` (403). Editing an "
               + "`INACTIVE` area is refused (409). 404 if the id is unknown or out of reach.");
+
+        areas.MapPost("/bulk-import-boundaries", BulkImportBoundariesAsync)
+          .RequirePermission("geography.manage")
+          .WithSummary("Bulk-load surveyed boundary polygons")
+          .WithDescription(
+              $"Admin-only GIS import, not a per-area form field: attaches a surveyed boundary "
+              + $"`Polygon` to each area, replacing any prior one. Synchronous, "
+              + $"1..{MaxBoundaryRows} rows — same shape as `POST /cameras/bulk-import`, "
+              + "isolated per row via savepoint, all rows commit together at the end. Each row "
+              + "supplies `geographicAreaId` plus exactly one of `wkt` / `geoJson`; a row whose "
+              + "geometry is missing, malformed, or not a single `Polygon` fails that row only. "
+              + "Always 200 — the body reports every row's outcome. This is what "
+              + "`GET /gis/gaps` needs before it can analyze an area.");
 
         areas.MapPost("/{id:guid}/activate", ActivateAreaAsync)
           .RequirePermission("geography.manage")
@@ -862,5 +878,97 @@ public static class HierarchyEndpoints
         await work.CommitAsync(ct);
 
         return TypedResults.NoContent();
+    }
+
+    /// <summary>
+    /// Boundary-polygon bulk import (<c>v1.19</c>). Same per-row-savepoint shape as
+    /// <c>CameraEndpoints.BulkImportAsync</c>: one row's failure never rolls back the others, but
+    /// every row commits together at the end.
+    /// </summary>
+    private static async Task<Results<Ok<BoundaryImportResult>, ProblemHttpResult>> BulkImportBoundariesAsync(
+        [FromBody] BoundaryImportRequest request, GeographyRepository repo,
+        NpgsqlDataSource db, HttpContext http, CancellationToken ct)
+    {
+        var caller = CallerContextFactory.From(http);
+        caller.Require("geography.manage");
+
+        if (request.Items is null || request.Items.Count == 0 || request.Items.Count > MaxBoundaryRows)
+        {
+            return TypedResults.Problem(
+                title: "Invalid batch size",
+                detail: $"items must contain between 1 and {MaxBoundaryRows} rows.",
+                statusCode: StatusCodes.Status400BadRequest);
+        }
+
+        var results = new List<BoundaryRowResult>(request.Items.Count);
+        int updated = 0, failed = 0;
+
+        await using var work = await UnitOfWork.BeginAsync(db, ct);
+
+        for (var i = 0; i < request.Items.Count; i++)
+        {
+            var item = request.Items[i];
+
+            if ((item.Wkt is null) == (item.GeoJson is null))
+            {
+                failed++;
+                results.Add(new BoundaryRowResult(
+                    i, item.GeographicAreaId, "error", "exactly one of wkt or geoJson is required"));
+                continue;
+            }
+
+            var savepoint = $"boundary_row_{i}";
+            await work.Transaction.SaveAsync(savepoint, ct);
+
+            try
+            {
+                var outcome = await repo.SetBoundaryAsync(
+                    item.GeographicAreaId, item.Wkt, item.GeoJson, caller, work, ct);
+
+                switch (outcome)
+                {
+                    case BoundaryImportOutcome.NotFound:
+                        await work.Transaction.RollbackAsync(savepoint, ct);
+                        failed++;
+                        results.Add(new BoundaryRowResult(
+                            i, item.GeographicAreaId, "error", "geographic area not found"));
+                        continue;
+
+                    case BoundaryImportOutcome.InvalidGeometry:
+                        await work.Transaction.RollbackAsync(savepoint, ct);
+                        failed++;
+                        results.Add(new BoundaryRowResult(
+                            i, item.GeographicAreaId, "error", "geometry must be a single Polygon"));
+                        continue;
+                }
+
+                await work.AuditAsync(caller, "update", "geographic_area", item.GeographicAreaId.ToString(),
+                    before: null, after: new { hasBoundary = true },
+                    organizationUnitId: null, ct);
+                await work.Transaction.ReleaseAsync(savepoint, ct);
+
+                updated++;
+                results.Add(new BoundaryRowResult(i, item.GeographicAreaId, "updated", null));
+            }
+            catch (PostgresException e)
+            {
+                // Malformed WKT/GeoJSON text raises here rather than surfacing as a well-formed
+                // geometry-type mismatch — same savepoint isolation either way.
+                await work.Transaction.RollbackAsync(savepoint, ct);
+                failed++;
+                results.Add(new BoundaryRowResult(
+                    i, item.GeographicAreaId, "error", "invalid geometry: " + e.MessageText));
+            }
+            catch (ForbiddenException)
+            {
+                await work.Transaction.RollbackAsync(savepoint, ct);
+                failed++;
+                results.Add(new BoundaryRowResult(i, item.GeographicAreaId, "error", "not in scope"));
+            }
+        }
+
+        await work.CommitAsync(ct);
+
+        return TypedResults.Ok(new BoundaryImportResult(updated, failed, results));
     }
 }

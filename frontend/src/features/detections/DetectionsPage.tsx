@@ -4,8 +4,11 @@ import { useState } from 'react';
 import { errorDetail } from '../../api/client';
 import { api } from '../../api/endpoints';
 import { queryKeys } from '../../api/queryKeys';
+import { useAuth } from '../../auth/AuthProvider';
+import { hasPermission } from '../../auth/permissions';
 import { PageState } from '../../components/ui';
 import { useDocumentTitle } from '../../lib/useDocumentTitle';
+import { DetectionTags } from './DetectionTags';
 
 function isoOrUndefined(value: string): string | undefined {
   if (!value) return undefined;
@@ -19,6 +22,8 @@ function isoOrUndefined(value: string): string | undefined {
  */
 export function DetectionsPage() {
   useDocumentTitle('Detections');
+  const { session } = useAuth();
+  const canTag = hasPermission(session, 'observation.write');
   const [plateNumber, setPlateNumber] = useState('');
   const [targetId, setTargetId] = useState('');
   const [from, setFrom] = useState('');
@@ -57,7 +62,7 @@ export function DetectionsPage() {
       : detections.isError ? <><PageState title="Couldn&apos;t load detections">{errorDetail(detections.error, 'Detections could not be loaded.')}</PageState><button className="button" type="button" onClick={() => detections.refetch()}>Try again</button></>
         : detections.data.length === 0 ? <PageState title="No detections">No detections matched this search.</PageState>
           : <div className="camera-table-wrap"><table className="camera-table"><caption>{detections.data.length} detection{detections.data.length === 1 ? '' : 's'}</caption><thead><tr>
-            <th scope="col">Time</th><th scope="col">Type</th><th scope="col">Plate</th><th scope="col">Vehicle</th><th scope="col">Camera</th><th scope="col">Confidence</th>
+            <th scope="col">Time</th><th scope="col">Type</th><th scope="col">Plate</th><th scope="col">Vehicle</th><th scope="col">Camera</th><th scope="col">Confidence</th><th scope="col">Tags</th>
           </tr></thead><tbody>{detections.data.map((detection) => <tr key={detection.id}>
             <td>{new Date(detection.timestamp).toLocaleString()}</td>
             <td>{detection.eventType}</td>
@@ -65,6 +70,7 @@ export function DetectionsPage() {
             <td>{detection.vehicleType ?? 'Not reported'}</td>
             <td>{detection.cameraId}</td>
             <td>{detection.confidence !== null ? `${Math.round(detection.confidence * 100)}%` : 'Not reported'}</td>
+            <td><DetectionTags eventId={detection.id} occurredAt={detection.timestamp} tags={detection.tags} canEdit={canTag} /></td>
           </tr>)}</tbody></table></div>}
   </section>;
 }

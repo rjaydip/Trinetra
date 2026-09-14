@@ -5,6 +5,8 @@ import { isApiProblem } from '../../api/client';
 import { api } from '../../api/endpoints';
 import type { MaintenanceRecordResponse } from '../../api/models';
 import { queryKeys } from '../../api/queryKeys';
+import { useAuth } from '../../auth/AuthProvider';
+import { hasPermission } from '../../auth/permissions';
 import { PageState, StatusBadge } from '../../components/ui';
 import { useDocumentTitle } from '../../lib/useDocumentTitle';
 import { CameraDetailSections } from './CameraDetailSections';
@@ -33,6 +35,7 @@ function MaintenanceList({ records }: { records: MaintenanceRecordResponse[] }) 
 
 export function CameraDetailPage() {
   const { cameraId } = useParams();
+  const { session } = useAuth();
   const camera = useQuery({ queryKey: queryKeys.camera.detail(cameraId!), queryFn: ({ signal }) => api.cameras.get(cameraId!, signal), enabled: Boolean(cameraId) });
   const health = useQuery({ queryKey: queryKeys.camera.health(cameraId!), queryFn: ({ signal }) => api.cameras.health(cameraId!, signal), enabled: Boolean(camera.data) });
   const maintenance = useQuery({ queryKey: queryKeys.camera.maintenance(cameraId!), queryFn: ({ signal }) => api.cameras.maintenance(cameraId!, undefined, signal), enabled: Boolean(camera.data) });
@@ -44,7 +47,10 @@ export function CameraDetailPage() {
   return (
     <section className="camera-detail-page" aria-labelledby="camera-detail-title">
       <Link className="back-link" to="/cameras">Back to camera registry</Link>
-      <header><p className="eyebrow">{camera.data.cameraCode}</p><h1 id="camera-detail-title">{camera.data.name}</h1></header>
+      <header className="camera-detail-page__header">
+        <div><p className="eyebrow">{camera.data.cameraCode}</p><h1 id="camera-detail-title">{camera.data.name}</h1></div>
+        {hasPermission(session, 'camera.update') && <Link className="button button--secondary" to={`/cameras/${camera.data.id}/edit`}>Edit camera</Link>}
+      </header>
       <CameraDetailSections camera={camera.data} />
       <section aria-labelledby="camera-health-heading" className="detail-panel"><h2 id="camera-health-heading">Health</h2>
         {health.isPending && <p aria-live="polite">Loading health information…</p>}

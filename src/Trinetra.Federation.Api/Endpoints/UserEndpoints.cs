@@ -32,7 +32,9 @@ public static class UserEndpoints
     // by accident — which is exactly how password material ends up in a response.
     private static UserResponse ToResponse(PlatformUser u) => new(
         u.Id, u.Username, u.DisplayName, u.Email,
-        u.MustChangePassword, u.Status, u.LastLoginAt, u.IsSystem);
+        u.MustChangePassword, u.Status, u.LastLoginAt, u.IsSystem,
+        u.OrganizationUnitId, u.OrganizationUnitName,
+        u.GeographicAreaId, u.GeographicAreaName, u.Designation);
 
     public static void MapUserEndpoints(this IEndpointRouteBuilder app)
     {
@@ -96,7 +98,13 @@ public static class UserEndpoints
               + "the credential the creator typed never stays the user's working one. A duplicate "
               + "username is a 409. `email` is optional and must be a bare address — no display "
               + "name (`\"Name <addr>\"` is a 400, not silently reduced to `addr`); one already "
-              + "in use by another account (case-insensitively) is a 409.");
+              + "in use by another account (case-insensitively) is a 409.\n\n"
+              + "`organizationUnitId`, `geographicAreaId` and `designation` are optional HR/"
+              + "org-chart metadata — which unit this person belongs to, which area they cover, "
+              + "their job title. **Descriptive only**: they grant no access and are never read "
+              + "by scope resolution — what an account can do comes entirely from group "
+              + "membership. A supplied `organizationUnitId`/`geographicAreaId` must reference an "
+              + "existing, ACTIVE row (400 otherwise).");
 
         group.MapPut("/{id:guid}", UpdateAsync)
           .RequirePermission("user.manage")
@@ -113,7 +121,11 @@ public static class UserEndpoints
               + "Deactivating the **last active account that can administer users** is refused "
               + "with 409: nothing in the running system could undo it, and recovery would mean "
               + "direct database access. Editing an account with more authority than the caller "
-              + "is refused as well.");
+              + "is refused as well.\n\n"
+              + "`organizationUnitId`, `geographicAreaId` and `designation` follow the same "
+              + "full-replace semantics as every other field here — omitting one clears it, the "
+              + "same as sending `null`. **Descriptive only** (see `POST /users`): validated for "
+              + "existence + ACTIVE when supplied, never an authorization input.");
 
         group.MapPost("/{id:guid}/password", ResetPasswordAsync)
           .RequirePermission("user.manage")
@@ -267,6 +279,24 @@ public static class UserEndpoints
         return true;
     }
 
+    /// <summary>
+    /// <c>designation</c> is free text (job title) with no controlled vocabulary — the only
+    /// check is the 150-character column width, named ahead of the database error the same way
+    /// <see cref="TryValidateEmail"/> is.
+    /// </summary>
+    private const int MaxDesignationLength = 150;
+
+    private static bool TryValidateDesignation(string? designation, out string? error)
+    {
+        error = null;
+        if (designation is not null && designation.Length > MaxDesignationLength)
+        {
+            error = $"designation must be at most {MaxDesignationLength} characters.";
+            return false;
+        }
+        return true;
+    }
+
     internal static async Task<Results<Created<CreatedResponse>, ProblemHttpResult>> CreateAsync(
         [FromBody] CreateUserRequest request, UserRepository users,
         NpgsqlDataSource db, HttpContext http, CancellationToken ct)
@@ -285,6 +315,13 @@ public static class UserEndpoints
         {
             return TypedResults.Problem(
                 title: "Invalid email", detail: emailError,
+                statusCode: StatusCodes.Status400BadRequest);
+        }
+
+        if (!TryValidateDesignation(request.Designation, out var designationError))
+        {
+            return TypedResults.Problem(
+                title: "Invalid designation", detail: designationError,
                 statusCode: StatusCodes.Status400BadRequest);
         }
 
@@ -307,7 +344,10 @@ public static class UserEndpoints
             id = await users.CreateAsync(
                 request.Username, request.DisplayName, email,
                 PasswordHasher.Hash(request.Password),
-                mustChangePassword: true, isSystem: false, work, ct);
+                mustChangePassword: true, isSystem: false, work, ct,
+                organizationUnitId: request.OrganizationUnitId,
+                geographicAreaId: request.GeographicAreaId,
+                designation: request.Designation);
         }
         catch (PostgresException e) when (e.SqlState == PostgresErrorCodes.UniqueViolation
             && e.ConstraintName == "ux_platform_users_email")
@@ -323,7 +363,11 @@ public static class UserEndpoints
 
         await work.AuditAsync(caller, "create", "user", id.ToString(),
             before: null,
-            after: new { request.Username, request.DisplayName, Email = email },
+            after: new
+            {
+                request.Username, request.DisplayName, Email = email,
+                request.OrganizationUnitId, request.GeographicAreaId, request.Designation,
+            },
             organizationUnitId: null, ct);
         await work.CommitAsync(ct);
 
@@ -356,6 +400,13 @@ public static class UserEndpoints
                 statusCode: StatusCodes.Status400BadRequest);
         }
 
+        if (!TryValidateDesignation(request.Designation, out var designationError))
+        {
+            return TypedResults.Problem(
+                title: "Invalid designation", detail: designationError,
+                statusCode: StatusCodes.Status400BadRequest);
+        }
+
         var status = request.Status ?? before.Status;
 
         await using var work = await UnitOfWork.BeginAsync(db, ct);
@@ -377,7 +428,10 @@ public static class UserEndpoints
 
         try
         {
-            await users.UpdateAsync(id, request.DisplayName, email, status, work, ct);
+            await users.UpdateAsync(id, request.DisplayName, email, status, work, ct,
+                organizationUnitId: request.OrganizationUnitId,
+                geographicAreaId: request.GeographicAreaId,
+                designation: request.Designation);
         }
         catch (PostgresException e) when (e.SqlState == PostgresErrorCodes.UniqueViolation
             && e.ConstraintName == "ux_platform_users_email")
@@ -396,7 +450,12 @@ public static class UserEndpoints
         }
 
         await work.AuditAsync(caller, "update", "user", id.ToString(), before,
-            new { request.DisplayName, Email = email, status }, organizationUnitId: null, ct);
+            new
+            {
+                request.DisplayName, Email = email, status,
+                request.OrganizationUnitId, request.GeographicAreaId, request.Designation,
+            },
+            organizationUnitId: null, ct);
         await work.CommitAsync(ct);
 
         return TypedResults.NoContent();

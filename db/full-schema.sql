@@ -4193,4 +4193,939 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_platform_users_email
     WHERE email IS NOT NULL;
 
 
+-- ####################################################################
+-- ##  versions/v1.15.sql
+-- ####################################################################
+
+-- ===========================================================================
+-- v1.15 — inventory freshness on connector_target
+-- ===========================================================================
+--
+-- The inventory loop (~daily, GetCamerasAsync) and the status loop (~30s,
+-- GetCameraStatusAsync) in Federation.Runtime.TargetWorker both wrote through
+-- the same ConnectorStateStore.UpsertCamerasAsync, so there was no way to tell
+-- "when did we last fully re-enumerate this target's inventory" apart from
+-- "when did the fast status loop last touch any camera". The frontend just
+-- shipped a comparison between expected_camera_count and the discovered count
+-- with a manual link to reconciliation, but nothing tells an operator when
+-- that count was last actually refreshed, or lets them force a refresh.
+--
+-- Why these are new columns rather than reusing what already exists:
+--   - federated_camera.updated_at is per-camera and touched by BOTH loops (the
+--     status loop's UpsertCamerasAsync writes it too), so it cannot answer
+--     "when was inventory last enumerated" for the target as a whole — a
+--     target whose status loop is healthy but whose inventory loop has been
+--     silently failing would still show a recent updated_at on every camera.
+--   - connector_health.camera_count is a health-loop snapshot of
+--     _lastCameraCount (whichever loop, inventory or status, last set it in
+--     memory) at the health tick's 60s cadence — it is an observability
+--     sample, not the authoritative "last full inventory sync" record, and it
+--     lives in a table partitioned/retained for history, not designed to be
+--     read as current target state on every VMS list/get call.
+--
+-- last_inventory_poll_at / last_inventory_camera_count are written only by
+-- the inventory loop (Federation.Storage.ConnectorStateStore.UpsertInventoryAsync),
+-- in the same transaction as the camera merge. inventory_poll_requested_at is
+-- an operator-facing flag: POST /api/v1/vms/{id}/poll-inventory sets it to
+-- now() only (no adapter call from the API process, per CLAUDE.md's per-VMS
+-- polling non-negotiable); TargetWorker's health loop compares it against its
+-- own in-memory last-completed-inventory-poll time and brings the next
+-- inventory pass forward through the existing CallAsync/resilience wrapper
+-- when it is newer.
+
+SET search_path = federation, public;
+
+ALTER TABLE connector_target
+    ADD COLUMN IF NOT EXISTS last_inventory_poll_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS last_inventory_camera_count INTEGER,
+    ADD COLUMN IF NOT EXISTS inventory_poll_requested_at TIMESTAMPTZ;
+
+COMMENT ON COLUMN connector_target.last_inventory_poll_at IS
+    'When the inventory loop (GetCamerasAsync, ~daily cadence) last completed '
+    'against this target. Distinct from federated_camera.updated_at, which the '
+    'status loop (~30s) also touches, and from connector_health.camera_count, '
+    'which is a health-loop observability sample rather than the authoritative '
+    'record of the last full re-enumeration. Written only by '
+    'ConnectorStateStore.UpsertInventoryAsync, never by the shared '
+    'UpsertCamerasAsync the status loop uses.';
+
+COMMENT ON COLUMN connector_target.last_inventory_camera_count IS
+    'Camera count returned by the most recent completed inventory poll — the '
+    'count to compare against expected_camera_count for silent inventory '
+    'drift, at the freshness last_inventory_poll_at records. Distinct from '
+    'connector_health.camera_count, which reflects whichever loop (inventory '
+    'or status) last reported a count as of the last 60s health tick.';
+
+COMMENT ON COLUMN connector_target.inventory_poll_requested_at IS
+    'Operator request to bring the next inventory pass forward, set by '
+    'POST /api/v1/vms/{id}/poll-inventory. The API process never calls the '
+    'adapter itself; it only sets this timestamp. TargetWorker''s health loop '
+    'checks it and, when newer than the worker''s own last completed inventory '
+    'poll, runs an extra inventory pass through the normal CallAsync '
+    'rate-limit/circuit-breaker wrapper — never bypassing it.';
+
+
+-- ####################################################################
+-- ##  versions/v1.16.sql
+-- ####################################################################
+
+-- ===========================================================================
+-- v1.16 — camera event-recording flag + standalone reachability probe
+-- ===========================================================================
+--
+-- Two independent additions, both scoped to the standalone camera registry
+-- (cameras), not Model 3 federation targets:
+--
+--   1. cameras.record_events — a plain operator-set flag controlling whether
+--      this camera's future event stream should be persisted once Model 2/3
+--      start writing events for registry cameras. Not derived from anything;
+--      defaults true so existing and newly registered cameras keep their
+--      current (implicit) behaviour unless explicitly turned off.
+--
+--   2. camera_connection_test — a job table for a pre-save reachability probe
+--      (POST /api/v1/cameras/connection-test), mirroring connection_test's
+--      async create-then-poll shape (v1.sql) but for a camera that does not
+--      exist as a row yet, so it cannot carry a camera_id FK. No credential,
+--      no vendor adapter: the probe (Federation.Runtime) opens a plain TCP
+--      socket to ip_address:port with a short timeout and reports whether it
+--      opened — nothing about the device beyond that. Federation.Adapters is
+--      not involved, matching CLAUDE.md's "adapters are the only place
+--      vendor-specific code lives": this deliberately has none.
+--
+--      Retention reuses the existing `ConnectionTests` cutoff
+--      (RetentionOptions) — same category of ephemeral job row, not worth a
+--      second knob for.
+--
+-- Requires: v1.sql .. v1.15.sql
+-- ===========================================================================
+
+SET search_path = federation, public;
+
+-- ---------------------------------------------------------------------------
+-- 1. cameras.record_events
+-- ---------------------------------------------------------------------------
+
+ALTER TABLE cameras
+    ADD COLUMN IF NOT EXISTS record_events BOOLEAN NOT NULL DEFAULT true;
+
+COMMENT ON COLUMN cameras.record_events IS
+    'Operator-set flag: whether this camera''s future event stream should be '
+    'persisted. Plain column, not derived from anything else on the row. '
+    'Defaults true so registering a camera keeps the current implicit '
+    'behaviour unless the operator turns it off.';
+
+-- ---------------------------------------------------------------------------
+-- 2. camera_connection_test — pre-save reachability probe for standalone cameras
+-- ---------------------------------------------------------------------------
+--
+-- No camera_id: the whole point is to test host:port before a camera row
+-- exists to attach it to. requested_by/executed_by follow connection_test's
+-- shape (TEXT actor label, not a FK) for the same reason — a test can outlive
+-- the session that started it.
+
+CREATE TABLE IF NOT EXISTS camera_connection_test (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+    ip_address      INET NOT NULL,
+    port            INTEGER NOT NULL CHECK (port BETWEEN 1 AND 65535),
+    protocol        VARCHAR(50) NOT NULL
+                    CHECK (protocol IN
+                        ('RTSP','RTSPS','ONVIF','HTTP','HTTPS','RTMP','SRT','OTHER')),
+
+    status          VARCHAR(20) NOT NULL DEFAULT 'pending'
+                    CHECK (status IN ('pending','running','completed','failed','abandoned')),
+
+    requested_by    TEXT NOT NULL,
+    requested_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    -- Which instance picked the job up. Needed to recognise work abandoned by a dead instance.
+    executed_by     TEXT,
+    started_at      TIMESTAMPTZ,
+    completed_at    TIMESTAMPTZ,
+
+    result          JSONB,
+    failure_reason  TEXT
+);
+
+-- The sweeper's access path: jobs still claimed to be running.
+CREATE INDEX IF NOT EXISTS ix_camera_connection_test_active
+    ON camera_connection_test (started_at)
+    WHERE status IN ('pending', 'running');
+
+CREATE INDEX IF NOT EXISTS ix_camera_connection_test_requested
+    ON camera_connection_test (requested_at DESC);
+
+-- Marks jobs abandoned when the executing instance died mid-test. Same shape as
+-- sweep_abandoned_connection_tests (v1.sql), one table over.
+CREATE OR REPLACE FUNCTION sweep_abandoned_camera_connection_tests(
+    stale_after INTERVAL DEFAULT '5 minutes')
+RETURNS INTEGER
+LANGUAGE plpgsql
+SET search_path = federation, public
+AS $$
+DECLARE
+    swept INTEGER;
+BEGIN
+    UPDATE camera_connection_test
+    SET status = 'abandoned',
+        completed_at = now(),
+        failure_reason = format(
+            'No result after %s. The API instance running this test most likely stopped.',
+            stale_after)
+    WHERE status IN ('pending', 'running')
+      AND COALESCE(started_at, requested_at) < now() - stale_after;
+
+    GET DIAGNOSTICS swept = ROW_COUNT;
+    RETURN swept;
+END $$;
+
+-- Low-volume table, same reasoning as purge_connection_tests_before: DELETE is
+-- fine, no partitioning needed.
+CREATE OR REPLACE FUNCTION purge_camera_connection_tests_before(cutoff TIMESTAMPTZ)
+RETURNS INTEGER
+LANGUAGE plpgsql
+SET search_path = federation, public
+AS $$
+DECLARE
+    removed INTEGER;
+BEGIN
+    DELETE FROM camera_connection_test
+    WHERE requested_at < cutoff
+      AND status IN ('completed', 'failed', 'abandoned');
+
+    GET DIAGNOSTICS removed = ROW_COUNT;
+    RETURN removed;
+END $$;
+
+
+-- ####################################################################
+-- ##  versions/v1.17.sql
+-- ####################################################################
+
+-- ===========================================================================
+-- v1.17 — authenticated credential test for an already-registered camera
+-- ===========================================================================
+--
+-- The registration flow changed: "Test connection" on the register-camera
+-- page now creates the camera immediately (POST /api/v1/cameras) with the
+-- minimal fields collected so far, saves the operator-entered username and
+-- password through the existing PUT /cameras/{id}/credential mechanism, and
+-- only then runs a REAL authenticated probe against the device. The rest of
+-- the registration form becomes an edit of that camera. This version adds the
+-- job table the new probe writes to.
+--
+-- camera_credential_test is deliberately its own table, not an extension of
+-- camera_connection_test (v1.16): that table has no camera_id (it exists to
+-- test host:port *before* a camera row exists) and its result shape
+-- (CameraReachabilityReport) is TCP-only. This one always names an existing
+-- camera, resolves and uses its stored credential, and its result shape
+-- carries an authentication outcome, not just reachability.
+--
+-- No vendor adapter is involved (Federation.Adapters is Model 3 / VMS-only).
+-- The prober (Federation.Runtime CameraCredentialProbe) is protocol-aware in
+-- a narrow, honest way: HTTP/HTTPS/ONVIF gets a real HTTP Basic-auth request;
+-- RTSP/RTSPS gets an RFC 2326 OPTIONS handshake with Basic/Digest; RTMP/SRT/
+-- OTHER degrade to a reachability-only result with an explicit
+-- "not verifiable" outcome rather than ever claiming a credential was
+-- checked when it was not.
+--
+-- Requires: v1.sql .. v1.16.sql
+-- ===========================================================================
+
+SET search_path = federation, public;
+
+CREATE TABLE IF NOT EXISTS camera_credential_test (
+    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+    camera_id           UUID NOT NULL REFERENCES cameras(id) ON DELETE CASCADE,
+
+    -- Snapshot of what was tested, taken at claim time. The camera row can be
+    -- edited after the test is claimed but before the job runs; the job must
+    -- test what the operator saw when they clicked Test, not whatever the
+    -- row has drifted to by the time a background task picks it up.
+    protocol            VARCHAR(50) NOT NULL
+                        CHECK (protocol IN
+                            ('RTSP','RTSPS','ONVIF','HTTP','HTTPS','RTMP','SRT','OTHER')),
+    ip_address           INET NOT NULL,
+    port                 INTEGER NOT NULL CHECK (port BETWEEN 1 AND 65535),
+    credential_reference TEXT NOT NULL,
+
+    status              VARCHAR(20) NOT NULL DEFAULT 'pending'
+                        CHECK (status IN ('pending','running','completed','failed','abandoned')),
+
+    requested_by        TEXT NOT NULL,
+    requested_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    executed_by          TEXT,
+    started_at           TIMESTAMPTZ,
+    completed_at          TIMESTAMPTZ,
+
+    -- CameraCredentialTestReport (Trinetra.Federation.Runtime): reachable,
+    -- authOutcome ("authenticated" | "credential_rejected" | "not_verifiable"
+    -- | "unreachable" | "error"), connectMs, detail, failure.
+    result               JSONB,
+    failure_reason        TEXT
+);
+
+CREATE INDEX IF NOT EXISTS ix_camera_credential_test_camera
+    ON camera_credential_test (camera_id, requested_at DESC);
+
+-- The sweeper's access path: jobs still claimed to be running.
+CREATE INDEX IF NOT EXISTS ix_camera_credential_test_active
+    ON camera_credential_test (started_at)
+    WHERE status IN ('pending', 'running');
+
+CREATE INDEX IF NOT EXISTS ix_camera_credential_test_requested
+    ON camera_credential_test (requested_at DESC);
+
+-- Same shape as sweep_abandoned_camera_connection_tests (v1.16), one table over.
+CREATE OR REPLACE FUNCTION sweep_abandoned_camera_credential_tests(
+    stale_after INTERVAL DEFAULT '5 minutes')
+RETURNS INTEGER
+LANGUAGE plpgsql
+SET search_path = federation, public
+AS $$
+DECLARE
+    swept INTEGER;
+BEGIN
+    UPDATE camera_credential_test
+    SET status = 'abandoned',
+        completed_at = now(),
+        failure_reason = format(
+            'No result after %s. The API instance running this test most likely stopped.',
+            stale_after)
+    WHERE status IN ('pending', 'running')
+      AND COALESCE(started_at, requested_at) < now() - stale_after;
+
+    GET DIAGNOSTICS swept = ROW_COUNT;
+    RETURN swept;
+END $$;
+
+-- Low-volume table, same reasoning as purge_camera_connection_tests_before:
+-- DELETE is fine, no partitioning needed. Shares the ConnectionTests
+-- retention cutoff (RetentionOptions) -- same category of ephemeral job row.
+CREATE OR REPLACE FUNCTION purge_camera_credential_tests_before(cutoff TIMESTAMPTZ)
+RETURNS INTEGER
+LANGUAGE plpgsql
+SET search_path = federation, public
+AS $$
+DECLARE
+    removed INTEGER;
+BEGIN
+    DELETE FROM camera_credential_test
+    WHERE requested_at < cutoff
+      AND status IN ('completed', 'failed', 'abandoned');
+
+    GET DIAGNOSTICS removed = ROW_COUNT;
+    RETURN removed;
+END $$;
+
+
+-- ####################################################################
+-- ##  versions/v1.18.sql
+-- ####################################################################
+
+-- ===========================================================================
+-- v1.18 — Correlation: windowed cross-camera matching (ARCHITECTURE-MODEL-3.md §8, Gap 1)
+-- ===========================================================================
+--
+-- Day-one correlation is windowed SQL polling over federation_event, behind the
+-- ICorrelationEngine port (SqlCorrelationEngine in Trinetra.Federation.Storage) --
+-- NOT Kafka. correlation_rule holds the per-rule config (time window, spatial
+-- radius, confidence floor, required signal agreement) so operators can tune
+-- without a deployment; it is system-seeded here and has no write API in this
+-- pass. correlation_group is the cluster a rule found; correlation_group_member
+-- is its join table, since a group can have more than two members.
+--
+-- Idempotency (CLAUDE.md #5): the unique constraint is on
+-- (rule_id, natural_key, window_bucket), not on the group's own id, so
+-- SqlCorrelationEngine re-running an overlapping window on restart hits
+-- ON CONFLICT DO NOTHING rather than creating a duplicate group.
+--
+-- correlation_group_member denormalises organization_unit_id / geographic_area_id
+-- (and camera_id / source_vms_id) from federation_event onto every member row --
+-- the same reasoning federation_event itself documents: correlation must not
+-- join back to a partitioned, 100-400M-rows/day table to resolve scope. It
+-- also means the API's scoped read (CorrelationRepository) never touches
+-- federation_event at all. federation_event_id is stored rather than an FK:
+-- federation_event's primary key is (occurred_at, event_id) because it is
+-- RANGE partitioned on occurred_at, so a real FK would need the partition key
+-- carried here too for no benefit -- event_occurred_at is kept alongside it
+-- for that same reason, as a plain column, not a constraint.
+--
+-- New permission correlation.read, granted like worker.read in v1.13: SUPER_ADMIN
+-- (via the unconditional CROSS JOIN backfill), STATE_ADMIN, DEPARTMENT_ADMIN.
+-- No write endpoint and no permission for one in this pass.
+--
+-- Requires: v1.sql .. v1.17.sql
+-- ===========================================================================
+
+SET search_path = federation, public;
+
+-- ---------------------------------------------------------------------------
+-- correlation_rule — configuration, not code (architecture §8)
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS correlation_rule (
+    id                         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    code                       TEXT NOT NULL UNIQUE,
+    name                       TEXT NOT NULL,
+    description                TEXT,
+
+    -- Events sharing an object_reference are bucketed into windows of this width;
+    -- only events in the same bucket can join one group.
+    time_window_seconds        INTEGER NOT NULL CHECK (time_window_seconds > 0),
+
+    -- Plain-trig haversine radius against the bucket's centroid -- no PostGIS
+    -- (CLAUDE.md: no PostgreSQL extensions). NULL disables the spatial check.
+    spatial_radius_meters      DOUBLE PRECISION CHECK (spatial_radius_meters IS NULL OR spatial_radius_meters > 0),
+
+    -- Minimum average member confidence for a candidate group to be recorded.
+    confidence_floor           DOUBLE PRECISION NOT NULL
+                                CHECK (confidence_floor >= 0 AND confidence_floor <= 1),
+
+    -- Minimum number of distinct cameras that must agree before a group forms.
+    -- A single camera's own repeated observations never form a group alone.
+    required_signal_agreement  INTEGER NOT NULL DEFAULT 2 CHECK (required_signal_agreement >= 2),
+
+    is_active                  BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at                 TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at                 TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+COMMENT ON TABLE correlation_rule IS
+    'Per-rule correlation config: time window, spatial radius, confidence floor, required '
+    'signal agreement (architecture §8). System-seeded; no write API in this pass -- edited by '
+    'a future admin route, not by a deployment.';
+
+-- ---------------------------------------------------------------------------
+-- correlation_group — one cluster a rule found
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS correlation_group (
+    id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    rule_id           UUID NOT NULL REFERENCES correlation_rule(id),
+
+    -- The federation_event.object_reference the group formed on: a plate, a
+    -- person reference, a track id.
+    natural_key       TEXT NOT NULL,
+
+    -- Start of the time bucket this group was computed for.
+    window_bucket     TIMESTAMPTZ NOT NULL,
+
+    -- Possible-match score in [0,1]. NEVER certainty -- cross-camera identity is
+    -- probabilistic (CLAUDE.md production posture); every surface presenting
+    -- this must say "possible match", never "confirmed".
+    confidence        DOUBLE PRECISION NOT NULL CHECK (confidence >= 0 AND confidence <= 1),
+
+    member_count      INTEGER NOT NULL CHECK (member_count >= 2),
+    first_occurred_at TIMESTAMPTZ NOT NULL,
+    last_occurred_at  TIMESTAMPTZ NOT NULL,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    -- Idempotency key (CLAUDE.md #5): NOT on the group's own id, so a restart or
+    -- an overlapping run of SqlCorrelationEngine over the same window hits
+    -- ON CONFLICT DO NOTHING instead of creating a duplicate group.
+    CONSTRAINT uq_correlation_group_dedup UNIQUE (rule_id, natural_key, window_bucket)
+);
+
+COMMENT ON TABLE correlation_group IS
+    'One cluster of events an ICorrelationEngine run judged a possible match. confidence is '
+    'always a possible-match score, never certainty. Deduplicated on '
+    '(rule_id, natural_key, window_bucket), not on id.';
+
+-- The API's list access path: recent groups, newest activity first.
+CREATE INDEX IF NOT EXISTS ix_correlation_group_last_occurred
+    ON correlation_group (last_occurred_at DESC);
+
+-- ---------------------------------------------------------------------------
+-- correlation_group_member — join table; a group can have more than 2 members
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS correlation_group_member (
+    group_id             UUID NOT NULL REFERENCES correlation_group(id) ON DELETE CASCADE,
+
+    -- federation_event.event_id -- not an FK. federation_event is RANGE
+    -- partitioned on occurred_at and its primary key is (occurred_at, event_id),
+    -- so a real FK would need the partition key carried here too for no
+    -- benefit; event_occurred_at below is kept as a plain column for that
+    -- reason, alongside the scope columns every event query already denormalises.
+    federation_event_id  TEXT NOT NULL,
+    event_occurred_at    TIMESTAMPTZ NOT NULL,
+
+    camera_id             TEXT NOT NULL,
+    source_vms_id          UUID NOT NULL,
+
+    -- Denormalised from federation_event so the API's scoped read
+    -- (CorrelationRepository) never joins back to the 100-400M-rows/day event
+    -- table -- the same reasoning federation_event itself documents for why it
+    -- denormalises organization_unit_id off the camera.
+    organization_unit_id UUID NOT NULL,
+    geographic_area_id   UUID,
+
+    PRIMARY KEY (group_id, federation_event_id)
+);
+
+COMMENT ON TABLE correlation_group_member IS
+    'Join table: the federation_event rows that make up one correlation_group. '
+    'organization_unit_id / geographic_area_id are denormalised from federation_event so a '
+    'scoped read never joins back to the partitioned event table.';
+
+-- The scoped-read access path: "does this group have a member this caller can reach".
+CREATE INDEX IF NOT EXISTS ix_correlation_member_org
+    ON correlation_group_member (group_id, organization_unit_id);
+CREATE INDEX IF NOT EXISTS ix_correlation_member_geo
+    ON correlation_group_member (group_id, geographic_area_id)
+    WHERE geographic_area_id IS NOT NULL;
+
+-- ---------------------------------------------------------------------------
+-- Permission — same shape as worker.read (v1.13)
+-- ---------------------------------------------------------------------------
+
+INSERT INTO permissions (code, name, category, description) VALUES
+    ('correlation.read', 'View correlation groups', 'events',
+        'List cross-camera possible-match groups and their member events')
+ON CONFLICT (code) DO UPDATE
+    SET name = EXCLUDED.name, category = EXCLUDED.category, description = EXCLUDED.description;
+
+-- SUPER_ADMIN holds every permission -- unconditional, idempotent backfill, the
+-- same one v1.4 / v1.11 / v1.12 / v1.13 use.
+INSERT INTO role_permissions (role_id, permission_code)
+SELECT r.id, p.code
+FROM roles r CROSS JOIN permissions p
+WHERE r.code = 'SUPER_ADMIN'
+ON CONFLICT DO NOTHING;
+
+INSERT INTO role_permissions (role_id, permission_code)
+SELECT r.id, p.code
+FROM roles r JOIN permissions p ON TRUE
+WHERE (r.code, p.code) IN (
+    ('STATE_ADMIN',      'correlation.read'),
+    ('DEPARTMENT_ADMIN', 'correlation.read')
+)
+ON CONFLICT DO NOTHING;
+
+-- ---------------------------------------------------------------------------
+-- Seed rule — the ANPR cross-camera scenario the demo path needs
+-- ---------------------------------------------------------------------------
+
+INSERT INTO correlation_rule
+    (code, name, description, time_window_seconds, spatial_radius_meters,
+     confidence_floor, required_signal_agreement, is_active)
+VALUES
+    ('ANPR_CROSS_CAMERA', 'ANPR cross-camera match',
+     'Same plate seen by two or more cameras within a 10-minute window. No spatial radius -- '
+     'plate movement between camera sites is exactly the signal this rule looks for.',
+     600, NULL, 0.6, 2, TRUE)
+ON CONFLICT (code) DO NOTHING;
+
+
+-- ####################################################################
+-- ##  versions/v1.19.sql
+-- ####################################################################
+
+-- ===========================================================================
+-- v1.19 — surveyed boundary polygons on geographic_areas (PostGIS)
+-- ===========================================================================
+--
+-- CLAUDE.md's "no PostgreSQL extensions" invariant is deliberately reversed here, by explicit
+-- project-owner decision — see the note added to CLAUDE.md alongside this file. Coverage sectors
+-- (v1.6) stay pure C# in Federation.Core; PostGIS is introduced only for what plain lat/long
+-- cannot do: measuring a camera's coverage against a real administrative boundary.
+--
+-- boundary is nullable — most areas will not have surveyed polygon data on day one, and a camera
+-- registry, GIS point feed and coverage-sector rendering must all keep working with zero rows
+-- populated. Only the new coverage-gap analysis (GET /gis/gaps) requires it, and that route
+-- reports "no boundary set" rather than guessing when it is absent (never silently "fully
+-- covered" or "fully uncovered" — CLAUDE.md's production-posture rule against presenting an
+-- unknown as a fact).
+--
+-- The boundary write path is an admin-only bulk import
+-- (POST /api/v1/geographic-areas/bulk-import-boundaries), matching the existing camera
+-- bulk-import shape, not a per-area form field — this is surveyed reference data, not something
+-- an operator free-hands.
+--
+-- Deployment note: the bare-metal Postgres host needs the PostGIS extension package installed
+-- (e.g. postgresql-<version>-postgis-3) before this file is applied, and CREATE EXTENSION needs
+-- superuser or a pre-granted role — see docs/DEPLOYMENT.md. This file does not run itself; per
+-- the Dockerfile and every other version file, nothing in the running system touches the schema.
+
+CREATE EXTENSION IF NOT EXISTS postgis;
+
+ALTER TABLE geographic_areas ADD COLUMN IF NOT EXISTS boundary geometry(Polygon, 4326);
+
+CREATE INDEX IF NOT EXISTS ix_geographic_areas_boundary
+    ON geographic_areas USING GIST (boundary);
+
+
+-- ####################################################################
+-- ##  versions/v1.20.sql
+-- ####################################################################
+
+-- ===========================================================================
+-- v1.20 — per-user video-wall layout preference
+-- ===========================================================================
+--
+-- The video wall's tile layout (how many tiles, which camera in each) is a personal UI
+-- preference, not department-scoped or RBAC-sensitive domain data — one row per user, keyed to
+-- their own id, read/written only through their own session. It carries no organization or
+-- geography scope, no permission gate beyond authentication, and no audit row (CLAUDE.md's
+-- "every sensitive operation is... audit-logged" invariant is aimed at department-scoped domain
+-- mutations and privileged administration, not a personal layout choice).
+--
+-- camera_ids is stored as an array rather than a join table: the tile order matters (it is the
+-- grid position) and the array's own ordinal position carries it, with no need for a separate
+-- position column or the up-front normalization a join table would need for what is, at 80,000
+-- cameras, still a tiny per-user list. The wall has no fixed tile count: a caller adds/removes
+-- cameras one at a time and rows grow or shrink to fit; tile_count is kept in sync with
+-- camera_ids' length purely as a cheap read-side convenience (avoids every reader recomputing
+-- array_length), not a separate source of truth — the API always writes it as cameraIds.length.
+--
+-- No FK to cameras(id): a camera can be deleted or move out of the caller's scope after being
+-- placed on the wall, and the layout should not be silently rewritten or blocked by that — the
+-- API resolves ids against the caller's current camera access at read time and leaves a
+-- now-invisible id in place rather than pruning it, the same "let it go stale, don't hide state"
+-- choice used elsewhere in this schema.
+
+CREATE TABLE IF NOT EXISTS video_wall_preference (
+    user_id      UUID PRIMARY KEY REFERENCES platform_users(id) ON DELETE CASCADE,
+    tile_count   INTEGER NOT NULL CHECK (tile_count BETWEEN 1 AND 64),
+    column_count INTEGER NOT NULL DEFAULT 2 CHECK (column_count BETWEEN 1 AND 12),
+    camera_ids   UUID[] NOT NULL DEFAULT '{}'::uuid[],
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+
+-- ####################################################################
+-- ##  versions/v1.21.sql
+-- ####################################################################
+
+-- ===========================================================================
+-- v1.21 — descriptive HR metadata on platform_users (org unit, geographic area, designation)
+-- ===========================================================================
+--
+-- Three columns for "who this person is" in the org chart, distinct from "what this account can
+-- do", which comes entirely from access-group membership (role + org/geo scopes). Rationale:
+-- access groups say what a user may reach; these three say which department they sit in, which
+-- area they cover, and their job title, for display and reporting only.
+--
+-- organization_unit_id / geographic_area_id are DESCRIPTIVE ONLY, the same pattern already used
+-- for organization_units.geographic_area_id (v1.11, invariant 12): validated for existence +
+-- ACTIVE on write, and NEVER read by has_permission, authorized_org_units,
+-- authorized_geographic_areas, unscoped_permissions, or any other scope-resolution function or
+-- predicate. Organization and geography remain independent scope dimensions, ANDed, sourced only
+-- from access_groups/scopes — these columns carry zero authorization weight and must not be
+-- joined into CallerContext, a scope predicate, or any *_read/*_manage query's WHERE clause.
+--
+-- designation is free text (job title), capped to the column width by the API, no other
+-- validation — it is a label, not a controlled vocabulary.
+--
+-- All three are nullable: most existing accounts will not have this set, and it is never
+-- required to create or use an account.
+
+ALTER TABLE platform_users
+    ADD COLUMN organization_unit_id UUID REFERENCES organization_units(id),
+    ADD COLUMN geographic_area_id   UUID REFERENCES geographic_areas(id),
+    ADD COLUMN designation          VARCHAR(150);
+
+
+
+
+-- ####################################################################
+-- ##  versions/v1.22.sql
+-- ####################################################################
+
+-- ===========================================================================
+-- v1.22 — camera credential resolution for the streaming gateway (G1)
+-- ===========================================================================
+--
+-- docs/STREAMING-GATEWAY-PLAN.md's G1: the live-streaming gateway (browser-facing, opens RTSP
+-- connections to cameras directly, same reason ai-worker needed v1.5's
+-- GET /api/v1/vms/{id}/credential/resolve) needs the symmetric route for a STANDALONE registry
+-- camera's own credential_reference:
+--
+--   GET /api/v1/cameras/{id}/credential/resolve  -> camera.credential.resolve
+--
+-- WHY A NEW PERMISSION AND A NEW ROLE, NOT REUSE OF v1.5's DETECTION_WORKER
+--
+--   * DETECTION_WORKER holds credential.resolve (VMS-target credentials) AND observation.write.
+--     The streaming gateway is browser/operator-facing — a materially larger attack surface than
+--     ai-worker's backend-only VMS polling — so a compromise there must not also be able to
+--     forge ANPR/person/vehicle observations into the metadata layer that correlation, search
+--     and alerting all trust. Two roles can each independently hold the SAME permission code
+--     without coupling their other grants — STREAMING_GATEWAY holding credential.resolve does
+--     not give it DETECTION_WORKER's observation.write, since permissions are independent grants
+--     on a role, not a shared role. A distinct role is what actually keeps them apart; a distinct
+--     permission code is not required for that, and camera.credential.resolve (standalone-camera
+--     credentials) is still its own new permission because it gates a genuinely new route, not
+--     because credential.resolve needed to be avoided.
+--   * STREAMING_GATEWAY holds: camera.read (CameraRepository.GetAsync's own scope requirement),
+--     camera.credential.resolve (the new route above, for a standalone camera's own
+--     credential_reference), vms.read (ConnectorTargetRepository.GetAsync's equivalent
+--     requirement), and credential.resolve (the EXISTING GET /vms/{id}/credential/resolve's
+--     explicit .RequirePermission gate — vms.read alone satisfies only the repository's internal
+--     scope check, not the route itself, which requires credential.resolve independently). The
+--     vms.read + credential.resolve pair lets the gateway resolve a VMS-managed camera's
+--     credential from its connector target when the camera's own credential_reference is null
+--     (the ordinary case for such a camera — Federation.Core's Camera model never falls back
+--     automatically; the caller resolves whichever row actually holds the reference). Still no
+--     observation.write, no worker.heartbeat, nothing else DETECTION_WORKER has.
+--
+-- Requires: v1.sql .. v1.21.sql
+-- ===========================================================================
+
+SET search_path = federation, public;
+
+-- ---------------------------------------------------------------------------
+-- Permission
+-- ---------------------------------------------------------------------------
+
+INSERT INTO permissions (code, name, category, description) VALUES
+    ('camera.credential.resolve', 'Resolve standalone camera credentials',
+     'admin',
+     'Read the resolved username/password/token stored directly on a standalone registry '
+     || 'camera, in order to connect to its stream. Machine callers only; every resolution is '
+     || 'audit-logged. Distinct from credential.resolve (VMS-target credentials) so the two '
+     || 'disclosure paths can be held by different, narrower machine roles.')
+ON CONFLICT (code) DO UPDATE
+    SET name = EXCLUDED.name, category = EXCLUDED.category, description = EXCLUDED.description;
+
+-- SUPER_ADMIN receives every permission (v1.sql's CROSS JOIN only ran against the permissions
+-- that existed then). Re-run for the one just added.
+INSERT INTO role_permissions (role_id, permission_code)
+SELECT r.id, p.code
+FROM roles r CROSS JOIN permissions p
+WHERE r.code = 'SUPER_ADMIN'
+ON CONFLICT DO NOTHING;
+
+-- ---------------------------------------------------------------------------
+-- STREAMING_GATEWAY — the machine role for the live-streaming gateway
+-- ---------------------------------------------------------------------------
+
+-- is_system: shipped with the platform, not operator-defined, so the UI and the escalation
+-- guards treat it like the other built-ins. status is set ACTIVE explicitly: the column default
+-- became DRAFT in v1.12 (which grants nothing), and presets are seeded ACTIVE.
+INSERT INTO roles (code, name, description, is_system, status) VALUES
+    ('STREAMING_GATEWAY', 'Streaming Gateway',
+     'Live-streaming gateway (docs/STREAMING-GATEWAY-PLAN.md): resolves one camera''s credential '
+     || 'to open its RTSP stream. Deliberately narrower than DETECTION_WORKER — no '
+     || 'observation.write, no worker.heartbeat. Machine only.',
+     TRUE, 'ACTIVE')
+ON CONFLICT (code) DO UPDATE
+    SET name = EXCLUDED.name, description = EXCLUDED.description
+    WHERE roles.customized_at IS NULL;
+
+INSERT INTO role_permissions (role_id, permission_code)
+SELECT r.id, p.code
+FROM roles r JOIN permissions p ON TRUE
+WHERE (r.code, p.code) IN (
+    ('STREAMING_GATEWAY', 'camera.read'),
+    ('STREAMING_GATEWAY', 'vms.read'),
+    ('STREAMING_GATEWAY', 'camera.credential.resolve'),
+    ('STREAMING_GATEWAY', 'credential.resolve')
+)
+ON CONFLICT DO NOTHING;
+
+
+
+
+-- ####################################################################
+-- ##  versions/v1.23.sql
+-- ####################################################################
+
+-- ===========================================================================
+-- v1.23 — reusable saved credentials for camera registration
+-- ===========================================================================
+--
+-- Registering many cameras at one site today means re-typing the same device username/password
+-- into every camera's own sealed credential (CameraCredentialEndpoints). This adds a small named
+-- library an operator can populate once ("Site NVR admin", "Axis default") and then point several
+-- cameras at, instead of retyping.
+--
+-- Deliberately NOT a new secret store: `saved_credential` holds only metadata (name, description,
+-- which reference). The secret itself is sealed exactly as it is everywhere else in this schema —
+-- one row in the existing `secret` table, written through the existing `SecretWriter`, under a
+-- reference of the form `saved-credential:{id}`.
+--
+-- Chosen as a SHARED reference, not copy-on-select: a camera's own `credentialReference` (already
+-- a plain, operator-settable field on `POST/PUT /cameras` — see v1.sql's `cameras` table and
+-- `CameraContracts.CameraWriteRequest`) is set to the SAME reference string as the library entry.
+-- Cameras sharing a library entry therefore share one sealed secret; rotating the library entry's
+-- password rotates it for every camera pointed at it, and resolution (`GET
+-- /cameras/{id}/credential/resolve`, the streaming gateway, ai-worker) needs no new code path —
+-- it already resolves whatever `credential_reference` a camera carries. This is an explicit
+-- project-owner choice over a copy-on-select model: the tradeoff is that deleting or rotating a
+-- library entry affects every camera using it, which is the point.
+--
+-- No new permission: gated the same way CameraCredentialEndpoints already is (see that class's
+-- remarks) — `camera.read` to list (metadata only, never secret material) and `camera.update` to
+-- create, matching the audience that already manages the registry rather than requiring
+-- `credential.write` ("Highest privilege in the system") and stranding them.
+--
+-- Requires: v1.sql .. v1.22.sql
+-- ===========================================================================
+
+SET search_path = federation, public;
+
+CREATE TABLE IF NOT EXISTS saved_credential (
+    id                   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+    -- Operator-facing label ("Site NVR admin") and optional free-text note. Unique on name so the
+    -- picker in the camera form has no ambiguous duplicates to choose between.
+    name                 VARCHAR(255) NOT NULL,
+    description          TEXT,
+
+    -- Points into the existing `secret` table (v1.sql). FK'd, not just a bare string: a saved
+    -- credential with no sealed secret behind it would be a silent dead entry in the picker.
+    credential_reference TEXT NOT NULL UNIQUE REFERENCES secret(credential_reference),
+
+    created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+    created_by           TEXT NOT NULL,
+
+    CONSTRAINT uq_saved_credential_name UNIQUE (name)
+);
+
+
+
+
+-- ####################################################################
+-- ##  versions/v1.24.sql
+-- ####################################################################
+
+-- ===========================================================================
+-- v1.24 — rotate/edit/delete for the saved-credential library, and usage tracking
+-- ===========================================================================
+--
+-- v1.23 shipped the saved-credential library as create + list only, deliberately (see that
+-- file's remarks) — the missing piece was rotation, and rotation is the entire point of the
+-- SHARED-reference design it chose: a camera points at a saved credential's `credential_reference`
+-- directly rather than getting its own copy, specifically so that rotating the saved credential
+-- rotates it for every camera using it. Without a rotate route, "shared" was only shared at
+-- creation time.
+--
+-- This adds:
+--   * `updated_at` / `updated_by` on `saved_credential`, so a rotation is visible the same way
+--     every other editable row in this schema records its last edit.
+--   * Nothing else schema-side — "how many/which cameras use this reference" is answered by
+--     querying `cameras.credential_reference` directly (already an unconstrained TEXT column,
+--     v1.6), not by a new join table. A saved credential and the cameras pointed at its reference
+--     are linked only by both holding the same string, exactly as designed in v1.23; adding a
+--     foreign key from `cameras` to `saved_credential` would wrongly forbid a camera from using a
+--     hand-entered `credential_reference` that was never created through the library.
+--
+-- Requires: v1.sql .. v1.23.sql
+-- ===========================================================================
+
+SET search_path = federation, public;
+
+ALTER TABLE saved_credential
+    ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    ADD COLUMN IF NOT EXISTS updated_by TEXT;
+
+
+
+
+-- ####################################################################
+-- ##  versions/v1.25.sql
+-- ####################################################################
+
+-- ===========================================================================
+-- v1.25 — native HLS/WebRTC stream sources, bypassing MediaMTX's RTSP remux
+-- ===========================================================================
+--
+-- The streaming gateway (docs/STREAMING-GATEWAY-PLAN.md) has so far assumed every camera is
+-- RTSP-only and needs MediaMTX to pull it and remux to HLS. Some cameras/NVRs expose their own
+-- native HLS and/or WebRTC (WHEP) endpoints directly — for those, pulling their RTSP feed into
+-- MediaMTX just to re-serve HLS is unnecessary work the device has already done itself. This
+-- lets a camera opt into pointing the gateway at its own native URL instead, per-protocol:
+--
+--   RTSP    (default) — unchanged: MediaMTX pulls stream_reference, Federation.Api proxies its
+--            HLS output, exactly as today. The only mode every existing camera has.
+--   HLS     — Federation.Api proxies native_hls_url directly; MediaMTX is never involved for
+--             this camera. For dashboards, mobile, restricted networks.
+--   WEBRTC  — Federation.Api proxies only the WHEP *signaling* exchange (the SDP offer/answer
+--             POST, and the session-teardown DELETE) to native_webrtc_url; the actual media
+--             then flows directly between the viewer's browser and the device over WebRTC,
+--             never through this API. For low-latency browser preview.
+--
+-- RTSP itself stays available unconditionally regardless of this preference — an AI-inference
+-- consumer (OpenCV/GStreamer/FFmpeg/DeepStream) connects to stream_reference directly and never
+-- goes through this gateway or cares what a browser viewer's preference is.
+--
+-- Requires: v1.sql .. v1.24.sql
+-- ===========================================================================
+
+SET search_path = federation, public;
+
+ALTER TABLE cameras
+    ADD COLUMN IF NOT EXISTS stream_preference VARCHAR(20) NOT NULL DEFAULT 'RTSP'
+        CHECK (stream_preference IN ('RTSP', 'HLS', 'WEBRTC')),
+    ADD COLUMN IF NOT EXISTS native_hls_url TEXT,
+    ADD COLUMN IF NOT EXISTS native_webrtc_url TEXT;
+
+
+
+
+-- ####################################################################
+-- ##  versions/v1.26.sql
+-- ####################################################################
+
+-- ===========================================================================
+-- v1.26 — operator/free-form tagging on detections
+-- ===========================================================================
+--
+-- RFP Model 2 "event tagging": `detection_event.event_type` is deliberately a closed set
+-- (ANPR_DETECTED | VEHICLE_DETECTED — finding 15-L2, a free-text classification search and
+-- dashboards can't reason about). That closed set is the AI worker's own machine classification
+-- and stays exactly as-is; this is a separate, additive concept — free-form labels a human
+-- operator attaches during review/triage ("suspicious", "false positive", "priority-follow-up",
+-- anything they want), independent of what the detection was machine-classified as.
+--
+-- A normal table, not a partition of detection_event: tag volume is a small fraction of
+-- detection volume (most detections are never tagged), and every read/write here is by a human
+-- in a UI, not a high-throughput ingest path — none of the reasons detection_event itself is
+-- partitioned by time apply to its tags.
+--
+-- No FK to detection_event: its primary key is (occurred_at, event_id) — occurred_at is the
+-- partition key, so a normal FK "just referencing event_id" isn't expressible, and requiring
+-- every tag write to carry occurred_at just to satisfy a constraint reintroduces exactly the
+-- coupling denormalisation avoids elsewhere on this row (see detection_event's own
+-- organization_unit_id/geographic_area_id comments). Existence + scope are instead checked by
+-- the endpoint reading detection_event directly before writing a tag (DetectionTagEndpoints).
+--
+-- organization_unit_id/geographic_area_id are denormalised onto the tag row at write time, the
+-- same convention detection_event itself already uses ("scoping a query must not join to resolve
+-- ownership") — a tag list/delete never has to re-join detection_event to enforce scope.
+--
+-- Requires: v1.sql .. v1.25.sql
+-- ===========================================================================
+
+SET search_path = federation, public;
+
+CREATE TABLE IF NOT EXISTS detection_tag (
+    id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    detection_event_id    TEXT NOT NULL,
+    detection_occurred_at TIMESTAMPTZ NOT NULL,
+
+    tag                   TEXT NOT NULL CHECK (char_length(tag) BETWEEN 1 AND 40),
+
+    -- Denormalised from detection_event at write time — see the note above.
+    organization_unit_id  UUID NOT NULL REFERENCES organization_units(id),
+    geographic_area_id    UUID,
+
+    created_by            UUID REFERENCES platform_users(id),
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Case-insensitive dedup: "Reviewed" and "reviewed" are the same tag. ON CONFLICT targets this
+-- expression index directly (DetectionTagRepository.AddTagAsync).
+CREATE UNIQUE INDEX IF NOT EXISTS ux_detection_tag_dedup
+    ON detection_tag (detection_event_id, lower(tag));
+
+CREATE INDEX IF NOT EXISTS ix_detection_tag_event
+    ON detection_tag (detection_event_id);
+CREATE INDEX IF NOT EXISTS ix_detection_tag_org
+    ON detection_tag (organization_unit_id);
+
+
 COMMIT;

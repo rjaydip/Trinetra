@@ -70,6 +70,27 @@ public sealed record Camera
 
     public string? StreamReference { get; init; }
 
+    /// <summary>
+    /// Which source the streaming gateway plays a browser viewer's live feed from (v1.25) — one
+    /// of <see cref="CameraVocab.StreamPreferences"/>. <c>RTSP</c> (the default, and the only
+    /// value every camera predating this had) means MediaMTX pulls <see cref="StreamReference"/>
+    /// and the gateway proxies its HLS output, unchanged from before. <c>HLS</c>/<c>WEBRTC</c>
+    /// mean the camera already exposes that natively at <see cref="NativeHlsUrl"/>/
+    /// <see cref="NativeWebrtcUrl"/>, and the gateway proxies that directly instead — MediaMTX is
+    /// never involved for such a camera. <see cref="StreamReference"/> itself stays available
+    /// regardless of this preference: an AI-inference consumer (OpenCV/GStreamer/FFmpeg/
+    /// DeepStream) connects to it directly and never goes through the streaming gateway.
+    /// </summary>
+    public string StreamPreference { get; init; } = CameraVocab.StreamPreferenceRtsp;
+
+    /// <summary>The camera/NVR's own native HLS URL. Only meaningful when
+    /// <see cref="StreamPreference"/> is <c>HLS</c>.</summary>
+    public string? NativeHlsUrl { get; init; }
+
+    /// <summary>The camera/NVR's own native WHEP (WebRTC-HTTP Egress Protocol) URL. Only
+    /// meaningful when <see cref="StreamPreference"/> is <c>WEBRTC</c>.</summary>
+    public string? NativeWebrtcUrl { get; init; }
+
     /// <summary>Opaque pointer into the secret store. The registry never resolves it.</summary>
     public string? CredentialReference { get; init; }
 
@@ -134,4 +155,12 @@ public static class CameraVocab
     public static readonly IReadOnlySet<string> Protocols =
         new HashSet<string>(StringComparer.Ordinal)
         { "RTSP", "RTSPS", "ONVIF", "HTTP", "HTTPS", "RTMP", "SRT", "OTHER" };
+
+    public const string StreamPreferenceRtsp = "RTSP";
+    public const string StreamPreferenceHls = "HLS";
+    public const string StreamPreferenceWebrtc = "WEBRTC";
+
+    public static readonly IReadOnlySet<string> StreamPreferences =
+        new HashSet<string>(StringComparer.Ordinal)
+        { StreamPreferenceRtsp, StreamPreferenceHls, StreamPreferenceWebrtc };
 }

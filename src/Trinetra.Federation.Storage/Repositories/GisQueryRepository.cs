@@ -30,6 +30,19 @@ public sealed record CoverageBucketRow
     public long Count { get; init; }
 }
 
+/// <summary>Whether a geographic area is reachable and has a surveyed boundary to analyze.</summary>
+public enum AreaBoundaryStatus
+{
+    /// <summary>Absent, or out of the caller's geographic scope — the two are indistinguishable by design.</summary>
+    NotFound,
+
+    /// <summary>The area exists and is reachable, but <c>boundary</c> is null.</summary>
+    NoBoundary,
+
+    /// <summary>The area exists, is reachable, and has a boundary to difference against.</summary>
+    Ready,
+}
+
 /// <summary>
 /// Read models for the GIS layer, scoped by the GIS permissions.
 /// </summary>
@@ -152,6 +165,118 @@ public sealed class GisQueryRepository
 
         return [.. rows];
     }
+
+    /// <summary>
+    /// Every in-scope, live camera within an area (including descendants) that has coverage
+    /// optics — the sector inputs for coverage-gap analysis (<c>GET /gis/gaps</c>).
+    /// </summary>
+    /// <remarks>
+    /// Bounded by the single <paramref name="geographicAreaId"/>, not a global scan — one area's
+    /// camera count, never the whole estate. <see cref="GapsCameraLimit"/> caps it defensively;
+    /// nothing in today's deployment scale approaches it for one area.
+    /// </remarks>
+    public async Task<IReadOnlyList<GisCameraRow>> ListForAreaAsync(
+        Guid geographicAreaId, CallerContext caller, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(caller);
+        caller.Require("gis.coverage.read");
+
+        await using var c = await _dataSource.OpenConnectionAsync(ct);
+
+        var args = ScopeArgs(Guid.Empty, caller, "gis.coverage.read");
+        args.Add("GeographicAreaId", geographicAreaId);
+        args.Add("Limit", GapsCameraLimit);
+
+        var rows = await c.QueryAsync<GisCameraRow>(new CommandDefinition($"""
+            SELECT c.id, c.camera_code AS code, c.name, c.organization_unit_id,
+                   c.manufacturer, c.camera_type, c.latitude, c.longitude,
+                   c.azimuth, c.horizontal_fov, c.effective_range,
+                   c.operational_status, c.connectivity_status, c.maintenance_status
+            FROM federation.cameras c
+            WHERE c.deleted_at IS NULL
+              AND {GeoArea} IN (SELECT id FROM federation.geographic_area_descendants(@GeographicAreaId))
+              AND ({Scope("gis.coverage.read")})
+            ORDER BY c.camera_code, c.id
+            LIMIT @Limit;
+            """, args, cancellationToken: ct));
+
+        return [.. rows];
+    }
+
+    /// <summary>
+    /// Whether <paramref name="geographicAreaId"/> is reachable to the caller and, if so, whether
+    /// it has a surveyed boundary to analyze coverage against.
+    /// </summary>
+    public async Task<AreaBoundaryStatus> GetAreaBoundaryStatusAsync(
+        Guid geographicAreaId, CallerContext caller, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(caller);
+        caller.Require("gis.coverage.read");
+
+        await using var c = await _dataSource.OpenConnectionAsync(ct);
+
+        var hasBoundary = await c.QuerySingleOrDefaultAsync<bool?>(new CommandDefinition("""
+            SELECT (a.boundary IS NOT NULL)
+            FROM federation.geographic_areas a
+            WHERE a.id = @GeographicAreaId
+              AND (@UnscopedGeo OR a.id IN (
+                  SELECT geographic_area_id FROM federation.authorized_geographic_areas(
+                      p_user_id => @UserId, p_api_key_id => @ApiKeyId, p_permission => @Perm)));
+            """, new
+        {
+            GeographicAreaId = geographicAreaId,
+            caller.UserId, caller.ApiKeyId,
+            Perm = "gis.coverage.read",
+            UnscopedGeo = caller.IsUnscopedForGeography("gis.coverage.read"),
+        }, cancellationToken: ct));
+
+        return hasBoundary switch
+        {
+            null => AreaBoundaryStatus.NotFound,
+            false => AreaBoundaryStatus.NoBoundary,
+            true => AreaBoundaryStatus.Ready,
+        };
+    }
+
+    /// <summary>
+    /// Differences the given coverage-sector polygons (WKT, WGS84) against the area's surveyed
+    /// boundary and returns the residual uncovered area as a GeoJSON geometry object (raw text —
+    /// the caller deserializes it into the response's <c>GeoJsonGeometry</c>).
+    /// </summary>
+    /// <remarks>
+    /// Sector math itself never touches SQL — <paramref name="sectorWktPolygons"/> is the output
+    /// of <c>CoverageSector.Ring</c>, already computed in C#. This is the one place PostGIS is
+    /// used at all: <c>ST_Union</c> the sectors, <c>ST_Difference</c> against <c>boundary</c>.
+    /// Call only after <see cref="GetAreaBoundaryStatusAsync"/> confirms a boundary exists —
+    /// this method does not re-check reachability.
+    /// </remarks>
+    public async Task<string?> ComputeGapGeoJsonAsync(
+        Guid geographicAreaId, IReadOnlyList<string> sectorWktPolygons, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(sectorWktPolygons);
+
+        await using var c = await _dataSource.OpenConnectionAsync(ct);
+
+        return await c.ExecuteScalarAsync<string?>(new CommandDefinition("""
+            SELECT ST_AsGeoJSON(
+                ST_Difference(
+                    a.boundary,
+                    COALESCE(
+                        ST_Union(ARRAY(
+                            SELECT ST_GeomFromText(w, 4326)
+                            FROM unnest(@SectorWkt::text[]) AS w)),
+                        ST_GeomFromText('GEOMETRYCOLLECTION EMPTY', 4326))))
+            FROM federation.geographic_areas a
+            WHERE a.id = @GeographicAreaId;
+            """, new
+        {
+            GeographicAreaId = geographicAreaId,
+            SectorWkt = sectorWktPolygons.ToArray(),
+        }, cancellationToken: ct));
+    }
+
+    /// <summary>Cap on how many in-area cameras feed one gap analysis.</summary>
+    private const int GapsCameraLimit = 5000;
 
     // Same dual-dimension predicate as CameraRepository, parameterised by permission.
     private static string Scope(string permission) => $"""

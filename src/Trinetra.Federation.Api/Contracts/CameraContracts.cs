@@ -33,6 +33,9 @@ public sealed record CameraWriteRequest(
     string? Protocol = null,
     Guid? VmsId = null,
     string? StreamReference = null,
+    string? StreamPreference = null,
+    string? NativeHlsUrl = null,
+    string? NativeWebrtcUrl = null,
     string? CredentialReference = null,
     DateOnly? InstallationDate = null,
     bool RecordEvents = true,
@@ -65,6 +68,9 @@ public sealed record CameraResponse(
     string? Protocol,
     Guid? VmsId,
     string? StreamReference,
+    string StreamPreference,
+    string? NativeHlsUrl,
+    string? NativeWebrtcUrl,
     string? CredentialReference,
     DateOnly? InstallationDate,
     bool RecordEvents,
@@ -78,6 +84,22 @@ public sealed record CameraResponse(
 
 /// <summary>One page of the registry. A null <see cref="NextCursor"/> is the end of the results.</summary>
 public sealed record CameraPage(IReadOnlyList<CameraResponse> Items, string? NextCursor);
+
+/// <summary>RFP Model 1 "ageing-infrastructure reporting" — how many in-scope cameras fall into
+/// each installation-age band, plus the oldest ones by name, for prioritising replacement.
+/// <c>Buckets</c> is always exactly 5 entries, in a fixed order, even when a band's count is
+/// zero — a stable shape for a chart to render directly.</summary>
+public sealed record AgeingInfrastructureResponse(
+    int TotalCameras, IReadOnlyList<AgeingInfrastructureBucketResponse> Buckets,
+    IReadOnlyList<AgeingCameraSummaryResponse> OldestCameras);
+
+/// <summary><c>Bucket</c> is a stable machine key (<c>under_3</c>, <c>3_to_5</c>, <c>5_to_10</c>,
+/// <c>10_plus</c>, <c>unknown</c>); <c>Label</c> is what to display.</summary>
+public sealed record AgeingInfrastructureBucketResponse(string Bucket, string Label, int Count);
+
+public sealed record AgeingCameraSummaryResponse(
+    Guid Id, string CameraCode, string Name, DateOnly InstallationDate, int AgeYears,
+    string MaintenanceStatus);
 
 // ---- GeoJSON (RFC 7946) --------------------------------------------------
 // Coordinates are polymorphic by geometry type, so they are typed as object: a Point carries a

@@ -64,8 +64,8 @@ export function EventsPage() {
     </header>
     <fieldset className="registry-filters">
       <legend>Search filters</legend>
-      <label>From<span aria-hidden="true"> *</span><input aria-required="true" type="datetime-local" value={from} onChange={(event) => updateFilter(setFrom, event.target.value)} /></label>
-      <label>To<span aria-hidden="true"> *</span><input aria-required="true" type="datetime-local" value={to} onChange={(event) => updateFilter(setTo, event.target.value)} /></label>
+      <label><span>From<span aria-hidden="true"> *</span></span><input aria-required="true" type="datetime-local" value={from} onChange={(event) => updateFilter(setFrom, event.target.value)} /></label>
+      <label><span>To<span aria-hidden="true"> *</span></span><input aria-required="true" type="datetime-local" value={to} onChange={(event) => updateFilter(setTo, event.target.value)} /></label>
       <label>Camera id<input value={cameraId} onChange={(event) => updateFilter(setCameraId, event.target.value)} /></label>
       <label>Event type<input value={eventType} onChange={(event) => updateFilter(setEventType, event.target.value)} /></label>
       <label>Object reference<input value={objectReference} onChange={(event) => updateFilter(setObjectReference, event.target.value)} /></label>

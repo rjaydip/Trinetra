@@ -54,6 +54,14 @@ export interface CameraWriteRequest {
   connectivityStatus?: string | null;
   maintenanceStatus?: string | null;
   recordEvents?: boolean;
+  /** `RTSP` (default, pulled through the MediaMTX gateway), `HLS` (the camera's own
+   * `nativeHlsUrl`, proxied directly), or `WEBRTC` (the camera's own `nativeWebrtcUrl`, relayed
+   * via WHEP signaling only — media flows browser<->device directly). */
+  streamPreference?: string;
+  /** Required when `streamPreference` is `HLS` — the camera's own HLS master playlist URL. */
+  nativeHlsUrl?: string | null;
+  /** Required when `streamPreference` is `WEBRTC` — the camera's own WHEP endpoint URL. */
+  nativeWebrtcUrl?: string | null;
 }
 
 export interface CameraConnectionTestRequest {
@@ -136,6 +144,9 @@ export interface CameraPatchRequest {
   connectivityStatus?: string;
   maintenanceStatus?: string;
   recordEvents?: boolean;
+  streamPreference?: string;
+  nativeHlsUrl?: string | null;
+  nativeWebrtcUrl?: string | null;
 }
 
 export interface CameraResponse extends CameraWriteRequest {
@@ -152,6 +163,25 @@ export interface CameraResponse extends CameraWriteRequest {
 export interface CameraPage {
   items: CameraResponse[];
   nextCursor: string | null;
+}
+
+/** The caller's saved video-wall layout — cameras in grid order, wrapping every `columnCount`
+ * tiles. There are no empty-tile placeholders; `cameraIds.length` is the tile count. */
+export interface VideoWallPreferences {
+  columnCount: number;
+  cameraIds: string[];
+}
+
+/** A short-lived, single-camera HLS viewing session (`GET /api/v1/streams/{cameraId}/session`) —
+ * `token` is presented as `Authorization: Bearer {token}` on every playlist/segment request to
+ * the streaming gateway, never to this API. */
+export interface StreamSessionResponse {
+  cameraId: string;
+  token: string;
+  expiresAt: string;
+  /** The camera's `streamPreference` at mint time — `RTSP`/`HLS` both mean "play
+   * `GET /{cameraId}/{*hlsPath}` as HLS"; `WEBRTC` means "use `POST /{cameraId}/whep` instead". */
+  mode: string;
 }
 
 /** The `{ items, page, pageSize, total, totalPages }` envelope returned by any list endpoint that
@@ -288,6 +318,21 @@ export interface GeoJsonFeatureCollection {
 
 export interface CoverageSummaryResponse {
   buckets: Record<string, Record<string, number>>;
+}
+
+/** `GET /api/v1/gis/gaps` — the part of a geographic area's surveyed boundary that no in-scope
+ * camera's estimated coverage sector reaches. `geometry: null` means every sector considered
+ * unions to cover the whole boundary (no gap), not "unknown" — an area with no boundary at all
+ * is a 404, not this shape with a null geometry. */
+export interface GapAnalysisResponse {
+  type: 'Feature';
+  geometry: { type: string; coordinates: unknown } | null;
+  properties: {
+    geographicAreaId: string;
+    cameraSectorsConsidered: number;
+    estimated: true;
+    disclaimer: string;
+  };
 }
 
 // ---- VMS management (state, health, capabilities) ----------------------
@@ -516,6 +561,52 @@ export interface CredentialExistsResponse {
   exists: boolean;
 }
 
+/** Creates a reusable named credential in the saved-credential library. Write-only, like
+ * `CredentialRequest` — nothing here is ever echoed back. */
+export interface SavedCredentialRequest {
+  name: string;
+  description?: string | null;
+  username?: string | null;
+  password?: string | null;
+  token?: string | null;
+}
+
+/** Rotates or renames a saved credential. Supplying a password or a token reseals the SAME
+ * `credentialReference` every camera pointed at this entry already carries — that's the rotation
+ * route, and it takes effect for all of them with no per-camera write. Supplying neither only
+ * updates `name`/`description`. */
+export interface SavedCredentialUpdateRequest {
+  name?: string;
+  description?: string | null;
+  username?: string | null;
+  password?: string | null;
+  token?: string | null;
+}
+
+/** One camera pointed at a saved credential's reference (`GET /credential-library/{id}`'s
+ * `usedBy`). */
+export interface SavedCredentialUsedByResponse {
+  id: string;
+  cameraCode: string;
+  name: string;
+}
+
+/** A saved-credential library entry. Metadata only — `credentialReference` is the pointer a
+ * camera's own `credentialReference` field is set to in order to share this entry's sealed
+ * secret; it is never secret material itself. `usageCount` is a true total; `usedBy` is populated
+ * only by `GET /credential-library/{id}` (null on the list route), scoped to cameras the caller
+ * can see. */
+export interface SavedCredentialResponse {
+  id: string;
+  name: string;
+  description: string | null;
+  credentialReference: string;
+  createdAt: string;
+  updatedAt: string;
+  usageCount: number;
+  usedBy?: SavedCredentialUsedByResponse[] | null;
+}
+
 export interface FederatedCameraResponse {
   nativeCameraId: string;
   cameraId: string | null;
@@ -553,6 +644,31 @@ export interface GeographicAreaResponse {
   name: string;
   areaType: string;
   status: string;
+}
+
+/** One row of `POST /api/v1/geographic-areas/bulk-import-boundaries` — exactly one of `wkt`/
+ * `geoJson` is required, describing a single WGS84 `Polygon` (no SRID prefix needed). */
+export interface BoundaryImportItem {
+  geographicAreaId: string;
+  wkt?: string | null;
+  geoJson?: string | null;
+}
+
+export interface BoundaryImportRequest {
+  items: BoundaryImportItem[];
+}
+
+export interface BoundaryRowResult {
+  index: number;
+  geographicAreaId: string;
+  status: string;
+  error: string | null;
+}
+
+export interface BoundaryImportResult {
+  updated: number;
+  failed: number;
+  rows: BoundaryRowResult[];
 }
 
 /** No hierarchy child strategy is implied when both fields are omitted. */
@@ -671,6 +787,15 @@ export interface CreateWatchlistEntryRequest {
   severity?: string;
 }
 
+/** Adding a plate backfills alerts for any prior sighting already in detection_event, in the
+ * same transaction as creating the entry — this reports how many, and whether the historical
+ * scan hit its cap (1000) rather than being exhaustive. */
+export interface WatchlistEntryCreatedResponse {
+  id: string;
+  historicalAlertsRaised: number;
+  historicalMatchesCapped: boolean;
+}
+
 export interface WatchlistEntryResponse {
   id: string;
   organizationUnitId: string;
@@ -679,6 +804,36 @@ export interface WatchlistEntryResponse {
   severity: string;
   isActive: boolean;
   createdAt: string;
+}
+
+// ---- Cross-camera correlation (Model 3) --------------------------------
+
+/** One cross-camera possible match. `confidence` is a possible-match score in [0,1] and is
+ * never certainty — cross-camera identity is probabilistic. */
+export interface CorrelationGroupSummary {
+  id: string;
+  ruleCode: string;
+  naturalKey: string;
+  windowBucket: string;
+  confidence: number;
+  memberCount: number;
+  firstOccurredAt: string;
+  lastOccurredAt: string;
+  createdAt: string;
+}
+
+export interface CorrelationGroupMember {
+  federationEventId: string;
+  occurredAt: string;
+  cameraId: string;
+  sourceVmsId: string;
+  organizationUnitId: string;
+  geographicAreaId: string | null;
+}
+
+export interface CorrelationGroupDetail {
+  group: CorrelationGroupSummary;
+  members: CorrelationGroupMember[];
 }
 
 export interface WatchlistAlertResponse {
@@ -743,6 +898,13 @@ export interface UserResponse {
   status: string;
   lastLoginAt: string | null;
   isSystem: boolean;
+  /** Descriptive HR metadata only (which department/area/title) — never an access-control
+   * input; access comes entirely from the user's Access Group memberships. */
+  organizationUnitId: string | null;
+  organizationUnitName: string | null;
+  geographicAreaId: string | null;
+  geographicAreaName: string | null;
+  designation: string | null;
 }
 
 /** A group a user belongs to, with any expiry on that membership. */
@@ -758,12 +920,20 @@ export interface CreateUserRequest {
   displayName: string;
   password: string;
   email?: string | null;
+  organizationUnitId?: string | null;
+  geographicAreaId?: string | null;
+  designation?: string | null;
 }
 
+/** A full replace, like every other PUT in this API — a field left out clears it, the same as
+ * sending it as `null` explicitly. */
 export interface UpdateUserRequest {
   displayName: string;
   email?: string | null;
   status?: string | null;
+  organizationUnitId?: string | null;
+  geographicAreaId?: string | null;
+  designation?: string | null;
 }
 
 export interface ResetPasswordRequest {
@@ -787,6 +957,39 @@ export interface DetectionResponse {
   vehicleType: string | null;
   plateNumber: string | null;
   snapshotReference: string | null;
+  /** Free-form operator tags (v1.26) — distinct from `eventType`'s closed machine
+   * classification. Empty, never absent, when the detection carries none. */
+  tags: string[];
+}
+
+/** `POST /api/v1/detections/{eventId}/tags` — `occurredAt` must match the detection's own
+ * `timestamp`, since `(occurredAt, eventId)` together identify it. */
+export interface DetectionTagRequest {
+  occurredAt: string;
+  tag: string;
+}
+
+// ---- Ageing-infrastructure report (registry reporting) --------------------
+
+export interface AgeingInfrastructureBucketResponse {
+  bucket: string;
+  label: string;
+  count: number;
+}
+
+export interface AgeingCameraSummaryResponse {
+  id: string;
+  cameraCode: string;
+  name: string;
+  installationDate: string;
+  ageYears: number;
+  maintenanceStatus: string;
+}
+
+export interface AgeingInfrastructureResponse {
+  totalCameras: number;
+  buckets: AgeingInfrastructureBucketResponse[];
+  oldestCameras: AgeingCameraSummaryResponse[];
 }
 
 // ---- Events (hot-window query) -------------------------------------

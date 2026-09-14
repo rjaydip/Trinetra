@@ -22,6 +22,7 @@ export function ReportsPage() {
   const [submittedScope, setSubmittedScope] = useState<{ organizationUnitId?: string; geographicAreaId?: string } | null>(null);
   const [scopeError, setScopeError] = useState<string | null>(null);
   const overview = useQuery({ queryKey: queryKeys.overview, queryFn: ({ signal }) => api.overview(signal) });
+  const ageing = useQuery({ queryKey: queryKeys.ageingInfrastructure, queryFn: ({ signal }) => api.cameras.ageingInfrastructure({}, signal) });
   const organizations = useQuery({ queryKey: queryKeys.reference.organizations, queryFn: ({ signal }) => api.reference.organizations(signal) });
   const organizationUnits = useQuery({
     queryKey: queryKeys.reference.organizationUnits(organizationId),
@@ -33,6 +34,15 @@ export function ReportsPage() {
     queryKey: queryKeys.coverageSummary(submittedScope),
     queryFn: ({ signal }) => api.gis.coverage(submittedScope!, signal),
     enabled: submittedScope !== null,
+  });
+  // Gap analysis needs a surveyed boundary on the area itself (PostGIS, v1.19) — narrowing by
+  // organization unit doesn't apply to it the way it does the coverage-summary buckets above, so
+  // this reuses only the geographic area half of the same submitted scope.
+  const gaps = useQuery({
+    queryKey: queryKeys.coverageGaps(submittedScope?.geographicAreaId ?? null),
+    queryFn: ({ signal }) => api.gis.gaps(submittedScope!.geographicAreaId!, signal),
+    enabled: Boolean(submittedScope?.geographicAreaId),
+    retry: false,
   });
 
   function submitCoverage(event: FormEvent<HTMLFormElement>) {
@@ -111,15 +121,46 @@ export function ReportsPage() {
         {coverage.data && <CoverageSummary coverage={coverage.data} />}
       </section>
 
-      <section className="report-unavailable" aria-labelledby="coverage-gap-title">
-        <StatusBadge tone="neutral">Unavailable</StatusBadge>
-        <h2 id="coverage-gap-title">Coverage-gap analysis is not available yet</h2>
-        <p>The registry API does not expose coverage-gap results, so this report does not estimate or show a gap count.</p>
+      <section className="report-panel" aria-labelledby="coverage-gap-title">
+        <div className="report-panel__header"><div><h2 id="coverage-gap-title">Coverage-gap analysis</h2><p>The part of the selected area's surveyed boundary that no in-scope camera's estimated coverage sector reaches.</p></div><StatusBadge tone="warning">Estimated</StatusBadge></div>
+        {!submittedScope?.geographicAreaId && <p className="report-empty" role="status">Choose a geographic area above and load the coverage summary to also run gap analysis for it.</p>}
+        {gaps.isPending && submittedScope?.geographicAreaId && <p role="status">Loading coverage-gap analysis…</p>}
+        {gaps.isError && isApiProblem(gaps.error) && gaps.error.status === 404 && gaps.error.detail.includes('boundary') && <div role="status">
+          <StatusBadge tone="neutral">No boundary set</StatusBadge>
+          <p>This geographic area has no surveyed boundary polygon on file, so coverage cannot be measured against it. An administrator can load one with the geographic-area boundary import.</p>
+        </div>}
+        {gaps.isError && !(isApiProblem(gaps.error) && gaps.error.status === 404) && <p className="form-error" role="alert">{reportError(gaps.error)}</p>}
+        {gaps.data && <div className="coverage-gap-result">
+          <StatusBadge tone={gaps.data.geometry ? 'warning' : 'success'}>{gaps.data.geometry ? 'Gap found' : 'No gap found'}</StatusBadge>
+          <p>{gaps.data.geometry
+            ? 'Part of this area’s boundary is not reached by any in-scope camera’s estimated coverage sector.'
+            : 'Every part of this area’s boundary is reached by at least one in-scope camera’s estimated coverage sector.'}</p>
+          <dl>
+            <div><dt>Camera sectors considered</dt><dd>{gaps.data.properties.cameraSectorsConsidered}</dd></div>
+          </dl>
+          <p className="report-empty">{gaps.data.properties.disclaimer}</p>
+        </div>}
       </section>
-      <section className="report-unavailable" aria-labelledby="ageing-title">
-        <StatusBadge tone="neutral">Unavailable</StatusBadge>
-        <h2 id="ageing-title">Ageing infrastructure reporting is not available yet</h2>
-        <p>The registry API does not expose infrastructure-age data, so no ageing metric is shown.</p>
+      <section className="report-panel" aria-labelledby="ageing-title">
+        <div className="report-panel__header"><div><h2 id="ageing-title">Ageing infrastructure</h2><p>In-scope, live cameras bucketed by years since installation — a planning aid for prioritising replacement.</p></div></div>
+        {ageing.isPending ? <p role="status">Loading ageing-infrastructure report…</p>
+          : ageing.isError ? <div><p className="form-error" role="alert">{reportError(ageing.error)}</p><button className="button" type="button" onClick={() => ageing.refetch()}>Retry ageing report</button></div>
+            : <>
+              <dl className="report-metrics">
+                {ageing.data.buckets.map((bucket) => <div key={bucket.bucket}><dt>{bucket.label}</dt><dd>{bucket.bucket === '10_plus' && bucket.count > 0 ? <StatusBadge tone="warning">{bucket.count}</StatusBadge> : bucket.count}</dd></div>)}
+              </dl>
+              {ageing.data.oldestCameras.length === 0 ? <p className="report-empty">No camera has a recorded installation date yet.</p>
+                : <div className="camera-table-wrap"><table className="camera-table"><caption className="sr-only">Oldest cameras by installation date</caption>
+                  <thead><tr><th>Camera code</th><th>Name</th><th>Installed</th><th>Age</th><th>Maintenance status</th></tr></thead>
+                  <tbody>{ageing.data.oldestCameras.map((camera) => <tr key={camera.id}>
+                    <td><a href={`/cameras/${camera.id}`}>{camera.cameraCode}</a></td>
+                    <td>{camera.name}</td>
+                    <td>{camera.installationDate}</td>
+                    <td>{camera.ageYears} year{camera.ageYears === 1 ? '' : 's'}</td>
+                    <td>{camera.maintenanceStatus}</td>
+                  </tr>)}</tbody>
+                </table></div>}
+            </>}
       </section>
     </section>
   );

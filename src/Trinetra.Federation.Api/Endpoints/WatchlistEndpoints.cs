@@ -35,7 +35,10 @@ public static class WatchlistEndpoints
               "The plate number is normalized before storage (see `PlateNormalizer` — "
               + "\"MH-12-AB-1234\" / \"mh12ab1234\" both store as \"MH12AB1234\"), so ingest-time "
               + "matching against OCR output does not depend on formatting. One active entry per "
-              + "plate per organization.");
+              + "plate per organization.\n\n"
+              + "Also backfills: any detection already on file for this plate (in this "
+              + $"organization) raises an alert immediately, up to {HistoricalMatchesCap} most "
+              + "recent — the plate is not only watched going forward.");
 
         group.MapDelete("/{id:guid}", DeactivateAsync)
           .RequirePermission("watchlist.manage")
@@ -88,7 +91,12 @@ public static class WatchlistEndpoints
 
     private const int MaxReasonLength = 500;
 
-    private static async Task<Results<Created<CreatedResponse>, ProblemHttpResult>> CreateAsync(
+    // Same order of magnitude as the list-endpoint hard caps (EntriesHardCap / AlertsHardCap):
+    // a plate with more prior sightings than this is itself worth surfacing as "capped" rather
+    // than silently scanning (and alerting on) an unbounded amount of history.
+    private const int HistoricalMatchesCap = 1000;
+
+    private static async Task<Results<Created<WatchlistEntryCreatedResponse>, ProblemHttpResult>> CreateAsync(
         [FromBody] CreateWatchlistEntryRequest request, WatchlistRepository repo,
         NpgsqlDataSource db, HttpContext http, CancellationToken ct)
     {
@@ -127,13 +135,32 @@ public static class WatchlistEndpoints
         await using var work = await UnitOfWork.BeginAsync(db, ct);
 
         var id = await repo.CreateAsync(entry, caller, work, ct);
+
+        // Backfill: a plate can already have detection history on file before it's watched —
+        // surface those matches as alerts now rather than leaving them only discoverable via a
+        // manual GET /detections?plate= search.
+        var variants = PlateNormalizer.NormalizedVariants(plate);
+        var historical = await repo.FindHistoricalMatchesAsync(
+            request.OrganizationUnitId, variants, HistoricalMatchesCap, work, ct);
+
+        foreach (var match in historical)
+        {
+            await repo.RaiseAlertAsync(id, match.EventId, match.OccurredAt, work, ct);
+        }
+
         await work.AuditAsync(caller, "create", "watchlist_entry", id.ToString(),
             before: null,
-            after: new { entry.PlateNumberNormalized, entry.Reason, entry.Severity },
+            after: new
+            {
+                entry.PlateNumberNormalized, entry.Reason, entry.Severity,
+                historicalAlertsRaised = historical.Count,
+                historicalMatchesCapped = historical.Count >= HistoricalMatchesCap,
+            },
             request.OrganizationUnitId, ct);
         await work.CommitAsync(ct);
 
-        return TypedResults.Created($"/api/v1/watchlist/{id}", new CreatedResponse(id));
+        return TypedResults.Created($"/api/v1/watchlist/{id}", new WatchlistEntryCreatedResponse(
+            id, historical.Count, historical.Count >= HistoricalMatchesCap));
     }
 
     private static async Task<Results<NoContent, NotFound>> DeactivateAsync(

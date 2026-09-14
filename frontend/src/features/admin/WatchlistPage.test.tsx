@@ -96,6 +96,26 @@ it('shows an error when acknowledging an alert fails', async () => {
   expect(await screen.findByText(/requires the alert\.acknowledge permission/i)).toBeVisible();
 });
 
+it('reports how many historical alerts a new watchlist entry backfilled', async () => {
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input));
+    if (url.pathname === '/api/v1/watchlist' && init?.method === 'POST') {
+      return Response.json({ id: entryId, historicalAlertsRaised: 3, historicalMatchesCapped: false }, { status: 201 });
+    }
+    if (url.pathname === '/api/v1/watchlist/alerts') return Response.json({ items: [], page: 1, pageSize: 20, total: 0, totalPages: 0 });
+    if (url.pathname === '/api/v1/watchlist') return Response.json({ items: [], page: 1, pageSize: 20, total: 0, totalPages: 0 });
+    if (url.pathname === '/api/v1/organizations') return Response.json({ items: [], page: 1, pageSize: 200, total: 0, totalPages: 0 });
+    return new Response(null, { status: 404 });
+  }));
+
+  renderWatchlist(['alert.read', 'watchlist.manage']);
+
+  await userEvent.type(await screen.findByLabelText(/plate number/i), 'MH12AB1234');
+  await userEvent.click(screen.getByRole('button', { name: /^add entry$/i }));
+
+  expect(await screen.findByText(/already seen 3 times before/i)).toBeVisible();
+});
+
 it('acknowledges an alert for alert.acknowledge users', async () => {
   const requests: Array<{ path: string; method: string }> = [];
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {

@@ -119,4 +119,47 @@ public sealed class WatchlistRepositoryTests : IClassFixture<PostgresFixture>, I
         (await Repo.AcknowledgeAlertAsync(Guid.NewGuid(), System(), work, CancellationToken.None))
             .ShouldBeNull();
     }
+
+    [Fact]
+    public async Task FindHistoricalMatches_FindsPriorDetections_ScopedToTheEntrysOrgUnit()
+    {
+        // Seed the chain the detection FK needs, plus one detection under a different org unit
+        // to prove the scoping — a backfill must not leak sightings across organizations.
+        await _fixture.ExecuteAsync($"""
+            INSERT INTO federation.connector_target
+                (id, code, organization_unit_id, display_name, vendor, endpoint, credential_reference)
+            VALUES ('c9999999-0000-4000-8000-00000000e002', 'WLR-TGT', '{PostgresFixture.PoliceUnit}',
+                    'Watchlist repo test target', 'Onvif'::federation.vendor_kind,
+                    'http://10.0.0.1', 'vault://wlr');
+
+            INSERT INTO federation.detection_event
+                (event_id, occurred_at, target_id, native_camera_id, camera_id,
+                 organization_unit_id, event_type, confidence, plate_number_normalized)
+            VALUES
+                ('wlr-hist-1', now() - interval '2 days', 'c9999999-0000-4000-8000-00000000e002',
+                 'ch1', NULL, '{PostgresFixture.PoliceUnit}', 'AnprDetection', 0.9, 'GJ01XY9999'),
+                ('wlr-hist-2', now() - interval '1 day', 'c9999999-0000-4000-8000-00000000e002',
+                 'ch1', NULL, '{PostgresFixture.PoliceUnit}', 'AnprDetection', 0.9, 'GJ01XY9999');
+            """);
+
+        await using var work = await UnitOfWork.BeginAsync(_fixture.DataSource, CancellationToken.None);
+        var matches = await Repo.FindHistoricalMatchesAsync(
+            PostgresFixture.PoliceUnit, new HashSet<string> { "GJ01XY9999" }, cap: 1000, work,
+            CancellationToken.None);
+
+        matches.Count.ShouldBe(2);
+        matches.ShouldContain(m => m.EventId == "wlr-hist-1");
+        matches.ShouldContain(m => m.EventId == "wlr-hist-2");
+    }
+
+    [Fact]
+    public async Task FindHistoricalMatches_NoPriorDetections_ReturnsEmpty()
+    {
+        await using var work = await UnitOfWork.BeginAsync(_fixture.DataSource, CancellationToken.None);
+        var matches = await Repo.FindHistoricalMatchesAsync(
+            PostgresFixture.PoliceUnit, new HashSet<string> { "ZZ99ZZ9999" }, cap: 1000, work,
+            CancellationToken.None);
+
+        matches.ShouldBeEmpty();
+    }
 }

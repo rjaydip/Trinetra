@@ -1,6 +1,8 @@
 import '@testing-library/jest-dom/vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { render as rtlRender, screen, waitFor, type RenderResult } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import type { ReactElement } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ApiProblem } from '../../api/client';
@@ -8,6 +10,13 @@ import { CameraForm, toCameraWriteRequest, type CameraFormValues } from './Camer
 
 const emptySelectors = { organizations: [], vms: [], onOrganizationChange: vi.fn() };
 const cameraId = 'c0a80101-0000-4000-8000-000000000099';
+
+/** `CameraForm` now renders `CredentialLibraryPicker`, which needs a QueryClient — every test
+ * still just calls `render(<CameraForm .../>)`, so the provider is wired in here once. */
+function render(ui: ReactElement): RenderResult {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return rtlRender(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>);
+}
 
 function validForm(overrides: Partial<CameraFormValues> = {}): CameraFormValues {
   return {
@@ -22,6 +31,7 @@ function validForm(overrides: Partial<CameraFormValues> = {}): CameraFormValues 
     manufacturer: 'Axis', model: '', serialNumber: '', altitude: '', mountingHeight: '',
     azimuth: '', tilt: '', horizontalFov: '', verticalFov: '', effectiveRange: '',
     ipAddress: '10.0.0.8', port: '554', protocol: 'RTSP', username: '', password: '', recordEvents: true, vmsId: '', streamReference: '',
+    streamPreference: 'RTSP', nativeHlsUrl: '', nativeWebrtcUrl: '',
     installationDate: '', operationalStatus: '', connectivityStatus: '', maintenanceStatus: '',
     ...overrides,
   };
@@ -194,13 +204,7 @@ describe('CameraForm', () => {
     stubCredentialTestFlow({ authOutcome: 'authenticated' });
     const user = userEvent.setup();
     render(<CameraForm {...emptySelectors} onSubmit={vi.fn()} organizationUnits={[]} geographicAreas={[]} initialValues={validForm()} />);
-    await user.click(screen.getByRole('button', { name: /^test connection$/i }));
-    await screen.findByLabelText(/^manufacturer/i);
-
-    await user.click(screen.getByRole('button', { name: /additional details/i }));
     await user.click(screen.getByRole('button', { name: /set location to 19.076012345/i }));
-
-    await user.click(screen.getByRole('button', { name: /back to connection details/i }));
     expect(screen.getByLabelText(/^Latitude/i)).toHaveValue('19.0760123');
     expect(screen.getByLabelText(/^Longitude/i)).toHaveValue('72.8777');
   });
@@ -210,13 +214,12 @@ describe('CameraForm', () => {
     const user = userEvent.setup();
     const submit = vi.fn().mockResolvedValue(undefined);
     render(<CameraForm {...emptySelectors} onSubmit={submit} organizationUnits={[]} geographicAreas={[]} initialValues={validForm()} />);
-    await user.click(screen.getByRole('button', { name: /^test connection$/i }));
-    await screen.findByLabelText(/^manufacturer/i);
-
-    await user.click(screen.getByRole('button', { name: /additional details/i }));
     const azimuth = screen.getByLabelText(/^Azimuth/i);
     await user.type(azimuth, '45.125');
     expect(azimuth).toHaveValue(45.125);
+
+    await user.click(screen.getByRole('button', { name: /^test connection$/i }));
+    await screen.findByLabelText(/^manufacturer/i);
     await user.click(screen.getByRole('button', { name: /save details/i }));
 
     expect(submit).toHaveBeenCalledWith(cameraId, expect.objectContaining({ azimuth: 45.125 }));
@@ -350,5 +353,39 @@ describe('CameraForm', () => {
       expect(errorId).toBeTruthy();
       await waitFor(() => expect(document.getElementById(errorId!.split(' ')[0])).toBeVisible());
     }
+  });
+
+  it('shows an already-shared saved credential as selected when editing a camera that has one', async () => {
+    const reference = 'saved-credential:11111111-1111-4111-8111-111111111111';
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/api/v1/credential-library') {
+        return Response.json([{
+          id: '11111111-1111-4111-8111-111111111111', name: 'Site NVR admin', description: null,
+          credentialReference: reference, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z', usageCount: 1,
+        }]);
+      }
+      return new Response(null, { status: 404 });
+    }));
+
+    render(<CameraForm {...emptySelectors} onSubmit={vi.fn()} organizationUnits={[]} geographicAreas={[]} initialValues={validForm()} initialCredentialReference={reference} />);
+
+    const select = await screen.findByLabelText(/saved credential/i) as HTMLSelectElement;
+    await waitFor(() => expect(select).toHaveValue(reference));
+    expect(screen.queryByLabelText(/^username/i)).not.toBeInTheDocument();
+  });
+
+  it('falls back to manual entry when the camera\'s existing reference is not a shared library entry', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/api/v1/credential-library') return Response.json([]);
+      return new Response(null, { status: 404 });
+    }));
+
+    render(<CameraForm {...emptySelectors} onSubmit={vi.fn()} organizationUnits={[]} geographicAreas={[]} initialValues={validForm()} initialCredentialReference="camera:99999999-9999-4999-8999-999999999999" />);
+
+    const select = await screen.findByLabelText(/saved credential/i) as HTMLSelectElement;
+    await waitFor(() => expect(select).toHaveValue(''));
+    expect(screen.getByLabelText(/^username/i)).toBeVisible();
   });
 });

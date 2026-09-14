@@ -92,6 +92,14 @@ Worker hosts are the ones that touch the least trustworthy network in the system
 segmented toward their VMS subnets only, and should not be reachable from the operator network at
 all.
 
+**PostGIS, database host, one-time.** `db/versions/v1.19.sql` runs `CREATE EXTENSION IF NOT
+EXISTS postgis;`. The extension package must be installed on the Postgres host first (e.g.
+`postgresql-17-postgis-3` for stock PostgreSQL 17 — match whatever package name your distro uses
+for the Postgres major version actually running), and `CREATE EXTENSION` itself needs superuser
+or a role the DBA has pre-granted `CREATE` on the database to. This is a manual operator step on
+the database host before `v1.19.sql` is applied — the API process never migrates (see the
+Dockerfile's own header comment) and does not install extensions at startup.
+
 ---
 
 ## 3. Install
@@ -362,3 +370,70 @@ docker run -d --name trinetra-api -p 5261:8080 --env-file api.env --restart on-f
 - **Data Protection keys.** ASP.NET writes them under `/home/app/.aspnet/DataProtection-Keys`,
   which is ephemeral. Auth is JWT (stateless) so a restart is harmless today, but for more than
   one instance mount a shared volume there or configure a persistent key ring.
+
+## 9. Streaming gateway (video wall live view)
+
+Optional — only needed once the video wall (`frontend/src/features/videowall/`) is meant to show
+live video rather than status-only tiles. Full design: `docs/STREAMING-GATEWAY-PLAN.md`. Two new
+processes, both bare-metal/systemd like everything else in this document, no container path yet:
+
+- **`trinetra-mediamtx`** — [MediaMTX](https://github.com/bluenviron/mediamtx), a third-party
+  binary (not built from this repo), pulls each camera's RTSP feed on-demand and remuxes it to
+  HLS. Config: `deploy/mediamtx/mediamtx.yml`. Unit: `deploy/systemd/trinetra-mediamtx.service`.
+  Both its HLS and its runtime config API listen on `127.0.0.1` only — never expose this host's
+  MediaMTX ports directly; `Federation.Api` is the only thing that talks to it (below).
+- **`trinetra-mediamtx-provisioner`** — `deploy/mediamtx/provision_paths.py`, a small standalone
+  Python script (its own `requirements.txt`, no dependency on `ai-worker/`). Polls the camera
+  registry, resolves each camera's credential through `GET
+  /api/v1/cameras/{id}/credential/resolve` (new — see G1 in the plan; requires an API key for an
+  access group holding **only** the `STREAMING_GATEWAY` machine role, never `DETECTION_WORKER`'s
+  key), and keeps MediaMTX's runtime path list in sync. Env: copy
+  `deploy/mediamtx/mediamtx-provisioner.env.example` to `/etc/trinetra/mediamtx-provisioner.env`
+  (`chmod 600` — it holds an API key) and fill in `TRINETRA_API_KEY`. Unit:
+  `deploy/systemd/trinetra-mediamtx-provisioner.service` (`BindsTo=trinetra-mediamtx.service` —
+  the two start and stop together).
+
+```bash
+# One-time: install MediaMTX itself (pin a version; do not track `latest` in a runbook).
+curl -L -o /tmp/mediamtx.tar.gz \
+  https://github.com/bluenviron/mediamtx/releases/download/vX.Y.Z/mediamtx_vX.Y.Z_linux_amd64.tar.gz
+mkdir -p /opt/trinetra/mediamtx
+tar -xzf /tmp/mediamtx.tar.gz -C /opt/trinetra/mediamtx mediamtx
+cp deploy/mediamtx/mediamtx.yml /opt/trinetra/mediamtx/mediamtx.yml
+
+# Provisioner's own venv (standalone; keep it out of ai-worker's).
+python3 -m venv /opt/trinetra/mediamtx/.venv
+/opt/trinetra/mediamtx/.venv/bin/pip install -r deploy/mediamtx/requirements.txt
+cp deploy/mediamtx/provision_paths.py /opt/trinetra/mediamtx/provision_paths.py
+
+cp deploy/mediamtx/mediamtx-provisioner.env.example /etc/trinetra/mediamtx-provisioner.env
+chmod 600 /etc/trinetra/mediamtx-provisioner.env   # then edit — TRINETRA_API_KEY
+
+useradd --system --no-create-home --shell /usr/sbin/nologin trinetra-mediamtx
+chown -R trinetra-mediamtx:trinetra-mediamtx /opt/trinetra/mediamtx
+
+cp deploy/systemd/trinetra-mediamtx.service deploy/systemd/trinetra-mediamtx-provisioner.service \
+  /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now trinetra-mediamtx trinetra-mediamtx-provisioner
+```
+
+**The public-facing piece: `Federation.Api` itself — no third process.** `GET
+/api/v1/streams/{cameraId}/session` (`camera.read`-gated like any other camera-scoped read)
+mints a 5-minute JWT scoped to one camera. The browser holds it and sends `Authorization: Bearer
+<token>` on every HLS request it makes to `GET /api/v1/streams/{cameraId}/{*hlsPath}` — same
+host and port as the rest of the API, nothing extra to deploy. That route
+(`StreamSessionEndpoints.ProxyAsync`) validates the token in-process, cross-checks its
+authorized camera id against the one in the URL, and reverse-proxies the request to MediaMTX's
+`127.0.0.1:8888` via a named `HttpClient` (`StreamingOptions:MediaMtxBaseUrl`, defaults to that
+address — override it if MediaMTX runs on a different host/port than the API). TLS termination
+(§7) is unaffected — it's the same API process behind whatever already terminates TLS today.
+
+A standalone `GET /api/v1/streams/validate` (`AllowAnonymous`) still exists for a deployment
+that would rather front MediaMTX with its own reverse proxy instead (e.g. `deploy/nginx/streaming-gateway.conf`,
+kept in the repo as that alternative) — not required for the default path above.
+
+With G1-G5 in place, `GET /streams/{cameraId}/session` → `Authorization: Bearer` on every
+`GET https://<host>/api/v1/streams/{cameraId}/index.m3u8` (and its segment requests) is the whole
+path from an authorized browser to that camera's live view, served entirely by the API and
+MediaMTX — two processes, not three.

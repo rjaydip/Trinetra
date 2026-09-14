@@ -122,7 +122,27 @@ public static class DetectionEndpoints
               + "target — the \"search metadata\" step of the demo path. `from`/`to` default to "
               + "the last 24 hours and may span at most 31 days (400 otherwise). `limit` is "
               + "capped at 500 for an open search, or 5000 when filtered to one `plateNumber` — "
-              + "a month of one plate is a bounded investigation result.");
+              + "a month of one plate is a bounded investigation result. Each result's `tags` "
+              + "carries any free-form operator tags already attached (see `POST "
+              + "/{eventId}/tags`).");
+
+        group.MapPost("/{eventId}/tags", AddTagAsync)
+          .RequirePermission("observation.write")
+          .WithSummary("Attach a free-form operator tag to a detection")
+          .WithDescription(
+              "A human-entered label — \"reviewed\", \"false positive\", \"priority-follow-up\", "
+              + "anything the operator wants — kept separate from `eventType`'s closed machine "
+              + "classification (`ANPR_DETECTED`/`VEHICLE_DETECTED`). `occurredAt` must match the "
+              + "detection's own `timestamp` (its primary key is `(occurredAt, eventId)` "
+              + "together); every search result already carries it. Adding a tag the detection "
+              + "already has (case-insensitively) is a no-op success, not a conflict. Out-of-scope "
+              + "or unknown `eventId`/`occurredAt` is 404.");
+
+        group.MapDelete("/{eventId}/tags/{tag}", RemoveTagAsync)
+          .RequirePermission("observation.write")
+          .WithSummary("Remove an operator tag from a detection")
+          .WithDescription("Matches case-insensitively. Removing a tag that isn't present, or an "
+              + "out-of-scope/unknown detection, is 404.");
     }
 
     private static async Task<Results<Accepted, ProblemHttpResult>> IngestAsync(
@@ -319,11 +339,74 @@ public static class DetectionEndpoints
             plateNormalized, targetId, start, end,
             Math.Clamp(limit ?? 100, 1, cap), caller, ct);
 
+        var tagsByEvent = await detections.GetTagsForEventsAsync([.. rows.Select(r => r.EventId)], ct);
+
         return TypedResults.Ok<IReadOnlyList<DetectionResponse>>(
         [
             .. rows.Select(r => new DetectionResponse(
                 r.EventId, $"{r.TargetId}:{r.NativeCameraId}", r.CameraId, r.EventType,
-                r.OccurredAt, r.Confidence, r.VehicleType, r.PlateNumberRaw, r.SnapshotReference)),
+                r.OccurredAt, r.Confidence, r.VehicleType, r.PlateNumberRaw, r.SnapshotReference,
+                [.. tagsByEvent[r.EventId]])),
         ]);
+    }
+
+    /// <summary>1-40 characters, trimmed — the same shape v1.26's own CHECK constraint enforces;
+    /// checked here too for a named 400 instead of an opaque constraint violation (same posture
+    /// as <see cref="ValidateSubmission"/>).</summary>
+    private static bool IsValidTag(string? tag) =>
+        tag is not null && tag.Trim().Length is >= 1 and <= 40;
+
+    private static async Task<Results<Ok, ProblemHttpResult, NotFound>> AddTagAsync(
+        string eventId, [FromBody] DetectionTagRequest request,
+        DetectionRepository detections, NpgsqlDataSource db, HttpContext http, CancellationToken ct)
+    {
+        var caller = CallerContextFactory.From(http);
+
+        if (!IsValidTag(request.Tag))
+        {
+            return TypedResults.Problem(
+                title: "Invalid tag",
+                detail: "tag must be 1-40 characters.",
+                statusCode: StatusCodes.Status400BadRequest);
+        }
+
+        var tag = request.Tag.Trim();
+
+        await using var work = await UnitOfWork.BeginAsync(db, ct);
+
+        var outcome = await detections.AddTagAsync(eventId, request.OccurredAt, tag, caller, work, ct);
+        if (outcome is DetectionTagOutcome.DetectionNotFound)
+        {
+            return TypedResults.NotFound();
+        }
+
+        if (outcome is DetectionTagOutcome.Added)
+        {
+            await work.AuditAsync(caller, "tag", "detection_event", eventId,
+                before: null, after: new { Tag = tag }, organizationUnitId: null, ct);
+        }
+
+        await work.CommitAsync(ct);
+        return TypedResults.Ok();
+    }
+
+    private static async Task<Results<Ok, NotFound>> RemoveTagAsync(
+        string eventId, string tag,
+        DetectionRepository detections, NpgsqlDataSource db, HttpContext http, CancellationToken ct)
+    {
+        var caller = CallerContextFactory.From(http);
+
+        await using var work = await UnitOfWork.BeginAsync(db, ct);
+
+        var removed = await detections.RemoveTagAsync(eventId, tag, caller, work, ct);
+        if (!removed)
+        {
+            return TypedResults.NotFound();
+        }
+
+        await work.AuditAsync(caller, "untag", "detection_event", eventId,
+            before: new { Tag = tag }, after: null, organizationUnitId: null, ct);
+        await work.CommitAsync(ct);
+        return TypedResults.Ok();
     }
 }

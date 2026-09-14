@@ -1,0 +1,67 @@
+[Unit]
+Description=Trinetra streaming gateway media server (MediaMTX)
+Documentation=file:///opt/trinetra/docs/STREAMING-GATEWAY-PLAN.md
+After=network-online.target
+Wants=network-online.target
+
+# MediaMTX itself is a pre-built binary, not a Trinetra assembly -- see
+# docs/STREAMING-GATEWAY-PLAN.md §1 for why it is used as-is rather than hand-built. This unit
+# only runs it against the repo's mediamtx.yml (deploy/mediamtx/); it never writes back to that
+# file -- trinetra-mediamtx-provisioner (see the sibling unit) mutates paths at runtime through
+# MediaMTX's own HTTP config API, bound to localhost only.
+
+[Service]
+Type=simple
+
+User=trinetra-mediamtx
+Group=trinetra-mediamtx
+WorkingDirectory=/opt/trinetra/mediamtx
+ExecStart=/opt/trinetra/mediamtx/mediamtx /opt/trinetra/mediamtx/mediamtx.yml
+
+Restart=on-failure
+RestartSec=10
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+TimeoutStartSec=30
+TimeoutStopSec=15
+KillSignal=SIGTERM
+
+# --- Hardening --------------------------------------------------------------
+# Runs under its own service account, deliberately separate from trinetra-worker's and the
+# API's -- this process resolves and briefly holds camera RTSP credentials for every actively
+# viewed stream (docs/STREAMING-GATEWAY-PLAN.md §4), so it gets the same least-privilege
+# treatment connector workers already have, not shared identity with anything else.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+RemoveIPC=true
+
+# hls* listeners bind 127.0.0.1 only per mediamtx.yml -- nginx (G4) is the only public-facing
+# hop. Loopback + outbound to camera subnets is all this process needs.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=trinetra-mediamtx
+
+# --- Limits -----------------------------------------------------------------
+# Each concurrently-viewed camera holds an RTSP connection plus HLS reader sockets; a
+# multi-operator deployment can have many concurrent viewers well before 1024 fds are hit.
+LimitNOFILE=16384
+
+[Install]
+WantedBy=multi-user.target
