@@ -51,6 +51,36 @@ describe('VideoWallPage', () => {
     expect(screen.queryByLabelText('Camera wall tiles')).not.toBeInTheDocument();
   });
 
+  it('syncs from the server even when this device already has a locally-cached layout (cross-device regression)', async () => {
+    // Regression test: a device that had ever saved a wall locally used to treat that cache as
+    // "already reconciled with the server" and never look at the server response again — so a
+    // layout saved from a *different* device (or browser) for the same account was invisible
+    // here. The server-saved layout must always win once it's back, even on first mount.
+    window.localStorage.setItem('trinetra.videowall.v3', JSON.stringify({ columnCount: 3, cameraIds: [camera.id] }));
+    const otherCamera = { ...camera, id: '33333333-3333-4333-8333-333333333333', cameraCode: 'CAM-09', name: 'Loading Dock' };
+    stubFetch((url) => {
+      if (url.pathname === '/api/v1/video-wall/preferences') return Response.json({ columnCount: 2, cameraIds: [otherCamera.id] });
+      if (url.pathname === `/api/v1/cameras/${otherCamera.id}`) return Response.json(otherCamera);
+      return undefined;
+    });
+    renderPage();
+
+    // Instant paint from the stale local cache is fine transiently, but the server's own camera
+    // must win once its response lands.
+    expect(await screen.findByRole('heading', { name: 'Loading Dock' })).toBeVisible();
+    expect(screen.queryByRole('heading', { name: 'Gate 7 North' })).not.toBeInTheDocument();
+  });
+
+  it('clears a stale local cache when the server confirms nothing is saved (404)', async () => {
+    window.localStorage.setItem('trinetra.videowall.v3', JSON.stringify({ columnCount: 3, cameraIds: [camera.id] }));
+    stubFetch(); // base stub already 404s the preferences endpoint
+
+    renderPage();
+
+    expect(await screen.findByText(/video wall is not configured/i)).toBeVisible();
+    expect(screen.queryByRole('heading', { name: 'Gate 7 North' })).not.toBeInTheDocument();
+  });
+
   it('configuring: sets a column count, adds a camera by search, and shows its status honestly labeling video as unavailable', async () => {
     stubFetch();
     const user = userEvent.setup();

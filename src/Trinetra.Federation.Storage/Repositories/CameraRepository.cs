@@ -154,6 +154,60 @@ public sealed class CameraRepository
     }
 
     /// <summary>
+    /// The count of cameras <see cref="ListAsync"/> would return for the same filters, ignoring
+    /// only <see cref="CameraQuery.Cursor"/>/<see cref="CameraQuery.CursorId"/>/
+    /// <see cref="CameraQuery.Limit"/> (a total isn't relative to a page). Fleet-summary-sized —
+    /// a single indexed `count(*)` over the caller's own scope, not a table scan, and nothing
+    /// like the per-camera-proportional cost invariant 1 forbids against a *vendor* device; this
+    /// never leaves PostgreSQL.
+    /// </summary>
+    public async Task<int> CountAsync(CameraQuery query, CallerContext caller, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(caller);
+        caller.Require("camera.read");
+
+        await using var c = await _dataSource.OpenConnectionAsync(ct);
+
+        var sql = $"""
+            SELECT count(*)::int
+            FROM federation.cameras c
+            WHERE ({Scope("camera.read")})
+              AND (@IncludeRetired OR c.deleted_at IS NULL)
+              AND (@OrganizationUnitId::uuid IS NULL
+                   OR c.organization_unit_id IN (
+                       SELECT id FROM federation.org_unit_descendants(@OrganizationUnitId)))
+              AND (@GeographicAreaId::uuid IS NULL
+                   OR c.geographic_area_id IN (
+                       SELECT id FROM federation.geographic_area_descendants(@GeographicAreaId)))
+              AND (@CameraType::text IS NULL OR c.camera_type = @CameraType)
+              AND (@OperationalStatus::text IS NULL OR c.operational_status = @OperationalStatus)
+              AND (@ConnectivityStatus::text IS NULL OR c.connectivity_status = @ConnectivityStatus)
+              AND (@MaintenanceStatus::text IS NULL OR c.maintenance_status = @MaintenanceStatus)
+              AND (@Query::text IS NULL
+                   OR c.camera_code ILIKE @Query || '%' OR c.name ILIKE @Query || '%')
+              AND (@MinLon::numeric IS NULL OR (
+                       c.longitude BETWEEN @MinLon AND @MaxLon
+                       AND c.latitude BETWEEN @MinLat AND @MaxLat))
+            """;
+
+        var args = new DynamicParameters(ScopeArgs(Guid.Empty, caller, "camera.read"));
+        args.Add("IncludeRetired", query.IncludeRetired);
+        args.Add("OrganizationUnitId", query.OrganizationUnitId);
+        args.Add("GeographicAreaId", query.GeographicAreaId);
+        args.Add("CameraType", query.CameraType);
+        args.Add("OperationalStatus", query.OperationalStatus);
+        args.Add("ConnectivityStatus", query.ConnectivityStatus);
+        args.Add("MaintenanceStatus", query.MaintenanceStatus);
+        args.Add("Query", query.Query);
+        args.Add("MinLon", query.Bbox?.MinLon);
+        args.Add("MaxLon", query.Bbox?.MaxLon);
+        args.Add("MinLat", query.Bbox?.MinLat);
+        args.Add("MaxLat", query.Bbox?.MaxLat);
+
+        return await c.ExecuteScalarAsync<int>(new CommandDefinition(sql, args, cancellationToken: ct));
+    }
+
+    /// <summary>
     /// RFP Model 1 "ageing-infrastructure reporting": buckets the caller's live, in-scope
     /// cameras by age since <c>installation_date</c>, plus the oldest <paramref name="oldestLimit"/>
     /// with a known date — the two things a maintenance planner actually needs (how much

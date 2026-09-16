@@ -206,7 +206,10 @@ function toCameraCredentialInput(values: CameraFormValues): CameraCredentialInpu
  * "Connect"-step credential test, so `cameraCode` (immutable after create) is dropped here. */
 export function toCameraPatchRequest(values: CameraFormValues): CameraPatchRequest {
   const { cameraCode: _cameraCode, ...patch } = toCameraWriteRequest(values);
-  return patch;
+  // toCameraWriteRequest only ever omits these fields or sets a real string (via optionalText) —
+  // never `null` — so CameraWriteRequest's wider `string | null` (needed elsewhere, to explicitly
+  // clear a field on a PUT) never actually applies to a value built here.
+  return patch as CameraPatchRequest;
 }
 
 /** The fields `POST /api/v1/cameras` requires (Model 1 API plan §2.7) plus network fields the

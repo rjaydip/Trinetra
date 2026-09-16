@@ -85,6 +85,9 @@ public sealed record CameraResponse(
 /// <summary>One page of the registry. A null <see cref="NextCursor"/> is the end of the results.</summary>
 public sealed record CameraPage(IReadOnlyList<CameraResponse> Items, string? NextCursor);
 
+/// <summary>The count <c>GET /cameras</c> would page through for the same filters.</summary>
+public sealed record CameraCountResponse(int Total);
+
 /// <summary>RFP Model 1 "ageing-infrastructure reporting" — how many in-scope cameras fall into
 /// each installation-age band, plus the oldest ones by name, for prioritising replacement.
 /// <c>Buckets</c> is always exactly 5 entries, in a fixed order, even when a band's count is

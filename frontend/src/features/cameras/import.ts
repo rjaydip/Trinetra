@@ -389,7 +389,10 @@ export function parseCsvBulkImport(
       }
     }
 
-    return item as CameraWriteRequest;
+    // item is built incrementally (schema-validated fields, then resolved relational ids) rather
+    // than constructed as a CameraWriteRequest literal, so TS can't see the two shapes converge —
+    // they do, by construction: every key set above is a real CameraWriteRequest key.
+    return item as unknown as CameraWriteRequest;
   });
 
   return { request: { mode: 'insert', items }, warnings };

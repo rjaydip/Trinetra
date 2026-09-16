@@ -22,6 +22,11 @@ export function ReportsPage() {
   const [submittedScope, setSubmittedScope] = useState<{ organizationUnitId?: string; geographicAreaId?: string } | null>(null);
   const [scopeError, setScopeError] = useState<string | null>(null);
   const overview = useQuery({ queryKey: queryKeys.overview, queryFn: ({ signal }) => api.overview(signal) });
+  // The registry's own total — `overview.data.cameras` only counts VMS-federation-discovered
+  // inventory (a camera reached through a connected `connector_target`), not every registered
+  // camera, so it under-reports for a deployment (like this one) built mostly on manual/bulk
+  // registration rather than VMS discovery.
+  const cameraCount = useQuery({ queryKey: queryKeys.cameraCount, queryFn: ({ signal }) => api.cameras.count({}, signal) });
   const ageing = useQuery({ queryKey: queryKeys.ageingInfrastructure, queryFn: ({ signal }) => api.cameras.ageingInfrastructure({}, signal) });
   const organizations = useQuery({ queryKey: queryKeys.reference.organizations, queryFn: ({ signal }) => api.reference.organizations(signal) });
   const organizationUnits = useQuery({
@@ -71,7 +76,7 @@ export function ReportsPage() {
             <button className="button" type="button" onClick={() => overview.refetch()}>Retry fleet summary</button>
           </div>
             : <dl className="report-metrics">
-              <div><dt>Total cameras</dt><dd>{overview.data.cameras}</dd></div>
+              <div><dt>Total cameras</dt><dd>{cameraCount.isPending ? '…' : cameraCount.isError ? <button className="button button--secondary" type="button" onClick={() => cameraCount.refetch()}>Retry</button> : cameraCount.data.total}</dd></div>
               <div><dt>Unreachable cameras</dt><dd><StatusBadge tone="warning">{overview.data.unreachableCameras} unreachable</StatusBadge></dd><p>Warning: unreachable cameras need attention.</p></div>
               <div><dt>VMS targets connected</dt><dd>{overview.data.activeTargets} / {overview.data.targets}</dd></div>
               <div><dt>Quarantined targets</dt><dd>{overview.data.quarantinedTargets > 0 ? <StatusBadge tone="warning">{overview.data.quarantinedTargets}</StatusBadge> : overview.data.quarantinedTargets}</dd></div>

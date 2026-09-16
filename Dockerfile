@@ -57,6 +57,12 @@ RUN apt-get update \
 WORKDIR /app
 COPY --from=build /app ./
 
+# COPY above runs as root, so /app (and everything under it) is root-owned at this point.
+# EvidenceStorage creates its root directory (default: ./evidence, i.e. /app/evidence) once at
+# startup (finding 15-L3) — without this chown, that fails with UnauthorizedAccessException the
+# moment the 'app' user below can't write into a root-owned /app.
+RUN chown -R app:app /app
+
 # This process holds the credential encryption key. Run it unprivileged — the aspnet image
 # already defines the non-root 'app' user.
 USER app
