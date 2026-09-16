@@ -168,6 +168,11 @@ export const api = {
     update: (id: string, body: CameraPatchRequest) => request<CameraResponse>(`/api/v1/cameras/${id}`, { body: JSON.stringify(body), method: 'PATCH' }),
     retire: (id: string) => request<void>(`/api/v1/cameras/${id}`, { method: 'DELETE' }),
     bulkImport: (body: BulkImportRequest) => request<BulkImportResult>('/api/v1/cameras/bulk-import', json(body)),
+    /** The registry's own total, unlike `api.overview()`'s `cameras` field — that one reflects
+     * only VMS-federation-discovered inventory (`connector_target`/`federated_camera`), not every
+     * manually-registered camera. This is what a "total cameras" figure should use. */
+    count: (query: CameraListQuery = {}, signal?: AbortSignal) =>
+      request<{ total: number }>(withQuery('/api/v1/cameras/count', query), {}, signal),
     ageingInfrastructure: (query: { organizationUnitId?: string; geographicAreaId?: string; oldestLimit?: number } = {}, signal?: AbortSignal) =>
       request<AgeingInfrastructureResponse>(withQuery('/api/v1/cameras/reports/ageing-infrastructure', query), {}, signal),
     health: (id: string, signal?: AbortSignal) => request<CameraHealthResponse>(`/api/v1/cameras/${id}/health`, {}, signal),

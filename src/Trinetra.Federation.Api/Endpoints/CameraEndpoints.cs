@@ -62,6 +62,17 @@ public static class CameraEndpoints
               + "response whose `nextCursor` is null is the last page. `limit` defaults to 50, "
               + "clamped to 200.");
 
+        group.MapGet("/count", CountAsync)
+          .RequirePermission("camera.read")
+          .WithSummary("Count the registry, filtered the same way as the list")
+          .WithDescription(
+              "The count `GET /cameras` would page through for the same filters — everything "
+              + "except `cursor`/`limit`, which don't apply to a total. A single indexed "
+              + "`count(*)` scoped to the caller, not a full scan; cheap at any registry size. "
+              + "The fleet-summary \"total cameras\" figure should use this, not VMS-federation "
+              + "inventory counts (`GET /overview`), which only reflect cameras discovered "
+              + "through a connected VMS target, not the whole registry.");
+
         group.MapGet("/reports/ageing-infrastructure", AgeingInfrastructureAsync)
           .RequirePermission("camera.read")
           .WithSummary("Ageing-infrastructure report: cameras bucketed by installation age")
@@ -159,6 +170,36 @@ public static class CameraEndpoints
         await work.CommitAsync(ct);
 
         return TypedResults.Created($"/api/v1/cameras/{id}", new CreatedResponse(id));
+    }
+
+    private static async Task<Results<Ok<CameraCountResponse>, ProblemHttpResult>> CountAsync(
+        bool? includeRetired, Guid? organizationUnitId, Guid? geographicAreaId,
+        string? cameraType, string? operationalStatus, string? connectivityStatus,
+        string? maintenanceStatus, string? q, string? bbox,
+        CameraRepository repo, HttpContext http, CancellationToken ct)
+    {
+        var caller = CallerContextFactory.From(http);
+
+        BoundingBox? box = null;
+        if (!string.IsNullOrWhiteSpace(bbox))
+        {
+            if (!TryParseBbox(bbox, out var parsed, out var bboxProblem))
+            {
+                return bboxProblem!;
+            }
+
+            box = parsed;
+        }
+
+        var total = await repo.CountAsync(
+            new CameraQuery(
+                0, null, null, includeRetired ?? false,
+                organizationUnitId, geographicAreaId, cameraType,
+                Upper(operationalStatus), Upper(connectivityStatus), Upper(maintenanceStatus),
+                q, box),
+            caller, ct);
+
+        return TypedResults.Ok(new CameraCountResponse(total));
     }
 
     private static async Task<Results<Ok<CameraPage>, ProblemHttpResult>> ListAsync(

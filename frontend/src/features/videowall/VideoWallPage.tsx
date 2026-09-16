@@ -2,7 +2,7 @@ import { useMutation, useQueries, useQuery } from '@tanstack/react-query';
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { Link } from 'react-router-dom';
 
-import { errorDetail } from '../../api/client';
+import { errorDetail, isApiProblem } from '../../api/client';
 import { api } from '../../api/endpoints';
 import type { CameraResponse } from '../../api/models';
 import { queryKeys } from '../../api/queryKeys';
@@ -89,7 +89,11 @@ export function VideoWallPage() {
   // updated immediately and optimistically on every edit and is never reset by a save that is
   // merely in flight or has failed; only a successful `GET`/`PUT`/`DELETE` response changes it.
   const [wall, setWall] = useState<WallState | null>(loadCachedState);
-  const [configuredKnown, setConfiguredKnown] = useState(wall !== null);
+  // Deliberately always false at mount, even when a local cache exists: that cache is only ever
+  // a best-effort guess for instant first paint (see loadCachedState's own doc comment) — it must
+  // never stand in for "already reconciled with the server," or a device that was configured once
+  // would never learn about a layout saved from a *different* device for the same account again.
+  const [configuredKnown, setConfiguredKnown] = useState(false);
   const [mode, setMode] = useState<'view' | 'configuring'>('view');
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
@@ -110,9 +114,18 @@ export function VideoWallPage() {
       setWall({ columnCount: clampColumnCount(preferences.data.columnCount), cameraIds: preferences.data.cameraIds });
       setConfiguredKnown(true);
     } else if (preferences.isError) {
-      setConfiguredKnown(true); // confirmed "nothing saved" — stop showing the cached guess as fact.
+      // A confirmed 404 means the server has nothing saved — including possibly because a
+      // *different* device cleared it since this device last cached a guess, so that stale guess
+      // must be dropped too, not just left standing. Any other error (network blip, 5xx) leaves
+      // the cached guess in place instead: a transient fetch failure is not proof there's nothing
+      // saved, and discarding a perfectly good local layout over it would be worse than showing
+      // possibly-stale data for one more session.
+      if (isApiProblem(preferences.error) && preferences.error.status === 404) {
+        setWall(null);
+      }
+      setConfiguredKnown(true);
     }
-  }, [configuredKnown, preferences.isSuccess, preferences.isError, preferences.data]);
+  }, [configuredKnown, preferences.isSuccess, preferences.isError, preferences.data, preferences.error]);
 
   useEffect(() => {
     const handle = window.setTimeout(() => setDebouncedSearch(search.trim()), 200);

@@ -49,6 +49,7 @@ describe('ReportsPage', () => {
       if (url.pathname === '/api/v1/overview') return Response.json({
         targets: 10, activeTargets: 8, quarantinedTargets: 2, cameras: 12, unreachableCameras: 3,
       });
+      if (url.pathname === '/api/v1/cameras/count') return Response.json({ total: 12 });
       if (url.pathname === '/api/v1/organizations' || url.pathname === '/api/v1/geographic-areas') return Response.json(pageEnvelope([]));
       if (url.pathname === '/api/v1/cameras/reports/ageing-infrastructure') return Response.json({
         totalCameras: 0,
@@ -79,6 +80,7 @@ describe('ReportsPage', () => {
       if (url.pathname === '/api/v1/overview') {
         return Response.json({ targets: 10, activeTargets: 8, quarantinedTargets: 2, cameras: 12, unreachableCameras: 3 });
       }
+      if (url.pathname === '/api/v1/cameras/count') return Response.json({ total: 12 });
       if (url.pathname === '/api/v1/gis/coverage') {
         return Response.json({ buckets: { operationalStatus: { ACTIVE: 9, INACTIVE: 3 } } });
       }
@@ -124,6 +126,7 @@ describe('ReportsPage', () => {
       if (url.pathname === '/api/v1/overview') return Response.json({
         targets: 10, activeTargets: 8, quarantinedTargets: 2, cameras: 12, unreachableCameras: 3,
       });
+      if (url.pathname === '/api/v1/cameras/count') return Response.json({ total: 12 });
       if (url.pathname === '/api/v1/organizations' || url.pathname === '/api/v1/geographic-areas') return Response.json(pageEnvelope([]));
       return new Response(null, { status: 404 });
     });
@@ -148,6 +151,7 @@ describe('ReportsPage', () => {
       if (url.pathname === '/api/v1/overview') return Response.json({
         targets: 10, activeTargets: 8, quarantinedTargets: 2, cameras: 12, unreachableCameras: 3,
       });
+      if (url.pathname === '/api/v1/cameras/count') return Response.json({ total: 12 });
       if (url.pathname === '/api/v1/organizations') return Response.json(pageEnvelope([
         { id: 'c0a80101-0000-4000-8000-000000000001', code: 'OPS', name: 'Operations', organizationType: 'PUBLIC', description: null, status: 'ACTIVE' },
       ]));
@@ -185,6 +189,7 @@ describe('ReportsPage', () => {
       if (url.pathname === '/api/v1/overview') return Response.json({
         targets: 10, activeTargets: 8, quarantinedTargets: 2, cameras: 12, unreachableCameras: 3,
       });
+      if (url.pathname === '/api/v1/cameras/count') return Response.json({ total: 12 });
       if (url.pathname === '/api/v1/organizations' || url.pathname === '/api/v1/geographic-areas') return Response.json(pageEnvelope([]));
       return new Response(null, { status: 404 });
     });
@@ -224,6 +229,7 @@ describe('ReportsPage', () => {
       if (url.pathname === '/api/v1/overview') return Response.json({
         targets: 10, activeTargets: 8, quarantinedTargets: 2, cameras: 12, unreachableCameras: 3,
       });
+      if (url.pathname === '/api/v1/cameras/count') return Response.json({ total: 12 });
       if (url.pathname === '/api/v1/organizations') return Response.json(pageEnvelope([
         { id: 'c0a80101-0000-4000-8000-000000000001', code: 'OPS', name: 'Operations', organizationType: 'PUBLIC', description: null, status: 'ACTIVE' },
       ]));

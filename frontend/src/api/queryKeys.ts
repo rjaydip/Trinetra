@@ -10,6 +10,7 @@
 export const queryKeys = {
   overview: ['overview'] as const,
   ageingInfrastructure: ['ageing-infrastructure'] as const,
+  cameraCount: ['cameras', 'count'] as const,
 
   vms: {
     all: ['vms'] as const,

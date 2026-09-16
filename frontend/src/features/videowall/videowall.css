@@ -20,9 +20,17 @@
 
 .videowall-toolbar-actions { display: flex; gap: .75rem; }
 
-.videowall-grid { display: grid; gap: .75rem; margin: 0; padding: 0; list-style: none; grid-template-columns: repeat(var(--videowall-columns, 2), minmax(0, 1fr)); }
+/* minmax(16rem, …), not minmax(0, …): a bare 0 floor lets a high column count (up to
+ * MAX_COLUMNS=12 in VideoWallPage.tsx) squeeze every tile down to an unreadable sliver on an
+ * ordinary screen instead of ever admitting there isn't room — overflow-x below is what actually
+ * handles that case, by scrolling instead of squishing. */
+.videowall-grid { display: grid; gap: .75rem; margin: 0; padding: 0; list-style: none; grid-template-columns: repeat(var(--videowall-columns, 2), minmax(16rem, 1fr)); overflow-x: auto; }
 
-.videowall-tile { position: relative; display: grid; gap: .5rem; align-content: start; min-height: 12rem; padding: .875rem; border: 1px solid var(--color-border); border-radius: .75rem; background: var(--color-surface); }
+/* max-width caps a tile at a sane video width — without it, a low column count (1-2) on an
+ * ultra-wide monitor stretches each tile's <video> far beyond any resolution the source camera
+ * actually provides, which looks blurry/oversized for no benefit. justify-self: start keeps a
+ * capped tile pinned to its column's start rather than centered with dead space on both sides. */
+.videowall-tile { position: relative; display: grid; gap: .5rem; align-content: start; justify-self: start; width: 100%; min-height: 12rem; max-width: 42rem; padding: .875rem; border: 1px solid var(--color-border); border-radius: .75rem; background: var(--color-surface); }
 .videowall-tile__actions { position: absolute; top: .5rem; right: .5rem; display: flex; gap: .375rem; }
 .videowall-tile__remove, .videowall-tile__expand { width: 1.75rem; height: 1.75rem; border-radius: 999px; border: 1px solid var(--color-border); background: var(--color-surface); color: var(--color-text); line-height: 1; cursor: pointer; }
 .videowall-tile__empty { margin: 2rem 0; color: var(--color-muted); text-align: center; }
@@ -53,7 +61,12 @@
   overflow-y: auto;
 }
 .videowall-fullscreen__close { justify-self: end; padding: .5rem 1rem; border-radius: .375rem; border: 1px solid var(--color-border); background: var(--color-surface); color: var(--color-text); font: inherit; cursor: pointer; }
-.videowall-fullscreen__content { max-width: 48rem; width: 100%; justify-self: center; display: grid; gap: 1rem; font-size: 1.125rem; }
+/* min(92vw, 75rem), not 48rem: the overlay itself already covers the whole viewport
+ * (`.videowall-fullscreen` is `inset: 0`), but this wrapper's own width is what actually bounds
+ * the <video> inside it — 48rem (768px) meant "expand to fullscreen" opened a small, centered box
+ * that never remotely filled the screen. 92vw leaves a visible margin on every side rather than
+ * touching the viewport edges, capped at 75rem so it doesn't grow absurdly wide on a huge display. */
+.videowall-fullscreen__content { max-width: min(92vw, 75rem); width: 100%; justify-self: center; display: grid; gap: 1rem; font-size: 1.125rem; }
 .videowall-fullscreen__content .videowall-tile__header h2 { font-size: 1.75rem; }
 .videowall-fullscreen__content .videowall-tile__status { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; }
 .videowall-fullscreen__content .videowall-tile__status dt { font-size: .8125rem; }
