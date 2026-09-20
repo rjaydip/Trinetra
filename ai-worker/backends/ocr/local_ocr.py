@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import statistics
+import warnings
 
 import numpy as np
 
@@ -21,7 +22,16 @@ class LocalOcrProcessor(AnprProcessor):
     def __init__(self, confidence_threshold: float, gpu: bool = False) -> None:
         import easyocr  # imported lazily: heavy, and not needed by remote/tests that stub it
 
-        self._reader = easyocr.Reader(["en"], gpu=gpu, verbose=False)
+        # EasyOCR's own model construction triggers two harmless PyTorch UserWarnings — the
+        # deprecated torch.quantize_per_tensor path its quantized CPU LSTM uses internally, and
+        # a DataLoader pin_memory note that only applies on an MPS/CUDA device — neither affects
+        # OCR correctness or output. Scoped to just this call so a real warning elsewhere in the
+        # worker is never silenced alongside it.
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message=r".*quantize_per_tensor.*")
+            warnings.filterwarnings("ignore", message=r".*pin_memory.*")
+            self._reader = easyocr.Reader(["en"], gpu=gpu, verbose=False)
+
         self._confidence_threshold = confidence_threshold
         logger.info("LocalOcrProcessor ready (gpu=%s)", gpu)
 

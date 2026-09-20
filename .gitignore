@@ -68,6 +68,7 @@ ai-worker/.ruff_cache/
 # Downloaded pretrained weights: large binaries, fetched at setup time, not source.
 ai-worker/models/weights/
 ai-worker/*.pt
+ai-worker/models/*.pt
 ai-worker/cameras.yaml
 # Runtime-generated evidence snapshots.
 ai-worker/evidence/

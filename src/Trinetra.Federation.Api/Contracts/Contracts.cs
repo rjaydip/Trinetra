@@ -302,10 +302,25 @@ public sealed record DetectionEventRequest(
 /// <summary><c>Tags</c> are free-form operator tags (v1.26) — distinct from <c>EventType</c>'s
 /// closed machine classification. Empty, never null, when the detection carries none.</summary>
 public sealed record DetectionResponse(
-    string Id, string CameraId, Guid? RegisteredCameraId, string EventType,
+    string Id, string CameraId, Guid? RegisteredCameraId, string? CameraName, string EventType,
     DateTimeOffset Timestamp, double? Confidence,
     string? VehicleType, string? PlateNumber, string? SnapshotReference,
     IReadOnlyList<string> Tags);
+
+/// <summary>A batch of detections (v1.30) — the same per-item shape as <see cref="DetectionEventRequest"/>,
+/// submitted together so the worker's routine (non-watchlist-matching) detections can flush as one
+/// request instead of one HTTP round trip per detection. <c>Items</c> is 1..500.</summary>
+public sealed record DetectionBulkRequest(IReadOnlyList<DetectionEventRequest> Items);
+
+/// <summary>The outcome of one item in a bulk detection submission.</summary>
+public sealed record DetectionBulkItemResult(int Index, string Id, string Status, string? Error);
+
+/// <summary>The report for a whole bulk submission — always 200, even with per-item failures, so
+/// the worker can inspect exactly which items to keep in its local retry spool (everything but
+/// <c>"inserted"</c>/<c>"duplicate"</c> — a <c>"conflict"</c> reused an id and must not be retried
+/// verbatim, an <c>"error"</c> may be retried).</summary>
+public sealed record DetectionBulkResponse(
+    int Inserted, int Duplicate, int Failed, IReadOnlyList<DetectionBulkItemResult> Results);
 
 /// <summary>Attaches one free-form operator tag to a detection. <c>occurredAt</c> is required —
 /// <c>detection_event</c>'s primary key is <c>(occurred_at, event_id)</c>, so both together
@@ -335,10 +350,34 @@ public sealed record WatchlistAlertResponse(
 /// </remarks>
 public sealed record WorkerHeartbeatRequest(string WorkerId, string Hostname, DateTimeOffset? ReportedAt);
 
+/// <summary><c>LeasedCameraCount</c>/<c>LeasedCameraRefs</c> come from
+/// <c>camera_worker_lease</c> (v1.27) — which cameras this worker is currently monitoring, not
+/// just that it's alive. Empty for a worker that has never claimed any (an older client, or one
+/// still using the static <c>ai-worker/scaling.py</c> partition instead of claiming).</summary>
 public sealed record AiWorkerHealthResponse(
     Guid Id, Guid ApiKeyId, string ApiKeyName, string WorkerId, string Hostname,
     DateTimeOffset FirstSeenAt, DateTimeOffset LastHeartbeatAt,
-    DateTimeOffset? ReportedAt, double? ClockDriftSeconds);
+    DateTimeOffset? ReportedAt, double? ClockDriftSeconds,
+    int LeasedCameraCount, IReadOnlyList<string> LeasedCameraRefs,
+    IReadOnlyList<string> LeasedCameraNames);
+
+/// <summary>Claims/renews up to <c>Capacity</c> cameras for one AI-worker instance — VMS-discovered
+/// candidates first, then standalone registry cameras, until <c>Capacity</c> is reached or
+/// candidates run out. Call on every poll; a lease this worker already holds is renewed, not
+/// re-claimed from scratch. A camera whose lease has gone stale (no renewal within the server's
+/// TTL) becomes claimable by any worker's next call — this is the whole failover mechanism, no
+/// coordinator involved.</summary>
+public sealed record ClaimCamerasRequest(string WorkerId, string Hostname, int Capacity);
+
+public sealed record ReleaseCamerasRequest(string WorkerId, string Hostname);
+
+/// <summary>One camera this claim call assigned to the caller, with what it needs to actually
+/// capture/decode the stream. <c>Source</c> is <c>REGISTRY</c> or <c>VMS</c> — see
+/// <c>db/versions/v1.27.sql</c>.</summary>
+public sealed record ClaimedCameraResponse(
+    string CameraRef, string Source, string Name,
+    string? StreamReference, string StreamPreference,
+    string? NativeHlsUrl, string? NativeWebrtcUrl, string? CredentialReference);
 
 public sealed record CreateApiKeyRequest(
     string DisplayName, Guid GroupId, DateTimeOffset? ExpiresAt = null);

@@ -32,6 +32,7 @@ import httpx
 import yaml
 
 from capture.rtsp_url import apply_credentials
+from lease_client import ClaimedCamera
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +109,7 @@ class TrinetraApiCameraSource(CameraSource):
         self._rtsp_username = rtsp_username
         self._rtsp_password = rtsp_password
         self._cred_cache: dict[str, tuple[str | None, str | None]] = {}
+        self._camera_cred_cache: dict[str, tuple[str | None, str | None]] = {}
 
     def list_cameras(self) -> list[CameraConfig]:
         targets_response = self._client.get(f"{self._base_url}/api/v1/vms")
@@ -188,6 +190,93 @@ class TrinetraApiCameraSource(CameraSource):
             )
 
         self._cred_cache[target_id] = creds
+        return creds
+
+    def resolve_leased_camera(self, claimed: ClaimedCamera) -> CameraConfig | None:
+        """Turns one entry of `CameraLeaseClient.claim()`'s result into a `CameraConfig` the
+        capture loop can open — the dynamic-claim counterpart to `list_cameras()`/
+        `_parse_camera()`. Resolves the camera's own stored credential the same way
+        `list_cameras()` resolves a VMS target's, just against the matching endpoint for each
+        source: `GET /vms/{targetId}/credential/resolve` for a VMS-discovered camera,
+        `GET /cameras/{id}/credential/resolve` for a standalone registry one.
+
+        Returns `None` (logged, not raised) when the claimed camera has no usable `rtsp://`
+        stream reference — the claim endpoint's job is scope/ownership, not stream validity."""
+        if claimed.source == "VMS":
+            # "vms:{targetId}:{nativeCameraId}" -> the plain "{targetId}:{nativeCameraId}"
+            # DetectionRepository.ResolveCameraAsync (and this worker's existing VMS discovery
+            # path) already uses as a camera id.
+            _, target_id, native_camera_id = claimed.camera_ref.split(":", 2)
+            camera_id = f"{target_id}:{native_camera_id}"
+            username, password = self._resolve_credentials(target_id)
+        else:
+            camera_id = claimed.camera_ref
+            username, password = self._resolve_camera_credential(claimed.camera_ref)
+
+        rtsp_url = claimed.stream_reference
+        if not rtsp_url or not rtsp_url.startswith("rtsp://"):
+            logger.warning(
+                "Skipping claimed camera %s (%s): no rtsp:// stream reference (got: %r)",
+                camera_id, claimed.name, rtsp_url,
+            )
+            return None
+
+        return CameraConfig(
+            camera_id=camera_id,
+            name=claimed.name or camera_id,
+            rtsp_url=apply_credentials(rtsp_url, username, password),
+            processing_fps=None,
+            webrtc_url=claimed.native_webrtc_url,
+            hls_url=claimed.native_hls_url,
+        )
+
+    def _resolve_camera_credential(self, camera_id: str) -> tuple[str | None, str | None]:
+        """The registry-camera counterpart to `_resolve_credentials` — same caching, override
+        and never-raises posture, against `GET /cameras/{id}/credential/resolve`
+        (`camera.credential.resolve`, granted to `DETECTION_WORKER` by v1.29)."""
+        if self._rtsp_username and self._rtsp_password:
+            return (None, None)
+
+        if camera_id in self._camera_cred_cache:
+            return self._camera_cred_cache[camera_id]
+
+        creds: tuple[str | None, str | None] = (None, None)
+        try:
+            resp = self._client.get(
+                f"{self._base_url}/api/v1/cameras/{camera_id}/credential/resolve"
+            )
+            if resp.status_code == 200:
+                body = resp.json()
+                creds = (body.get("username"), body.get("password"))
+                logger.info("Resolved a stored credential for registry camera %s", camera_id)
+            elif resp.status_code == 404:
+                logger.info(
+                    "Registry camera %s has no stored credential, or this key is not scoped "
+                    "to it — using the stream URL without credentials.", camera_id,
+                )
+            elif resp.status_code == 403:
+                logger.warning(
+                    "API key lacks 'camera.credential.resolve' for camera %s. Apply "
+                    "db/versions/v1.29.sql. Falling back to an unauthenticated stream URL.",
+                    camera_id,
+                )
+            elif resp.status_code == 503:
+                logger.warning(
+                    "credential/resolve for camera %s returned 503 (the platform could not "
+                    "audit the access); using the stream URL without credentials.", camera_id,
+                )
+            else:
+                logger.warning(
+                    "credential/resolve for camera %s returned HTTP %d; using the stream "
+                    "URL without credentials.", camera_id, resp.status_code,
+                )
+        except httpx.HTTPError as exc:
+            logger.warning(
+                "credential/resolve for camera %s failed (%s); using the stream URL "
+                "without credentials.", camera_id, exc,
+            )
+
+        self._camera_cred_cache[camera_id] = creds
         return creds
 
     def _parse_camera(

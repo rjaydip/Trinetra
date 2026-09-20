@@ -10,6 +10,7 @@ import { DetectionsPage } from './DetectionsPage';
 
 const detection = {
   id: 'evt-1', cameraId: '11111111-1111-4111-8111-111111111111:CAM-07', registeredCameraId: null,
+  cameraName: null,
   eventType: 'ANPR_DETECTED', timestamp: '2026-09-12T10:00:00Z', confidence: 0.92,
   vehicleType: 'CAR', plateNumber: 'MH12AB1234', snapshotReference: null, tags: [],
 };

@@ -5128,4 +5128,162 @@ CREATE INDEX IF NOT EXISTS ix_detection_tag_org
     ON detection_tag (organization_unit_id);
 
 
+
+
+-- ####################################################################
+-- ##  versions/v1.27.sql
+-- ####################################################################
+
+-- ===========================================================================
+-- v1.27 — dynamic camera<->AI-worker lease assignment
+-- ===========================================================================
+--
+-- Supersedes the "an AI worker owns a static camera partition" design AiWorkerHealthRepository's
+-- own doc comment describes (ai-worker/scaling.py's hash-based partitioning, computed client-side
+-- and never reported back). That was fine while every worker saw the same fixed camera list and
+-- WORKER_COUNT was set by hand; it has no answer for "a worker crashed, who picks up its
+-- cameras?" and no visibility into which camera any given worker is actually watching. This adds
+-- exactly what `federation.connector_target`'s own leased_by/lease_expires_at columns already do
+-- for VMS connector workers (LeaseStore.cs), for AI workers and cameras instead:
+--
+--   - A worker claims up to its own capacity via POST /worker-health/cameras/claim, renewed on
+--     every poll (same call). A camera whose lease goes stale (no renewal within the TTL) is
+--     claimable by any other worker on its next poll — emergent rebalancing, no coordinator.
+--   - Unlike connector_target (lease columns live directly on the table being leased),
+--     "the camera" here is one of TWO different source tables — the registry (`cameras`) or a
+--     VMS-discovered-but-not-yet-reconciled row (`federated_camera`, camera_id IS NULL) — so the
+--     lease lives in its own table instead, keyed on a `camera_ref` that names either kind:
+--     the registry UUID as text, or `vms:{targetId}:{nativeCameraId}` for the latter.
+--
+-- Deliberately NOT a schema change to GET /api/v1/cameras: that endpoint's contract (a real
+-- registry UUID as `id`, every field non-null) is depended on by the whole frontend registry UI,
+-- and a VMS-discovered-but-unreconciled camera has no registry UUID to give it. The claim
+-- endpoint's own repository query unions both source tables internally instead — see
+-- CameraLeaseRepository.
+--
+-- Also grants DETECTION_WORKER `camera.read`: discovering standalone (non-VMS) cameras needs it,
+-- and this role never held it before now (v1.4 gave it vms.read/observation.write/worker.heartbeat
+-- only — registry cameras weren't part of its job yet).
+--
+-- Requires: v1.sql .. v1.26.sql
+-- ===========================================================================
+
+SET search_path = federation, public;
+
+CREATE TABLE IF NOT EXISTS camera_worker_lease (
+    -- The registry camera's own UUID (as text) for a REGISTRY row, or
+    -- 'vms:{targetId}:{nativeCameraId}' for a VMS row — see the module comment above. Primary key
+    -- rather than a surrogate id: "one active lease per camera" is exactly what a claim needs to
+    -- enforce, and an INSERT ... ON CONFLICT (camera_ref) upsert is the whole claim mechanism.
+    camera_ref             TEXT PRIMARY KEY,
+    source                 TEXT NOT NULL CHECK (source IN ('REGISTRY', 'VMS')),
+
+    -- Denormalised from whichever source table camera_ref names, the same convention
+    -- detection_event/detection_tag already use — a claim query scopes against this directly,
+    -- never joining back to cameras/federated_camera to re-derive ownership.
+    organization_unit_id   UUID NOT NULL REFERENCES organization_units(id),
+    geographic_area_id     UUID,
+
+    -- Matches ai_worker_health's own identity columns exactly (api_key_id, worker_id, hostname) —
+    -- the same worker, identified the same way, now also owns a set of camera leases in addition
+    -- to reporting heartbeats.
+    worker_id               VARCHAR(128) NOT NULL,
+    api_key_id               UUID NOT NULL REFERENCES api_key(id) ON DELETE CASCADE,
+    hostname                 VARCHAR(253) NOT NULL,
+
+    leased_at                TIMESTAMPTZ NOT NULL DEFAULT now(),
+    lease_expires_at         TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS ix_camera_worker_lease_owner
+    ON camera_worker_lease (api_key_id, worker_id, hostname);
+-- Powers "release everything past its TTL" scans and the admin view's staleness check.
+CREATE INDEX IF NOT EXISTS ix_camera_worker_lease_expiry
+    ON camera_worker_lease (lease_expires_at);
+
+COMMENT ON TABLE camera_worker_lease IS
+    'Dynamic camera<->AI-worker assignment (v1.27), superseding the static hash-partition '
+    'ai-worker/scaling.py used to compute entirely client-side. One row per currently-leased '
+    'camera; a stale lease (lease_expires_at < now()) is claimable by any worker on its next '
+    'poll. camera_ref is either a registry camera UUID (source=REGISTRY) or '
+    'vms:{targetId}:{nativeCameraId} for a VMS-discovered-but-unreconciled camera (source=VMS).';
+
+INSERT INTO role_permissions (role_id, permission_code)
+SELECT r.id, p.code
+FROM roles r JOIN permissions p ON TRUE
+WHERE (r.code, p.code) IN (
+    ('DETECTION_WORKER', 'camera.read')
+)
+ON CONFLICT DO NOTHING;
+
+-- ---------------------------------------------------------------------------
+-- v1.28: detection_event accepts a standalone registry camera (v1.27's camera-lease claim
+-- endpoint hands out registry cameras that have no connector_target at all).
+-- ---------------------------------------------------------------------------
+
+ALTER TABLE detection_event ALTER COLUMN target_id DROP NOT NULL;
+ALTER TABLE detection_event ALTER COLUMN native_camera_id DROP NOT NULL;
+
+ALTER TABLE detection_event
+    ADD CONSTRAINT ck_detection_event_camera_ref
+    CHECK (target_id IS NOT NULL OR camera_id IS NOT NULL);
+
+ALTER TABLE detection_event
+    ADD CONSTRAINT fk_detection_event_camera
+    FOREIGN KEY (camera_id) REFERENCES cameras(id) ON DELETE CASCADE;
+
+CREATE INDEX IF NOT EXISTS ix_detection_event_camera_id
+    ON detection_event (camera_id, occurred_at DESC)
+    WHERE camera_id IS NOT NULL;
+
+-- ---------------------------------------------------------------------------
+-- v1.29: DETECTION_WORKER can resolve a standalone registry camera's own credential
+-- (GET /cameras/{id}/credential/resolve) — needed to open an RTSP stream the claim endpoint
+-- (v1.27) handed out from federation.cameras rather than a VMS target.
+-- ---------------------------------------------------------------------------
+
+INSERT INTO role_permissions (role_id, permission_code)
+SELECT r.id, p.code FROM roles r JOIN permissions p ON TRUE
+WHERE (r.code, p.code) IN (('DETECTION_WORKER', 'camera.credential.resolve'))
+ON CONFLICT DO NOTHING;
+
+-- ---------------------------------------------------------------------------
+-- v1.30: detection evidence images move from opaque filesystem references into the database —
+-- see that migration's own note for why a separate table, not a column on detection_event.
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS detection_snapshot (
+    detection_event_id     TEXT NOT NULL,
+    detection_occurred_at  TIMESTAMPTZ NOT NULL,
+
+    image_data              BYTEA NOT NULL,
+    content_type            TEXT NOT NULL DEFAULT 'image/jpeg',
+
+    created_at               TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    PRIMARY KEY (detection_event_id, detection_occurred_at)
+);
+
+COMMENT ON TABLE detection_snapshot IS
+    'One evidence image per detection, re-encoded server-side to a bounded size before storage '
+    '(see DetectionEndpoints). No FK to detection_event — same partitioning constraint '
+    'detection_tag already documents.';
+
+-- ---------------------------------------------------------------------------
+-- v1.31: detection_snapshot records whether its image_data is gzip-compressed — evidence stays
+-- full resolution/quality (corrected from v1.30's resize+quality-reduce), with lossless gzip on
+-- the encoded bytes instead. See that migration's own note.
+-- ---------------------------------------------------------------------------
+
+ALTER TABLE detection_snapshot ADD COLUMN IF NOT EXISTS content_encoding TEXT;
+
+COMMENT ON COLUMN detection_snapshot.content_encoding IS
+    'NULL for raw/uncompressed image_data, ''gzip'' when it is gzip-compressed — the evidence '
+    'route sets Content-Encoding accordingly rather than decompressing server-side.';
+
+COMMENT ON TABLE detection_snapshot IS
+    'One evidence image per detection, stored at full resolution/quality — see content_encoding '
+    'for whether image_data is gzip-compressed. No FK to detection_event — same partitioning '
+    'constraint detection_tag already documents.';
+
 COMMIT;

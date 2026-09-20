@@ -65,6 +65,7 @@ internal static class ApiInfrastructureExtensions
         services.AddScoped<DetectionRepository>();
         services.AddScoped<WatchlistRepository>();
         services.AddScoped<AiWorkerHealthRepository>();
+        services.AddScoped<CameraLeaseRepository>();
         services.AddScoped<SystemInfoRepository>();
         services.AddScoped<VideoWallPreferenceRepository>();
         services.AddSingleton<EvidenceStorage>();

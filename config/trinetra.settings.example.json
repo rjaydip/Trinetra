@@ -46,6 +46,27 @@
     "DeadLetterDays": 90
   },
 
+  "Evidence": {
+    // Where evidence images the API itself decodes and writes (an ingest carrying
+    // snapshotBase64) live, and the only root a detection's snapshot is ever served from unless
+    // also listed in AllowedExternalRoots below. Relative to the API's working directory.
+    // "RootPath": "evidence",
+
+    // A detection's snapshot_reference is worker-supplied and, for a plain snapshotPath (the
+    // common case — the worker keeps evidence on its own disk and never uploads the bytes),
+    // stored verbatim as an opaque, un-validated string: EasyOCR's own worker writes an
+    // *absolute* path on whatever machine it runs on (see ai-worker/pipeline.py's
+    // evidence_dir), which is meaningless to serve from unless the API happens to run on that
+    // same machine/filesystem — true only for local, single-machine development. GET
+    // /detections/{id}/evidence refuses to open ANY path outside RootPath or one of these
+    // explicitly configured roots (canonical-path containment, checked at request time) — an
+    // unlisted worker path is a 404, never a same-machine coincidence away from becoming an
+    // arbitrary-file-read. A real multi-machine deployment's answer is either the worker
+    // uploading snapshotBase64 (so the API owns storage under RootPath) or a shared object
+    // store/network volume mounted at a path listed here — not growing this list per worker.
+    "AllowedExternalRoots": []
+  },
+
   "Auth": {
     "Jwt": {
       // Signs every session token. A leak lets someone forge a session as any user.
