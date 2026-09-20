@@ -9,8 +9,8 @@ public sealed record DetectionEventRow
 {
     public string EventId { get; init; } = "";
     public DateTimeOffset OccurredAt { get; init; }
-    public Guid TargetId { get; init; }
-    public string NativeCameraId { get; init; } = "";
+    public Guid? TargetId { get; init; }
+    public string? NativeCameraId { get; init; }
     public Guid? CameraId { get; init; }
     public string EventType { get; init; } = "";
     public double? Confidence { get; init; }
@@ -18,6 +18,12 @@ public sealed record DetectionEventRow
     public string? PlateNumberRaw { get; init; }
     public string? PlateNumberNormalized { get; init; }
     public string? SnapshotReference { get; init; }
+
+    /// <summary>The camera's own display name — resolved by <see cref="DetectionRepository.SearchAsync"/>
+    /// from <c>cameras</c> (a standalone registry camera, keyed on <c>camera_id</c>) or
+    /// <c>federated_camera</c> (a VMS-discovered one, keyed on <c>(target_id, native_camera_id)</c>),
+    /// whichever this row actually has. Null only when neither source has a name on file.</summary>
+    public string? CameraName { get; init; }
 }
 
 /// <summary>Outcome of adding an operator tag to a detection (v1.26).</summary>
@@ -65,14 +71,23 @@ public enum DetectionIngestOutcome
     Scope = "type")]
 public sealed class DetectionRepository
 {
+    /// <summary>The <c>snapshot_reference</c> value stored on a detection whose evidence lives in
+    /// <c>detection_snapshot</c> (v1.30) rather than at an opaque filesystem path — a fixed,
+    /// content-free marker rather than the actual bytes' location, since the location for a
+    /// database-stored image is just "this database." The API's evidence route checks for this
+    /// exact value to decide which of the two storage paths to read from.
+    /// </summary>
+    public const string DatabaseSnapshotMarker = "db";
+
     private readonly NpgsqlDataSource _dataSource;
 
     public DetectionRepository(NpgsqlDataSource dataSource) => _dataSource = dataSource;
 
     /// <summary>
-    /// Resolves a worker's <c>"{targetId}:{nativeCameraId}"</c> camera id against the camera
-    /// inventory a worker discovered, for the organization/geography scope to denormalize onto the
-    /// detection row.
+    /// Resolves a worker's camera id — either <c>"{targetId}:{nativeCameraId}"</c> against the
+    /// VMS-federated inventory a worker discovered, or a bare registry camera UUID (v1.28) against
+    /// <c>federation.cameras</c> directly, as the camera-lease claim endpoint (v1.27) now hands
+    /// out both kinds — for the organization/geography scope to denormalize onto the detection row.
     /// </summary>
     /// <remarks>
     /// Finding 15-M3: an out-of-scope camera id used to resolve successfully here and only fail
@@ -86,16 +101,29 @@ public sealed class DetectionRepository
     /// an unknown one — both return <see langword="null"/>. <see cref="IngestAsync"/> keeps its
     /// own check as a defense-in-depth backstop for any other caller of this repository.
     /// </remarks>
-    public async Task<(Guid TargetId, string NativeCameraId, Guid? CameraId,
+    public async Task<(Guid? TargetId, string? NativeCameraId, Guid? CameraId,
         Guid OrganizationUnitId, Guid? GeographicAreaId)?> ResolveCameraAsync(
         string workerCameraId, CallerContext caller, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(caller);
 
+        // The camera-lease claim endpoint (v1.27) hands a VMS-discovered camera back as
+        // "vms:{targetId}:{nativeCameraId}" — the "vms:" tags the source for the claim table's
+        // own bookkeeping, but a worker submits detections with the same id verbatim, so this
+        // strips it back to the plain "{targetId}:{nativeCameraId}" shape below expects.
+        if (workerCameraId.StartsWith("vms:", StringComparison.Ordinal))
+        {
+            workerCameraId = workerCameraId["vms:".Length..];
+        }
+
         var separator = workerCameraId.IndexOf(':', StringComparison.Ordinal);
         if (separator <= 0 || !Guid.TryParse(workerCameraId[..separator], out var targetId))
         {
-            return null;
+            // Not the VMS "{targetId}:{nativeCameraId}" shape — try it as a bare registry
+            // camera id instead of failing outright.
+            return Guid.TryParse(workerCameraId, out var cameraId)
+                ? await ResolveRegistryCameraAsync(cameraId, caller, ct)
+                : null;
         }
 
         var nativeCameraId = workerCameraId[(separator + 1)..];
@@ -128,6 +156,41 @@ public sealed class DetectionRepository
             : (targetId, nativeCameraId, row.CameraId, row.OrganizationUnitId, row.GeographicAreaId);
     }
 
+    /// <summary>The bare-UUID half of <see cref="ResolveCameraAsync"/> — a standalone registry
+    /// camera has no <c>connector_target</c>, so it is resolved against <c>federation.cameras</c>
+    /// directly rather than <c>federated_camera</c>.</summary>
+    private async Task<(Guid? TargetId, string? NativeCameraId, Guid? CameraId,
+        Guid OrganizationUnitId, Guid? GeographicAreaId)?> ResolveRegistryCameraAsync(
+        Guid cameraId, CallerContext caller, CancellationToken ct)
+    {
+        var orgOk = caller.IsUnscopedFor("observation.write");
+        var geoOk = caller.IsUnscopedForGeography("observation.write");
+
+        await using var c = await _dataSource.OpenConnectionAsync(ct);
+        var row = await c.QuerySingleOrDefaultAsync<CameraLookupRow>(new CommandDefinition("""
+            SELECT id AS camera_id, organization_unit_id, geographic_area_id
+            FROM federation.cameras
+            WHERE id = @cameraId AND deleted_at IS NULL
+              AND (@OrgOk OR organization_unit_id IN (
+                  SELECT organization_unit_id FROM federation.authorized_org_units(
+                      p_user_id => @UserId, p_api_key_id => @ApiKeyId,
+                      p_permission => 'observation.write')))
+              AND (@GeoOk OR geographic_area_id IN (
+                  SELECT geographic_area_id FROM federation.authorized_geographic_areas(
+                      p_user_id => @UserId, p_api_key_id => @ApiKeyId,
+                      p_permission => 'observation.write')));
+            """, new
+            {
+                cameraId,
+                caller.UserId, caller.ApiKeyId,
+                OrgOk = orgOk, GeoOk = geoOk,
+            }, cancellationToken: ct));
+
+        return row is null
+            ? null
+            : ((Guid?)null, (string?)null, row.CameraId, row.OrganizationUnitId, row.GeographicAreaId);
+    }
+
     /// <summary>
     /// Inserts a detection, idempotent on <see cref="DetectionEvent.Id"/>. A same-id retry with
     /// identical content is accepted again with no new row and no second watchlist match; a
@@ -137,7 +200,7 @@ public sealed class DetectionRepository
     /// must not be mistaken for the original detection having been stored.
     /// </summary>
     public async Task<DetectionIngestOutcome> IngestAsync(
-        DetectionEvent evt, Guid targetId, string nativeCameraId, Guid? cameraId,
+        DetectionEvent evt, Guid? targetId, string? nativeCameraId, Guid? cameraId,
         Guid organizationUnitId, Guid? geographicAreaId, string? plateNumberNormalized,
         CallerContext caller, UnitOfWork work, CancellationToken ct)
     {
@@ -289,8 +352,12 @@ public sealed class DetectionRepository
         var sql = $"""
             SELECT d.event_id, d.occurred_at, d.target_id, d.native_camera_id, d.camera_id,
                    d.event_type, d.confidence, d.vehicle_type, d.plate_number_raw,
-                   d.plate_number_normalized, d.snapshot_reference
+                   d.plate_number_normalized, d.snapshot_reference,
+                   COALESCE(cam.name, fc.name) AS camera_name
             FROM federation.detection_event d
+            LEFT JOIN federation.cameras cam ON cam.id = d.camera_id
+            LEFT JOIN federation.federated_camera fc
+                ON fc.target_id = d.target_id AND fc.native_camera_id = d.native_camera_id
             WHERE d.occurred_at >= @from AND d.occurred_at < @to
               AND (@PlateNumberNormalized::text IS NULL
                    OR d.plate_number_normalized = @PlateNumberNormalized)
@@ -315,6 +382,132 @@ public sealed class DetectionRepository
         }, cancellationToken: ct));
 
         return [.. rows];
+    }
+
+    /// <summary>
+    /// The stored <c>snapshot_reference</c> for one detection, scoped to the caller's org+geo
+    /// reach exactly like <see cref="SearchAsync"/> — used by the evidence-image route, which
+    /// must never serve a snapshot the caller could not already see via search. Null when the
+    /// detection has no snapshot on file; the whole result is null when the id/timestamp pair is
+    /// unknown or out of the caller's scope (the two are indistinguishable on purpose, matching
+    /// <see cref="AddTagAsync"/>'s posture).
+    /// </summary>
+    public async Task<string?> GetSnapshotReferenceAsync(
+        string eventId, DateTimeOffset occurredAt, CallerContext caller, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(caller);
+        caller.Require("observation.read");
+
+        var unscopedOrg = caller.IsUnscopedFor("observation.read");
+        var unscopedGeo = caller.IsUnscopedForGeography("observation.read");
+
+        await using var c = await _dataSource.OpenConnectionAsync(ct);
+
+        Guid[] units = unscopedOrg ? [] : await AuthorizedOrgUnitsAsync(c, caller, ct);
+        Guid[] areas = unscopedGeo ? [] : await AuthorizedAreasAsync(c, caller, ct);
+
+        if ((!unscopedOrg && units.Length == 0) || (!unscopedGeo && areas.Length == 0))
+        {
+            return null;
+        }
+
+        var sql = $"""
+            SELECT snapshot_reference
+            FROM federation.detection_event d
+            WHERE d.event_id = @eventId AND d.occurred_at = @occurredAt
+              {(unscopedOrg ? "" : "AND d.organization_unit_id = ANY (@units)")}
+              {(unscopedGeo ? "" : """
+              AND (d.geographic_area_id IS NULL OR d.geographic_area_id = ANY (@areas))
+              """)};
+            """;
+
+        // QuerySingleOrDefaultAsync<string?> can't distinguish "no matching row" from "row found
+        // with a null column" by itself, but both are treated identically by the caller (404
+        // either way), so a plain query is enough here.
+        var found = await c.QueryAsync<string?>(new CommandDefinition(sql, new
+        {
+            eventId, occurredAt, units, areas,
+        }, cancellationToken: ct));
+
+        return found.FirstOrDefault();
+    }
+
+    /// <summary>
+    /// Stores a detection's evidence image bytes in <c>detection_snapshot</c> (v1.30), in the
+    /// same transaction as the detection insert itself — a snapshot and the detection it's
+    /// evidence for should never be able to diverge (one committed, the other not). Idempotent on
+    /// <c>(detection_event_id, detection_occurred_at)</c>, matching the detection row's own
+    /// idempotent-retry posture: a same-id ingest retry overwrites with identical bytes, a no-op
+    /// in effect.
+    /// </summary>
+    public async Task SaveSnapshotAsync(
+        string eventId, DateTimeOffset occurredAt, byte[] imageData, string contentType,
+        string? contentEncoding, UnitOfWork work, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(work);
+
+        await work.Connection.ExecuteAsync(new CommandDefinition("""
+            INSERT INTO federation.detection_snapshot
+                (detection_event_id, detection_occurred_at, image_data, content_type, content_encoding)
+            VALUES (@eventId, @occurredAt, @imageData, @contentType, @contentEncoding)
+            ON CONFLICT (detection_event_id, detection_occurred_at)
+            DO UPDATE SET image_data = EXCLUDED.image_data, content_type = EXCLUDED.content_type,
+                          content_encoding = EXCLUDED.content_encoding;
+            """, new { eventId, occurredAt, imageData, contentType, contentEncoding },
+            work.Transaction, cancellationToken: ct));
+    }
+
+    /// <summary>
+    /// The stored evidence image for one detection, scoped to the caller's org+geo reach exactly
+    /// like <see cref="GetSnapshotReferenceAsync"/> — the two together are what the evidence
+    /// route needs: confirm scope, then fetch bytes only for a detection whose
+    /// <c>snapshot_reference</c> is <see cref="DatabaseSnapshotMarker"/>.
+    /// </summary>
+    public async Task<(byte[] ImageData, string ContentType, string? ContentEncoding)?> GetSnapshotAsync(
+        string eventId, DateTimeOffset occurredAt, CallerContext caller, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(caller);
+        caller.Require("observation.read");
+
+        var unscopedOrg = caller.IsUnscopedFor("observation.read");
+        var unscopedGeo = caller.IsUnscopedForGeography("observation.read");
+
+        await using var c = await _dataSource.OpenConnectionAsync(ct);
+
+        Guid[] units = unscopedOrg ? [] : await AuthorizedOrgUnitsAsync(c, caller, ct);
+        Guid[] areas = unscopedGeo ? [] : await AuthorizedAreasAsync(c, caller, ct);
+
+        if ((!unscopedOrg && units.Length == 0) || (!unscopedGeo && areas.Length == 0))
+        {
+            return null;
+        }
+
+        var sql = $"""
+            SELECT s.image_data AS ImageData, s.content_type AS ContentType,
+                   s.content_encoding AS ContentEncoding
+            FROM federation.detection_snapshot s
+            JOIN federation.detection_event d
+                ON d.event_id = s.detection_event_id AND d.occurred_at = s.detection_occurred_at
+            WHERE s.detection_event_id = @eventId AND s.detection_occurred_at = @occurredAt
+              {(unscopedOrg ? "" : "AND d.organization_unit_id = ANY (@units)")}
+              {(unscopedGeo ? "" : """
+              AND (d.geographic_area_id IS NULL OR d.geographic_area_id = ANY (@areas))
+              """)};
+            """;
+
+        var row = await c.QuerySingleOrDefaultAsync<SnapshotRow>(new CommandDefinition(sql, new
+        {
+            eventId, occurredAt, units, areas,
+        }, cancellationToken: ct));
+
+        return row is null ? null : (row.ImageData, row.ContentType, row.ContentEncoding);
+    }
+
+    private sealed record SnapshotRow
+    {
+        public byte[] ImageData { get; init; } = [];
+        public string ContentType { get; init; } = "";
+        public string? ContentEncoding { get; init; }
     }
 
     /// <summary>

@@ -15,14 +15,17 @@ public static partial class PlateNormalizer
     [GeneratedRegex("[^A-Z0-9]")]
     private static partial Regex NonAlnum();
 
+    // G/6 added after a real observed misread ("GJ11S7924" OCR'd as "6J1157924") confirmed this
+    // confusion is live on real camera footage, not theoretical — see plate_normalizer.py's
+    // matching comment.
     private static readonly Dictionary<char, char> DigitToLetter = new()
     {
-        ['0'] = 'O', ['1'] = 'I', ['5'] = 'S', ['8'] = 'B',
+        ['0'] = 'O', ['1'] = 'I', ['5'] = 'S', ['8'] = 'B', ['6'] = 'G',
     };
 
     private static readonly Dictionary<char, char> LetterToDigit = new()
     {
-        ['O'] = '0', ['I'] = '1', ['S'] = '5', ['B'] = '8',
+        ['O'] = '0', ['I'] = '1', ['S'] = '5', ['B'] = '8', ['G'] = '6',
     };
 
     public static string Normalize(string? raw)

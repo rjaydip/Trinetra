@@ -53,3 +53,17 @@ worker_info = Gauge(
     "ai_worker_info", "Static worker identity, as labels; value is always 1.",
     ["worker_index", "worker_count", "device"],
 )
+
+# One row per currently-claimed camera, so an operator (or a Prometheus/Grafana alert) can see
+# exactly which cameras this worker instance is watching, not just how many — the same
+# information the backend's own worker-health view surfaces (leasedCameraNames), duplicated here
+# for a consumer that only ever talks to this worker's own /metrics, not the backend API. Cleared
+# and fully rebuilt on every claim-loop tick (worker.py) rather than incrementally updated: a
+# camera no longer claimed must disappear from this gauge, not linger at whatever value it last
+# had — `.clear()` before re-setting is what makes that correct instead of accumulating stale
+# label combinations for cameras this worker gave up minutes or hours ago.
+claimed_camera = Gauge(
+    "ai_worker_claimed_camera",
+    "1 for each camera this worker instance currently holds a lease on.",
+    ["camera_id", "camera_name"],
+)

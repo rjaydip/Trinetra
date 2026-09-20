@@ -24,8 +24,10 @@ point at:
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
+import threading
 import time
 from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
@@ -41,6 +43,99 @@ logger = logging.getLogger(__name__)
 # option a given demuxer doesn't recognize.
 os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
 
+
+_stderr_redirect_lock = threading.Lock()
+_stderr_redirect_count = 0
+_stderr_saved_fd: int | None = None
+
+
+@contextlib.contextmanager
+def _capture_native_stderr() -> Iterator[list[bytes]]:
+    """Redirects fd 2 into a pipe for the duration of the block and returns what was written.
+
+    Used only around `cv2.VideoCapture(...)` / `isOpened()` in `_connect()` — that's where
+    FFmpeg's real connection-failure reason ("Connection refused", "Connection timed out",
+    "401 Unauthorized", "404 Not Found", RTSP negotiation errors, ...) is written via its C
+    `av_log` callback, same as the decode-noise messages `_suppress_native_stderr` throws away.
+    Kept separate from that function (rather than reusing it with a flag) because a decode
+    session can run for hours with many threads sharing the redirect — buffering all of that in
+    a pipe would leak memory; a connect attempt is a single bounded call, safe to capture in
+    full and read back.
+    """
+    read_fd, write_fd = os.pipe()
+    os.set_blocking(read_fd, False)
+    saved_fd = os.dup(2)
+    os.dup2(write_fd, 2)
+    os.close(write_fd)
+    chunks: list[bytes] = []
+    try:
+        yield chunks
+    finally:
+        os.dup2(saved_fd, 2)
+        os.close(saved_fd)
+        with contextlib.suppress(BlockingIOError):
+            while chunk := os.read(read_fd, 4096):
+                chunks.append(chunk)
+        os.close(read_fd)
+
+
+@contextlib.contextmanager
+def _suppress_native_stderr() -> Iterator[None]:
+    """Silences writes to the OS-level stderr file descriptor for the duration of the block.
+
+    FFmpeg's own decoder ("[hevc @ ...] Could not find ref with POC #",
+    "The cu_qp_delta # is outside the valid range", and similar) writes directly to fd 2 via its
+    C `av_log` callback — this build of OpenCV doesn't route it through `cv2.utils.logging` or
+    any Python-reachable API (both confirmed to have no effect), so the only place left to
+    intercept it is the OS file descriptor itself. Verified against a real relay that emits this
+    continuously: hundreds of consecutive `cap.read()` calls still return `ok=True` while it
+    fires, so it is decoder-internal noise, not a real failure — see `RtspFrameSource.frames()`'s
+    own comment on why a decode error surfaces only as `ok=False`.
+
+    `RtspFrameSource.frames()` holds this open for an entire capture session (not just one
+    `read()` call), because FFmpeg's HEVC/H.264 decoder can use internal frame-parallel/
+    decode-ahead threads that log slightly outside a narrowly-scoped per-call window — a gap a
+    background decoder thread could still slip a message through. `worker.py` runs one capture
+    thread per claimed camera, all potentially wanting this open at once, and fd 2 is one
+    process-wide resource: two threads independently dup()-ing and dup2()-ing it without
+    coordination would race (the second thread's "saved" fd would capture the first thread's
+    devnull redirect, not the real terminal, corrupting fd 2 once either thread restores it).
+    This is therefore a thread-safe, reference-counted redirect: the first caller to enter
+    actually redirects fd 2; concurrent callers just increment the count; only the last caller
+    to exit restores the real fd. `worker.py`'s own logging is bound to a duplicated fd taken
+    before any of this runs (see its `_real_stderr` comment), so it stays visible throughout,
+    however long fd 2 itself stays redirected.
+    """
+    global _stderr_redirect_count, _stderr_saved_fd
+
+    with _stderr_redirect_lock:
+        if _stderr_redirect_count == 0:
+            _stderr_saved_fd = os.dup(2)
+            devnull_fd = os.open(os.devnull, os.O_WRONLY)
+            os.dup2(devnull_fd, 2)
+            os.close(devnull_fd)
+        _stderr_redirect_count += 1
+
+    try:
+        yield
+    finally:
+        with _stderr_redirect_lock:
+            _stderr_redirect_count -= 1
+            if _stderr_redirect_count == 0:
+                assert _stderr_saved_fd is not None
+                os.dup2(_stderr_saved_fd, 2)
+                os.close(_stderr_saved_fd)
+                _stderr_saved_fd = None
+
+def _last_stderr_line(chunks: list[bytes]) -> str:
+    """The most specific line of FFmpeg's captured stderr, e.g. "Connection refused" or
+    "401 Unauthorized" — the last non-empty line is generally the actual failure reason;
+    earlier lines are usually just FFmpeg's version/config banner."""
+    text = b"".join(chunks).decode("utf-8", errors="replace")
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    return lines[-1] if lines else ""
+
+
 # A PTS jump larger than this (in either direction) is treated as a discontinuity — a looping
 # sample feed restarting, or a stream re-establishing after a gap — rather than genuine elapsed
 # time, and re-anchors the PTS-to-wallclock mapping instead of producing a bogus timestamp.
@@ -53,7 +148,7 @@ class RtspFrameSource(FrameSource):
         rtsp_url: str,
         processing_fps: float,
         initial_reconnect_seconds: float = 2.0,
-        max_reconnect_seconds: float = 60.0,
+        max_reconnect_seconds: float = 30.0,
         max_consecutive_failures: int = 20,
     ) -> None:
         self._rtsp_url = rtsp_url
@@ -71,10 +166,14 @@ class RtspFrameSource(FrameSource):
 
     def _connect(self) -> cv2.VideoCapture:
         logger.info("Connecting to RTSP source %s (TCP transport)", self._rtsp_url)
-        capture = cv2.VideoCapture(self._rtsp_url, cv2.CAP_FFMPEG)
-        if not capture.isOpened():
+        with _capture_native_stderr() as stderr_chunks:
+            capture = cv2.VideoCapture(self._rtsp_url, cv2.CAP_FFMPEG)
+            opened = capture.isOpened()
+        if not opened:
             capture.release()
-            raise ConnectionError(f"Could not open RTSP stream: {self._rtsp_url}")
+            reason = _last_stderr_line(stderr_chunks)
+            detail = f": {reason}" if reason else " (no diagnostic output from FFmpeg)"
+            raise ConnectionError(f"Could not open RTSP stream {self._rtsp_url}{detail}")
 
         # Reset the PTS anchor on every (re)connect: a fresh session starts its own PTS clock,
         # and the old anchor would otherwise be read as a huge discontinuity.
@@ -84,6 +183,17 @@ class RtspFrameSource(FrameSource):
         return capture
 
     def frames(self) -> Iterator[Frame]:
+        # One suppression window for the whole method, not re-entered per connect/read: FFmpeg's
+        # HEVC/H.264 decoder can use internal frame-parallel/decode-ahead threads that emit
+        # av_log slightly outside a narrowly-scoped per-call window, so a per-read suppression
+        # left real gaps a background decoder thread could still log through. worker.py's own
+        # logging is bound to a duplicated file descriptor before this runs (see its own comment
+        # on `_real_stderr`), so it stays visible even while fd 2 itself sits redirected here for
+        # the whole session.
+        with _suppress_native_stderr():
+            yield from self._frames_inner()
+
+    def _frames_inner(self) -> Iterator[Frame]:
         consecutive_failures = 0
         backoff = self._initial_reconnect_seconds
         next_sample_at = 0.0
@@ -107,8 +217,9 @@ class RtspFrameSource(FrameSource):
                     continue
 
             # A decode error on one frame (a corrupt packet, a mid-GOP splice at a loop point)
-            # logs via OpenCV/FFmpeg's own stderr output and surfaces here only as ok=False —
-            # handled the same as a dropped connection, never a raised exception.
+            # logs via OpenCV/FFmpeg's own stderr output — suppressed for the whole session by
+            # frames()'s own wrapper — and surfaces here only as ok=False, handled the same as a
+            # dropped connection, never a raised exception.
             ok, frame = self._capture.read()
             now = time.monotonic()
 

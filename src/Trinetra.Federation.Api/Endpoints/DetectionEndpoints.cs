@@ -21,6 +21,12 @@ public static class DetectionEndpoints
 {
     private const string SnapshotBase64Key = "snapshotBase64";
     private const string SnapshotPathKey = "snapshotPath";
+    /// <summary>When present and equal to <c>"gzip"</c>, <c>snapshotBase64</c> decodes to a
+    /// gzip-compressed JPEG rather than a raw one (v1.31) — the worker's own choice to keep
+    /// evidence at full resolution/quality and bound size losslessly instead. Any other value,
+    /// or the key's absence, means the decoded bytes are the image as-is.</summary>
+    private const string SnapshotEncodingKey = "snapshotEncoding";
+    private const string GzipEncoding = "gzip";
     private const string VehicleTypeKey = "vehicleType";
     private const string PlateNumberKey = "plateNumber";
 
@@ -30,6 +36,16 @@ public static class DetectionEndpoints
     /// default — a detection POST has no reason to be larger (finding 15-H2).
     /// </summary>
     private const long MaxIngestBodyBytes = 8L * 1024 * 1024;
+
+    /// <summary>Bulk items never carry <c>snapshotBase64</c> (v1.30 doc note — evidence stays on
+    /// disk under <c>evidence_dir</c>, only metadata batches), so this is sized for up to 500
+    /// small JSON items rather than for images: comfortably above worst case, still far below
+    /// Kestrel's 30 MB default.</summary>
+    private const long MaxBulkIngestBodyBytes = 4L * 1024 * 1024;
+
+    /// <summary>Same ceiling as <c>POST /cameras/bulk-import</c> — 500 rows is the shape this
+    /// codebase already uses for a synchronous, per-row-savepoint bulk write.</summary>
+    private const int MaxBulkItems = 500;
 
     // The values ai-worker/pipeline.py produces. Kept as a closed set for the same reason camera
     // type is (finding 15-L2): a free-text event_type that search and dashboards then can't
@@ -98,9 +114,12 @@ public static class DetectionEndpoints
               + "nothing and never raises a second watchlist alert. A `POST` reusing an `id` "
               + "with **different** content is a `409` — ids must be unique per detection, not "
               + "reused across distinct submissions.\n\n"
-              + "`cameraId` is `\"{targetId}:{nativeCameraId}\"`, exactly as the worker's own "
-              + "camera discovery builds it from `GET /vms/{id}/cameras`. An id that does not "
-              + "resolve against the camera inventory **the caller can reach** is rejected as "
+              + "`cameraId` is either `\"{targetId}:{nativeCameraId}\"` (a VMS-federated camera, "
+              + "exactly as the worker's own camera discovery builds it from "
+              + "`GET /vms/{id}/cameras`) or a bare registry camera UUID (a standalone camera "
+              + "claimed via `POST /worker-health/cameras/claim`, v1.27/v1.28) — either shape a "
+              + "worker's claimed camera list hands back verbatim. An id that does not resolve "
+              + "against the camera inventory **the caller can reach** is rejected as "
               + "`400 Unknown camera` — a detection cannot be scoped to an organization without a "
               + "known camera, and a camera outside the caller's own scope is indistinguishable "
               + "from one that does not exist at all.\n\n"
@@ -113,6 +132,26 @@ public static class DetectionEndpoints
               + "8 MB — an oversized or malformed `snapshotBase64` is a 400. Returns 202: ingest "
               + "is fire-and-forget from the worker's perspective, matching its at-least-once, "
               + "best-effort submit.");
+
+        group.MapPost("/bulk", BulkIngestAsync)
+          .RequirePermission("observation.write")
+          .WithMetadata(new RequestSizeLimitAttribute(MaxBulkIngestBodyBytes))
+          .WithSummary("Submit a batch of vehicle/plate/OCR detections")
+          .WithDescription(
+              "The bulk counterpart to `POST /` (v1.30) — the worker's routine-detection flush "
+              + "path, so it isn't one HTTP round trip per detection. **A watchlist-matching "
+              + "plate must never wait for a batch window: submit it through `POST /` "
+              + "immediately** — this route is for detections a worker has already decided are "
+              + "not watchlist-relevant.\n\n"
+              + "`items` is 1..500, same per-item shape as `POST /`'s body. Each item is "
+              + "validated, resolved and inserted independently — one bad item (unknown camera, "
+              + "invalid event type, a reused `id` with different content) does not fail the "
+              + "others, matching `POST /cameras/bulk-import`'s per-row-savepoint shape. Always "
+              + "200: check each entry's own `status` (`inserted`, `duplicate`, `conflict`, "
+              + "`error`) rather than the HTTP status code. A submitter retrying from local "
+              + "storage after a prior failure should drop `inserted`/`duplicate` items and keep "
+              + "resubmitting `error` items; a `conflict` item reused an id and must not be "
+              + "retried verbatim — it needs a fresh id.");
 
         group.MapGet("/", SearchAsync)
           .RequirePermission("observation.read")
@@ -143,36 +182,47 @@ public static class DetectionEndpoints
           .WithSummary("Remove an operator tag from a detection")
           .WithDescription("Matches case-insensitively. Removing a tag that isn't present, or an "
               + "out-of-scope/unknown detection, is 404.");
+
+        group.MapGet("/{eventId}/evidence", GetEvidenceAsync)
+          .RequirePermission("observation.read")
+          .WithSummary("Fetch a detection's evidence snapshot image")
+          .WithDescription(
+              "The annotated frame the AI worker saved for this detection — the plate boxed and "
+              + "labelled for `ANPR_DETECTED`, or a plain vehicle crop for `VEHICLE_DETECTED`. "
+              + "Returns the raw image bytes (`image/jpeg`). `occurredAt` is required — "
+              + "`detection_event`'s primary key is `(occurredAt, eventId)` together, same as "
+              + "`POST /{eventId}/tags` — every search result already carries it. 404 if the "
+              + "detection carries no snapshot, is out of the caller's scope, or is unknown; the "
+              + "three are indistinguishable on purpose.");
     }
 
-    private static async Task<Results<Accepted, ProblemHttpResult>> IngestAsync(
-        [FromBody] DetectionEventRequest request, DetectionRepository detections,
-        WatchlistRepository watchlist, NpgsqlDataSource db, IConfiguration configuration,
-        EvidenceStorage evidence, HttpContext http, CancellationToken ct)
-    {
-        var caller = CallerContextFactory.From(http);
+    /// <summary>Outcome of processing one submitted detection against an already-open
+    /// <see cref="UnitOfWork"/> — shared by the single-item and bulk ingest routes so the two
+    /// never drift on validation, camera resolution, evidence handling or watchlist matching.</summary>
+    private enum ItemOutcome { Inserted, Duplicate, Conflict, Error }
 
+    private static async Task<(ItemOutcome Outcome, string Title, string? Error)> IngestOneAsync(
+        DetectionEventRequest request, DetectionRepository detections, WatchlistRepository watchlist,
+        IConfiguration configuration, CallerContext caller, UnitOfWork work,
+        CancellationToken ct)
+    {
         if (!IsSafeDetectionId(request.Id))
         {
-            return TypedResults.Problem(
-                title: "Invalid detection id",
-                detail: "id must be 1-128 characters of ASCII letters, digits, '-' or '_'.",
-                statusCode: StatusCodes.Status400BadRequest);
+            return (ItemOutcome.Error, "Invalid detection id",
+                "id must be 1-128 characters of ASCII letters, digits, '-' or '_'.");
         }
 
         if (ValidateSubmission(request.EventType, request.Confidence) is { } bad)
         {
-            return bad;
+            return (ItemOutcome.Error, bad.ProblemDetails.Title ?? "Invalid submission", bad.ProblemDetails.Detail);
         }
 
         var resolved = await detections.ResolveCameraAsync(request.CameraId, caller, ct);
         if (resolved is null)
         {
-            return TypedResults.Problem(
-                title: "Unknown camera",
-                detail: $"'{request.CameraId}' does not match any camera this VMS reported. "
-                      + "A detection cannot be scoped without a known camera.",
-                statusCode: StatusCodes.Status400BadRequest);
+            return (ItemOutcome.Error, "Unknown camera",
+                $"'{request.CameraId}' does not match any camera this caller can reach. "
+                + "A detection cannot be scoped without a known camera.");
         }
 
         var (targetId, nativeCameraId, cameraId, organizationUnitId, geographicAreaId) = resolved.Value;
@@ -182,14 +232,11 @@ public static class DetectionEndpoints
             ? null
             : PlateNormalizer.Normalize(plateRaw);
 
-        var (snapshotReference, evidenceError) =
-            await ResolveSnapshotReferenceAsync(request, configuration, evidence, ct);
+        var (snapshotReference, imageData, contentEncoding, evidenceError) =
+            ResolveSnapshotReference(request, configuration);
         if (evidenceError is not null)
         {
-            return TypedResults.Problem(
-                title: "Invalid evidence",
-                detail: evidenceError,
-                statusCode: StatusCodes.Status400BadRequest);
+            return (ItemOutcome.Error, "Invalid evidence", evidenceError);
         }
 
         var evt = new DetectionEvent
@@ -204,8 +251,6 @@ public static class DetectionEndpoints
             SnapshotReference = snapshotReference,
         };
 
-        await using var work = await UnitOfWork.BeginAsync(db, ct);
-
         var outcome = await detections.IngestAsync(
             evt, targetId, nativeCameraId, cameraId, organizationUnitId, geographicAreaId,
             plateNormalized, caller, work, ct);
@@ -215,15 +260,22 @@ public static class DetectionEndpoints
         // whichever payload arrived first.
         if (outcome is DetectionIngestOutcome.DuplicateConflict)
         {
-            return TypedResults.Problem(
-                title: "Detection id already used",
-                detail: $"'{request.Id}' was already stored with different content. Detection "
-                      + "ids must be unique per submission — retry with a fresh id.",
-                statusCode: StatusCodes.Status409Conflict);
+            return (ItemOutcome.Conflict, "Detection id already used",
+                $"'{request.Id}' was already stored with different content. Detection ids must "
+                + "be unique per submission — retry with a fresh id.");
         }
 
         if (outcome is DetectionIngestOutcome.Inserted)
         {
+            if (imageData is not null)
+            {
+                // Same transaction as the detection insert above — a snapshot and the detection
+                // it's evidence for must never be able to diverge (one committed without the
+                // other).
+                await detections.SaveSnapshotAsync(
+                    evt.Id, evt.Timestamp, imageData, "image/jpeg", contentEncoding, work, ct);
+            }
+
             await work.AuditAsync(caller, "ingest", "detection_event", evt.Id,
                 before: null,
                 after: new { evt.CameraId, evt.EventType, evt.VehicleType, PlateNumber = plateRaw },
@@ -240,6 +292,35 @@ public static class DetectionEndpoints
                     await watchlist.RaiseAlertAsync(match.Id, evt.Id, evt.Timestamp, work, ct);
                 }
             }
+
+            return (ItemOutcome.Inserted, "", null);
+        }
+
+        return (ItemOutcome.Duplicate, "", null);
+    }
+
+    private static async Task<Results<Accepted, ProblemHttpResult>> IngestAsync(
+        [FromBody] DetectionEventRequest request, DetectionRepository detections,
+        WatchlistRepository watchlist, NpgsqlDataSource db, IConfiguration configuration,
+        HttpContext http, CancellationToken ct)
+    {
+        var caller = CallerContextFactory.From(http);
+
+        await using var work = await UnitOfWork.BeginAsync(db, ct);
+
+        var (outcome, title, error) = await IngestOneAsync(
+            request, detections, watchlist, configuration, caller, work, ct);
+
+        if (outcome is ItemOutcome.Error)
+        {
+            return TypedResults.Problem(
+                title: title, detail: error, statusCode: StatusCodes.Status400BadRequest);
+        }
+
+        if (outcome is ItemOutcome.Conflict)
+        {
+            return TypedResults.Problem(
+                title: title, detail: error, statusCode: StatusCodes.Status409Conflict);
         }
 
         await work.CommitAsync(ct);
@@ -247,23 +328,89 @@ public static class DetectionEndpoints
         return TypedResults.Accepted((string?)null);
     }
 
+    private static async Task<Results<Ok<DetectionBulkResponse>, ProblemHttpResult>> BulkIngestAsync(
+        [FromBody] DetectionBulkRequest request, DetectionRepository detections,
+        WatchlistRepository watchlist, NpgsqlDataSource db, IConfiguration configuration,
+        HttpContext http, CancellationToken ct)
+    {
+        var caller = CallerContextFactory.From(http);
+
+        if (request.Items is null || request.Items.Count == 0 || request.Items.Count > MaxBulkItems)
+        {
+            return TypedResults.Problem(
+                title: "Invalid batch size",
+                detail: $"items must contain between 1 and {MaxBulkItems} rows.",
+                statusCode: StatusCodes.Status400BadRequest);
+        }
+
+        var results = new List<DetectionBulkItemResult>(request.Items.Count);
+        int inserted = 0, duplicate = 0, failed = 0;
+
+        // Same shape as CameraEndpoints.BulkImportAsync: one connection/transaction for the
+        // whole batch, one SAVEPOINT per item — a bad item rolls back to its own savepoint
+        // without touching the others or paying for a fresh transaction per item.
+        await using var work = await UnitOfWork.BeginAsync(db, ct);
+
+        for (var i = 0; i < request.Items.Count; i++)
+        {
+            var item = request.Items[i];
+            var savepoint = $"bulk_detection_{i}";
+            await work.Transaction.SaveAsync(savepoint, ct);
+
+            var (outcome, _, error) = await IngestOneAsync(
+                item, detections, watchlist, configuration, caller, work, ct);
+
+            switch (outcome)
+            {
+                case ItemOutcome.Inserted:
+                    await work.Transaction.ReleaseAsync(savepoint, ct);
+                    inserted++;
+                    results.Add(new DetectionBulkItemResult(i, item.Id, "inserted", null));
+                    break;
+                case ItemOutcome.Duplicate:
+                    await work.Transaction.ReleaseAsync(savepoint, ct);
+                    duplicate++;
+                    results.Add(new DetectionBulkItemResult(i, item.Id, "duplicate", null));
+                    break;
+                case ItemOutcome.Conflict:
+                    await work.Transaction.RollbackAsync(savepoint, ct);
+                    failed++;
+                    results.Add(new DetectionBulkItemResult(i, item.Id, "conflict", error));
+                    break;
+                default:
+                    await work.Transaction.RollbackAsync(savepoint, ct);
+                    failed++;
+                    results.Add(new DetectionBulkItemResult(i, item.Id, "error", error));
+                    break;
+            }
+        }
+
+        await work.CommitAsync(ct);
+
+        return TypedResults.Ok(new DetectionBulkResponse(inserted, duplicate, failed, results));
+    }
+
     /// <summary>
-    /// Resolves the snapshot reference stored on the detection row: a bare path when the worker
-    /// sends one, or the relative path of a base64 snapshot decoded under the evidence root.
+    /// Resolves what a detection's evidence actually is: a caller-supplied <c>snapshotBase64</c>
+    /// (v1.30 — decoded here and stored in <c>detection_snapshot</c> by the caller, inside the
+    /// same transaction as the detection insert, never written to disk at all), optionally
+    /// gzip-compressed per <c>snapshotEncoding</c> (v1.31 — the bytes are stored exactly as
+    /// received, compressed or not; this never decompresses them, only records which they are),
+    /// or a bare <c>snapshotPath</c> — the worker's own local-disk reference, stored verbatim
+    /// exactly as before v1.30, for a worker/API pair that don't share a filesystem.
     /// </summary>
     /// <remarks>
-    /// The second element is non-null when the caller-supplied <c>snapshotBase64</c> is rejected
+    /// The error element is non-null when the caller-supplied <c>snapshotBase64</c> is rejected
     /// — oversized or not valid base64 — which the endpoint turns into a 400 rather than letting
     /// a <see cref="FormatException"/> or an unbounded decode reach the write (finding 15-H2).
     /// </remarks>
-    private static async Task<(string? Reference, string? Error)> ResolveSnapshotReferenceAsync(
-        DetectionEventRequest request, IConfiguration configuration, EvidenceStorage evidence,
-        CancellationToken ct)
+    private static (string? Reference, byte[]? ImageData, string? ContentEncoding, string? Error)
+        ResolveSnapshotReference(DetectionEventRequest request, IConfiguration configuration)
     {
         var base64 = request.Evidence?.GetValueOrDefault(SnapshotBase64Key);
         if (string.IsNullOrEmpty(base64))
         {
-            return (request.Evidence?.GetValueOrDefault(SnapshotPathKey), null);
+            return (request.Evidence?.GetValueOrDefault(SnapshotPathKey), null, null, null);
         }
 
         var maxBytes = configuration.GetValue(
@@ -271,24 +418,14 @@ public static class DetectionEndpoints
 
         if (!DetectionEvidence.TryDecode(base64, maxBytes, out var snapshot, out var error))
         {
-            return (null, error);
+            return (null, null, null, error);
         }
 
-        var root = evidence.Root;
+        var contentEncoding = request.Evidence?.GetValueOrDefault(SnapshotEncodingKey) == GzipEncoding
+            ? GzipEncoding
+            : null;
 
-        var fileName = $"{request.Id}.jpg";
-        var fullPath = Path.GetFullPath(Path.Combine(root, fileName));
-
-        // Defence in depth behind IsSafeDetectionId: the write must never land outside the
-        // configured root even if the id check is ever weakened.
-        if (!fullPath.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.Ordinal))
-        {
-            throw new InvalidOperationException("Evidence path escaped the configured root.");
-        }
-
-        await File.WriteAllBytesAsync(fullPath, snapshot, ct);
-
-        return (Path.Combine(Path.GetFileName(root), fileName), null);
+        return (DetectionRepository.DatabaseSnapshotMarker, snapshot, contentEncoding, null);
     }
 
     /// <summary>The widest window a single search may span — matches the events feed (14-M1).</summary>
@@ -344,7 +481,9 @@ public static class DetectionEndpoints
         return TypedResults.Ok<IReadOnlyList<DetectionResponse>>(
         [
             .. rows.Select(r => new DetectionResponse(
-                r.EventId, $"{r.TargetId}:{r.NativeCameraId}", r.CameraId, r.EventType,
+                r.EventId,
+                r.TargetId is { } targetId ? $"{targetId}:{r.NativeCameraId}" : r.CameraId?.ToString() ?? "",
+                r.CameraId, r.CameraName, r.EventType,
                 r.OccurredAt, r.Confidence, r.VehicleType, r.PlateNumberRaw, r.SnapshotReference,
                 [.. tagsByEvent[r.EventId]])),
         ]);
@@ -408,5 +547,93 @@ public static class DetectionEndpoints
             before: new { Tag = tag }, after: null, organizationUnitId: null, ct);
         await work.CommitAsync(ct);
         return TypedResults.Ok();
+    }
+
+    private static readonly Dictionary<string, string> EvidenceContentTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        [".jpg"] = "image/jpeg",
+        [".jpeg"] = "image/jpeg",
+        [".png"] = "image/png",
+    };
+
+    private static async Task<Results<PhysicalFileHttpResult, FileContentHttpResult, NotFound>> GetEvidenceAsync(
+        string eventId, DateTimeOffset occurredAt, DetectionRepository detections,
+        EvidenceStorage evidence, HttpContext http, CancellationToken ct)
+    {
+        var caller = CallerContextFactory.From(http);
+
+        var reference = await detections.GetSnapshotReferenceAsync(eventId, occurredAt, caller, ct);
+        if (string.IsNullOrEmpty(reference))
+        {
+            return TypedResults.NotFound();
+        }
+
+        // v1.30: the common case now — the image lives in detection_snapshot, not on any
+        // filesystem at all. GetSnapshotAsync re-applies the same org/geo scope check
+        // GetSnapshotReferenceAsync just did; cheap, and it keeps this route's authorization
+        // story in one place per storage path rather than trusting the marker alone.
+        if (reference == DetectionRepository.DatabaseSnapshotMarker)
+        {
+            var snapshot = await detections.GetSnapshotAsync(eventId, occurredAt, caller, ct);
+            if (snapshot is null)
+            {
+                return TypedResults.NotFound();
+            }
+
+            // image_data is stored exactly as the worker sent it (v1.31: often gzip-compressed,
+            // to keep evidence at full resolution/quality rather than resized or quality-reduced
+            // — see detection_snapshot's own doc comment). Content-Encoding is the standard HTTP
+            // way to say so: the browser decompresses transparently, so nothing here or on the
+            // frontend needs its own gzip/gunzip code. No response-compression middleware is
+            // configured in this API, so there's no risk of a second, redundant compression pass
+            // on top of this one.
+            if (snapshot.Value.ContentEncoding is { } contentEncoding)
+            {
+                http.Response.Headers.ContentEncoding = contentEncoding;
+            }
+
+            return TypedResults.File(snapshot.Value.ImageData, snapshot.Value.ContentType);
+        }
+
+        // `reference` is either an absolute worker-local path stored verbatim (the common case
+        // — a worker that only ever sent snapshotPath, never the bytes) or relative — this API's
+        // own convention for a snapshotBase64 it decoded and wrote itself
+        // (ResolveSnapshotReferenceAsync), stored as "{evidenceRoot's own folder name}/
+        // {filename}". Either way the folder segment is redundant with whichever root the file
+        // actually lives under, so only the filename is combined with each candidate root in
+        // turn — Root first, then each configured AllowedExternalRoots entry (see its own doc
+        // comment for why an absolute worker-supplied path is never trusted without this
+        // containment check).
+        string? candidatePath = null;
+        if (Path.IsPathFullyQualified(reference))
+        {
+            var resolved = Path.GetFullPath(reference);
+            if (evidence.IsPathAllowed(resolved) && File.Exists(resolved))
+            {
+                candidatePath = resolved;
+            }
+        }
+        else
+        {
+            var fileName = Path.GetFileName(reference);
+            foreach (var root in (string[]) [evidence.Root, .. evidence.AllowedExternalRoots])
+            {
+                var resolved = Path.GetFullPath(Path.Combine(root, fileName));
+                if (evidence.IsPathAllowed(resolved) && File.Exists(resolved))
+                {
+                    candidatePath = resolved;
+                    break;
+                }
+            }
+        }
+
+        if (candidatePath is null)
+        {
+            return TypedResults.NotFound();
+        }
+
+        var contentType = EvidenceContentTypes.GetValueOrDefault(
+            Path.GetExtension(candidatePath), "application/octet-stream");
+        return TypedResults.PhysicalFile(candidatePath, contentType);
     }
 }

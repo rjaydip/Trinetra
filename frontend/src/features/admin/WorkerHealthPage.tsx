@@ -43,6 +43,7 @@ export function WorkerHealthPage() {
                   <span>{worker.hostname} · Key {worker.apiKeyName}</span>
                   <span>Last heartbeat {new Date(worker.lastHeartbeatAt).toLocaleString()}</span>
                   {worker.clockDriftSeconds !== null && Math.abs(worker.clockDriftSeconds) > 30 && <span>Clock drift {worker.clockDriftSeconds.toFixed(0)}s</span>}
+                  <span>{worker.leasedCameraCount === 0 ? 'Watching no cameras' : `Watching ${worker.leasedCameraCount} camera${worker.leasedCameraCount === 1 ? '' : 's'}: ${worker.leasedCameraNames.join(', ')}`}</span>
                   {canManage && <button className="admin-action-link" type="button" disabled={retire.isPending} onClick={() => retire.mutate(worker.id)}>Retire</button>}
                   {retire.isError && retire.variables === worker.id && <span className="form-error" role="alert">{errorDetail(retire.error, 'The worker record could not be retired.')}</span>}
                 </div>

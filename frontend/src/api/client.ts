@@ -99,3 +99,29 @@ export async function request<T>(path: string, init: RequestInit = {}, signal?: 
 
   return response.status === 204 ? undefined as T : response.json() as Promise<T>;
 }
+
+/** Like `request`, but for a binary response (an evidence image) rather than JSON — a plain
+ * `<img src="...">` can't carry the `Authorization` header this route requires, so the caller
+ * fetches the bytes itself and renders them via `URL.createObjectURL`. */
+export async function requestBlob(path: string, signal?: AbortSignal): Promise<Blob> {
+  const authorizedInit = withBearerToken(signal ? { signal } : {});
+  let response: Response;
+
+  try {
+    response = await fetch(`${apiBaseUrl()}${path}`, authorizedInit);
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'AbortError') throw err;
+    toastBridge?.error('The service could not be reached. Please try again.');
+    throw new ApiProblem({
+      status: 0,
+      title: 'Service unavailable',
+      detail: 'The service could not be reached. Please try again.',
+    });
+  }
+
+  if (!response.ok) {
+    throw await problemFrom(response);
+  }
+
+  return response.blob();
+}

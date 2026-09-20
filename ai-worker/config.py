@@ -62,9 +62,45 @@ class Settings(BaseSettings):
     # GStreamer + PyGObject as system packages) | deepstream (NVIDIA GPU + SDK, Linux only).
     capture_backend: str = Field(default="opencv", pattern="^(opencv|ffmpeg|gstreamer|deepstream)$")
 
-    # --- Worker horizontal partitioning (static v1 — see scaling.py) ---------------------------
+    # --- Worker identity / horizontal scaling ---------------------------------------------------
+    # worker_index/worker_count still name this instance (heartbeat's workerId, metrics labels)
+    # and still drive scaling.py's static hash-partition when CAMERA_SOURCE=static (no backend
+    # to claim cameras from in that mode). Against CAMERA_SOURCE=trinetra with an API key set,
+    # camera ownership is decided dynamically instead — see worker_capacity below and
+    # lease_client.py — so these two no longer bound how many cameras this instance can run.
     worker_index: int = 0
     worker_count: int = 1
+
+    # --- Dynamic camera claiming (v1.27/v1.28; lease_client.py) -------------------------------
+    # How many cameras one worker instance claims from POST /cameras/claim. The backend returns
+    # VMS-discovered candidates before standalone registry ones, up to this count.
+    worker_capacity: int = 50
+    # Must stay comfortably below the backend's 90s lease TTL — this is the renewal interval, and
+    # missing several ticks in a row (not just one slow poll) is what should cost a worker its
+    # cameras.
+    camera_claim_poll_seconds: float = 30.0
+    # When true, once this worker's first non-empty claim succeeds it never asks for more
+    # cameras than it holds at that moment — it keeps renewing/holding what it already has (the
+    # backend's own claim/trim logic already favors a worker's longest-held leases), but stops
+    # auto-growing into any newly-freed capacity on its own. Off by default: this is a real
+    # behavior change from "always claim up to worker_capacity," opt in deliberately. Resets on
+    # process restart — a per-process cap, not a persisted assignment. See _run_claim_loop's own
+    # docstring in worker.py for the full trade-off.
+    camera_claim_sticky: bool = False
+
+    # --- Detection batching (detection_batch.py) ------------------------------------------------
+    # Routine (VEHICLE_DETECTED, no plate) detections batch and flush together; a plate read
+    # (ANPR_DETECTED) always submits immediately (backend_client.py), never through this queue —
+    # this worker can't know locally whether a plate is a watchlist match, so every plate read is
+    # treated as potentially time-sensitive. Flush fires on whichever of these two comes first.
+    detection_flush_max: int = 50
+    detection_flush_interval_seconds: float = 2.0
+    # Where a batch that failed to POST (backend down, network partition) is spooled for retry —
+    # one JSON array file per failed batch, replayed oldest-first on the next start/reconnect.
+    detection_spool_dir: str = str(AI_WORKER_ROOT / "detection_spool")
+    # Bounds local retention during an extended outage: past this many pending files, the oldest
+    # is dropped (logged) rather than growing disk usage without limit.
+    detection_spool_max_files: int = 500
 
     # --- Camera source: "trinetra" (Federation.Api, default) or "static" (local YAML, dev/offline)
     camera_source: str = Field(default="trinetra", pattern="^(trinetra|static)$")

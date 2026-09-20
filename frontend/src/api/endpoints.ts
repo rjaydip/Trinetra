@@ -1,4 +1,4 @@
-import { request } from './client';
+import { request, requestBlob } from './client';
 import type {
   CameraConnectionTestAccepted,
   CameraConnectionTestRequest,
@@ -267,6 +267,10 @@ export const api = {
       request<DetectionResponse[]>(withQuery('/api/v1/detections', query), {}, signal),
     addTag: (eventId: string, body: DetectionTagRequest) => request<void>(`/api/v1/detections/${eventId}/tags`, json(body)),
     removeTag: (eventId: string, tag: string) => request<void>(`/api/v1/detections/${eventId}/tags/${encodeURIComponent(tag)}`, { method: 'DELETE' }),
+    /** The annotated evidence snapshot (`GET /{eventId}/evidence`) — a binary image, not JSON,
+     * so it goes through `requestBlob` rather than the usual `request`. */
+    evidence: (eventId: string, occurredAt: string, signal?: AbortSignal) =>
+      requestBlob(withQuery(`/api/v1/detections/${eventId}/evidence`, { occurredAt }), signal),
   },
   events: {
     query: (query: { from: string; to: string; cameraId?: string; eventType?: string; objectReference?: string; cursor?: string; limit?: number }, signal?: AbortSignal) =>

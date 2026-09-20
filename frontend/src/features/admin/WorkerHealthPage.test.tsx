@@ -16,6 +16,7 @@ const liveWorker = {
   id: workerRecordId, apiKeyId: '50000000-0000-4000-8000-000000000002', apiKeyName: 'AI worker',
   workerId: 'ai-worker-1-of-2', hostname: 'gpu-node-1', firstSeenAt: '2026-01-01T00:00:00Z',
   lastHeartbeatAt: new Date().toISOString(), reportedAt: new Date().toISOString(), clockDriftSeconds: 1,
+  leasedCameraCount: 0, leasedCameraRefs: [], leasedCameraNames: [],
 };
 
 afterEach(() => {

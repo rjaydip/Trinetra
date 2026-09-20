@@ -884,6 +884,13 @@ export interface AiWorkerHealthResponse {
   lastHeartbeatAt: string;
   reportedAt: string | null;
   clockDriftSeconds: number | null;
+  /** How many cameras this worker currently holds a lease on (federation.camera_worker_lease) —
+   * 0 for a worker that has never claimed any, not necessarily one that's unhealthy. */
+  leasedCameraCount: number;
+  leasedCameraRefs: string[];
+  /** Same order as leasedCameraRefs — the camera's own display name where it resolves, falling
+   * back to the raw ref for an unnamed camera or an unresolved VMS reference. */
+  leasedCameraNames: string[];
 }
 
 // ---- Users and group membership -------------------------------------------
@@ -951,6 +958,9 @@ export interface DetectionResponse {
   id: string;
   cameraId: string;
   registeredCameraId: string | null;
+  /** The camera's own display name, resolved server-side — null only when neither a standalone
+   * registry camera nor a VMS-federated camera has a name on file for this detection. */
+  cameraName: string | null;
   eventType: string;
   timestamp: string;
   confidence: number | null;
