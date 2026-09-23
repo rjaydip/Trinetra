@@ -7,9 +7,16 @@
 .videowall-empty { display: grid; gap: 1rem; justify-items: start; }
 
 .videowall-toolbar { display: grid; gap: 1rem; padding: 1rem; border: 1px solid var(--color-border); border-radius: .75rem; background: var(--color-surface); }
-.videowall-columns { display: grid; gap: .375rem; font-size: .875rem; font-weight: 600; width: 8rem; }
+
+/* All four controls in one wrapping row instead of one-per-row: each is capped to a compact
+ * width so the row stays a small strip rather than the org-unit/geo-area tree pickers (built for
+ * a full-width filter sidebar elsewhere) stretching the toolbar tall. */
+.videowall-toolbar-row { display: flex; flex-wrap: wrap; align-items: end; gap: .75rem; }
+.videowall-toolbar-row > * { flex: 0 1 12rem; }
+
+.videowall-columns { display: grid; gap: .375rem; font-size: .875rem; font-weight: 600; flex-basis: 6rem; }
 .videowall-columns input { min-height: 2.75rem; padding: .5rem .625rem; border: 1px solid var(--color-border); border-radius: .375rem; color: var(--color-text); background: var(--color-surface); font: inherit; }
-.videowall-search { display: grid; gap: .375rem; font-size: .875rem; font-weight: 600; min-width: 16rem; }
+.videowall-search { display: grid; gap: .375rem; font-size: .875rem; font-weight: 600; flex-basis: 14rem; }
 .videowall-search input { min-height: 2.75rem; padding: .5rem .625rem; border: 1px solid var(--color-border); border-radius: .375rem; color: var(--color-text); background: var(--color-surface); font: inherit; }
 .videowall-save-note { margin: 0; font-size: .8125rem; color: var(--color-danger); }
 

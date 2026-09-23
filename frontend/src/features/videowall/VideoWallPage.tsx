@@ -9,6 +9,8 @@ import { queryKeys } from '../../api/queryKeys';
 import { StatusBadge, PageState } from '../../components/ui';
 import { useDocumentTitle } from '../../lib/useDocumentTitle';
 import { downSince, EMPHASIZE_AFTER_HOURS } from '../cameras/downSince';
+import { GeographicAreaFilter } from '../cameras/GeographicAreaFilter';
+import { OrganizationUnitFilter } from '../cameras/OrganizationUnitFilter';
 import { statusTone } from '../cameras/statusTone';
 import { LiveVideoTile } from './LiveVideoTile';
 import './videowall.css';
@@ -97,6 +99,8 @@ export function VideoWallPage() {
   const [mode, setMode] = useState<'view' | 'configuring'>('view');
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [organizationUnitId, setOrganizationUnitId] = useState<string | undefined>(undefined);
+  const [geographicAreaId, setGeographicAreaId] = useState<string | undefined>(undefined);
   const [expandedCameraId, setExpandedCameraId] = useState<string | null>(null);
   const expandedTileRef = useRef<HTMLDivElement>(null);
 
@@ -137,8 +141,11 @@ export function VideoWallPage() {
   }, [wall]);
 
   const picker = useQuery({
-    queryKey: queryKeys.videoWall.picker(debouncedSearch),
-    queryFn: ({ signal }) => api.cameras.list({ q: debouncedSearch || undefined, limit: 50 }, signal),
+    queryKey: queryKeys.videoWall.picker(debouncedSearch, organizationUnitId, geographicAreaId),
+    queryFn: ({ signal }) => api.cameras.list(
+      { q: debouncedSearch || undefined, organizationUnitId, geographicAreaId, limit: 50 },
+      signal,
+    ),
     enabled: mode === 'configuring',
   });
 
@@ -269,19 +276,23 @@ export function VideoWallPage() {
     </header>
 
     {mode === 'configuring' && wall && <div className="videowall-toolbar">
-      <label className="videowall-columns">
-        Columns
-        <input
-          type="number" min={MIN_COLUMNS} max={MAX_COLUMNS} inputMode="numeric"
-          value={wall.columnCount}
-          onChange={(event) => changeColumnCount(event.target.value)}
-        />
-      </label>
-      <label className="videowall-search">
-        Add camera
-        <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search by name or code…" />
-      </label>
-      {debouncedSearch && <ul className="videowall-picker-results">
+      <div className="videowall-toolbar-row">
+        <label className="videowall-columns">
+          Columns
+          <input
+            type="number" min={MIN_COLUMNS} max={MAX_COLUMNS} inputMode="numeric"
+            value={wall.columnCount}
+            onChange={(event) => changeColumnCount(event.target.value)}
+          />
+        </label>
+        <label className="videowall-search">
+          Add camera
+          <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search by name or code…" />
+        </label>
+        <OrganizationUnitFilter organizationUnitId={organizationUnitId} onChange={setOrganizationUnitId} />
+        <GeographicAreaFilter geographicAreaId={geographicAreaId} onChange={setGeographicAreaId} />
+      </div>
+      {(debouncedSearch || organizationUnitId || geographicAreaId) && <ul className="videowall-picker-results">
         {pickerOptions.length === 0
           ? <li className="videowall-picker-empty">No matching cameras</li>
           : pickerOptions.map((option) => (

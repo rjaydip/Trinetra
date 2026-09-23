@@ -101,6 +101,26 @@ builder.Services.AddOptions<CorrelationRunnerOptions>()
 builder.Services.AddSingleton<ICorrelationEngine, SqlCorrelationEngine>();
 builder.Services.AddHostedService<CorrelationRunner>();
 
+// Per-camera automated health check: probes each camera's own RTSP endpoint directly (an OPTIONS
+// handshake, not just a TCP connect), regardless of whether it's a standalone registry camera or
+// one discovered through a VMS target — see CameraHealthProbeStore's remarks. Distinct from
+// ConnectorSupervisor/TargetWorker's own health loop above, which only confirms a VMS's API is
+// reachable, not any individual camera behind it.
+builder.Services.AddOptions<CameraHealthCheckOptions>()
+    .Bind(builder.Configuration.GetSection(CameraHealthCheckOptions.SectionName))
+    .ValidateOnStart();
+builder.Services.AddSingleton<CameraHealthProbeStore>();
+builder.Services.AddSingleton<ICameraHealthProbe, CameraHealthProbe>();
+builder.Services.AddHostedService<CameraHealthCheckRunner>();
+
+// Keeps a synthetic single-camera connector_target in sync for every standalone ONVIF camera, so
+// the EXISTING VMS pipeline (LeaseManager/ConnectorSupervisor/TargetWorker/OnvifAdapter) pulls its
+// onboard analytics events (crowd, intrusion, motion, ...) into federation_event the same way it
+// already does for a real VMS — no second ONVIF client, no schema change. See
+// SyntheticCameraTargetStore's remarks.
+builder.Services.AddSingleton<SyntheticCameraTargetStore>();
+builder.Services.AddHostedService<SyntheticCameraTargetSyncRunner>();
+
 var host = builder.Build();
 
 // Workers never apply migrations either, for the same reason as the API and more of it: there

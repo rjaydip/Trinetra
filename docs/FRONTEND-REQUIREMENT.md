@@ -1,5 +1,15 @@
 # requirements.md — Model 1 Frontend: Registry & GIS Foundation
 
+> **STALE — do not use as the current frontend spec (flagged 2026-09-21).** This is a
+> pre-implementation planning document scoped to Model 1 only, written before Models 2 and 3
+> had a frontend at all. Its own §16 "Features Intentionally Excluded" lists things that are now
+> shipped, load-bearing features — video wall / multi-camera grid, watchlist matching, real-time
+> alert dashboard, ANPR, VMS federation workflows, and AI analytics dashboards — all of which
+> exist and work today. Following this doc for new UI work (e.g. a Material UI migration) would
+> actively steer away from real pages. See `docs/RFP-COMPLIANCE-GAP-ANALYSIS.md` for the current,
+> verified state of what's built across all three models instead. Kept here for historical
+> context only.
+
 ## Source Scope
 
 This document defines frontend requirements for **Model 1: Centralised CCTV Registry & GIS Mapping**.

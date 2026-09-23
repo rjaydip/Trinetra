@@ -130,7 +130,8 @@ export const queryKeys = {
     ['detections', plateNumber, targetId, from, to] as const,
 
   videoWall: {
-    picker: (q: string) => ['video-wall', 'picker', q] as const,
+    picker: (q: string, organizationUnitId?: string, geographicAreaId?: string) =>
+      ['video-wall', 'picker', q, organizationUnitId, geographicAreaId] as const,
     preferences: ['video-wall', 'preferences'] as const,
   },
 
